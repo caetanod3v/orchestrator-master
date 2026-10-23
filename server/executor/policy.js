@@ -1,6 +1,8 @@
 // Regras puras que decidem se uma tarefa pode ser executada agora. Retorna o motivo do
 // bloqueio (pt-BR) ou null. Nada aqui executa processos nem toca o disco.
 
+const cycleActive = (m) => !!m?.cycle && ['planning', 'running'].includes(m.cycle.status);
+
 /**
  * @param {object} p
  * @param {object} p.mission
@@ -13,6 +15,7 @@
 export function runBlockers({ mission, task, workspace, validateDir, busy, cliAvailable }) {
   if (!mission || !task) return 'Tarefa não encontrada.';
   if (mission.demo) return 'Missão demonstrativa: a execução real está desabilitada.';
+  if (cycleActive(mission) && !task.auto) return 'Um ciclo autônomo está ativo nesta missão; aguarde, cancele ou pause o ciclo.';
   if (task.rejected) return 'Tarefa rejeitada por um humano; crie uma nova tarefa para tentar de novo.';
   if (task.status === 'running') return 'Tarefa já está em execução.';
   if (task.status === 'awaiting_approval') return 'O resultado desta tarefa aguarda revisão humana.';
@@ -35,6 +38,7 @@ export function runBlockers({ mission, task, workspace, validateDir, busy, cliAv
 export function authorizeBlockers({ mission, task }) {
   if (!mission || !task) return 'Tarefa não encontrada.';
   if (mission.demo) return 'Missão demonstrativa: a execução real está desabilitada.';
+  if (cycleActive(mission) && !task.auto) return 'Um ciclo autônomo está ativo nesta missão.';
   if (task.rejected) return 'Tarefa rejeitada por um humano.';
   if (!['queued', 'failed', 'interrupted'].includes(task.status)) return 'A tarefa não está em um estado que permita autorizar a execução.';
   return null;

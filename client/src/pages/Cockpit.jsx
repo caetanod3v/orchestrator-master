@@ -4,6 +4,7 @@ import { useStore } from '../store.jsx';
 import { Progress, DemoTag, Empty, Btn, fmtTime } from '../components/ui.jsx';
 import { AgentCard, TaskQueue, Terminal, ReviewPanel } from '../components/Widgets.jsx';
 import NeuralCore, { reactionFor, usePrefersReduced } from '../components/NeuralCore.jsx';
+import CyclePanel from '../components/CyclePanel.jsx';
 
 // Posição de cada nó (fração da área) e conexões justificadas pela arquitetura:
 // planner propõe -> portão humano aprova -> executor executa no workspace; a fila alimenta o núcleo.
@@ -122,8 +123,14 @@ export default function Cockpit() {
   const pendingTasks = mission?.tasks.filter((t) => t.status === 'awaiting_approval') ?? [];
   const current = mission?.tasks.find((t) => t.status === 'running') || pendingTasks[0] || mission?.tasks.find((t) => t.status === 'queued');
   const done = mission ? mission.tasks.filter((t) => t.status === 'completed').length : 0;
-  // falha de execução = tarefa "failed" que NÃO foi rejeitada por um humano (hoje nenhuma execução ocorre)
-  const execError = missions.some((m) => m.tasks.some((t) => t.status === 'failed' && !t.rejected));
+  // erro do executor = a execução MAIS RECENTE falhou (e não foi rejeição humana); uma execução posterior bem-sucedida o supera
+  const execError = (() => {
+    const all = missions.flatMap((m) => m.tasks);
+    const t = (x) => x.finishedAt || '';
+    const failed = all.filter((x) => x.status === 'failed' && !x.rejected).map(t).sort().at(-1);
+    const other = all.filter((x) => x.status !== 'failed' && x.finishedAt).map(t).sort().at(-1) ?? '';
+    return failed !== undefined && failed >= other;
+  })();
 
   const st = {
     planner: planner ? agentState(planner) : 'unavailable',
@@ -177,6 +184,7 @@ export default function Cockpit() {
       <div className="hud tl">
         <div className="k">missão {mission?.demo && <DemoTag />}</div>
         <div className="v">{mission ? mission.title : <>nenhuma — <a href="#/missions?new">criar</a></>}</div>
+        {mission?.cycle && <><div className="k">ciclo</div><div className="v">{mission.cycle.status} · rodada {mission.cycle.rounds.length}/{mission.cycle.maxIterations}</div></>}
         <div className="k">tarefa</div>
         <div className="v">{current ? current.title : '—'}</div>
         {mission && mission.tasks.length > 0 && <div className="mini"><Progress done={done} total={mission.tasks.length} /><span className="dim small">{done}/{mission.tasks.length}</span></div>}
@@ -209,9 +217,12 @@ export default function Cockpit() {
 
           {panel === 'planner' && planner && <>
             <p>{planner.role}</p>
-            <Row k="disponibilidade">{planner.availability === 'unavailable' ? 'indisponível (não implementado)' : planner.availability}</Row>
-            <Row k="conexão">não conectado</Row>
-            <p className="dim small">Nenhuma tarefa foi planejada e nenhuma mensagem foi trocada com este agente.</p>
+            <Row k="disponibilidade">{planner.availability === 'connected' ? 'conectado (Claude Code, sem ferramentas)' : 'indisponível'}</Row>
+            <Row k="planejando agora">{planner.status === 'running' ? 'sim' : 'não'}</Row>
+            <Row k="ciclo desta missão">{mission?.cycle ? `${mission.cycle.status} · rodada ${mission.cycle.rounds.length}/${mission.cycle.maxIterations}` : 'nenhum'}</Row>
+            <p className="dim small">O Planner só devolve uma decisão (continue, complete ou blocked), validada pelo servidor. Não executa nada nem altera permissões.</p>
+            {mission && !mission.demo && <CyclePanel mission={mission} />}
+            {mission?.demo && <p className="dim small">Missão demonstrativa: o ciclo real está desabilitado.</p>}
           </>}
 
           {panel === 'executor' && executor && <>
@@ -251,7 +262,7 @@ export default function Cockpit() {
           <div className="k sec">atividades</div>
           <Events
             items={activity.filter((a) => ({
-              planner: false,
+              planner: a.type === 'cycle',
               executor: a.type === 'system' || a.type === 'execution',
               gate: a.type === 'approval' || a.type === 'rejection',
               workspace: a.type === 'workspace',

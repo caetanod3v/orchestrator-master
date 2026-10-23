@@ -28,6 +28,7 @@ export function formatEvent(ev) {
       costUsd: typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : null,
       durationMs: typeof ev.duration_ms === 'number' ? ev.duration_ms : null,
       turns: typeof ev.num_turns === 'number' ? ev.num_turns : null,
+      permissionDenials: Array.isArray(ev.permission_denials) ? ev.permission_denials.length : 0,
     };
     lines.push(`[fim] ${ev.subtype ?? 'result'}${result.turns != null ? ` · ${result.turns} turnos` : ''}${result.costUsd != null ? ` · US$ ${result.costUsd.toFixed(4)}` : ''}`);
     return { lines, result };

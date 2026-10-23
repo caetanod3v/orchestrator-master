@@ -4,10 +4,19 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as store from './store.js';
 import { uid, now } from './store.js';
-import { claudeCodeExecutor } from './executor/index.js';
+import { claudeCodeExecutor as realExecutor } from './executor/index.js';
 import { gitInfo } from './git.js';
 import { validateDir } from './workspaces.js';
 import { setupExecution, blockedReason } from './execution.js';
+import { missionStatus } from './mission-status.js';
+import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle.js';
+import { createClaudePlanner } from './planner.js';
+
+// Costura de teste: só código em processo (nunca env, rede ou requisição) pode injetar executor/planner simulados.
+const testDeps = globalThis.__ORCH_TEST_DEPS__ ?? {};
+const claudeCodeExecutor = testDeps.executor ?? realExecutor;
+const planner = testDeps.planner ?? createClaudePlanner();
+const planning = () => planner.busy();
 
 const PORT = Number(process.env.PORT) || 4317;
 const HOST = '127.0.0.1'; // somente local
@@ -32,16 +41,6 @@ const commit = () => store.save();
 function visibleMissions() {
   return db.settings.showDemoData ? db.missions : db.missions.filter((m) => !m.demo);
 }
-function missionStatus(m) {
-  const s = m.tasks.map((t) => t.status);
-  if (!s.length) return 'queued';
-  if (s.includes('running')) return 'running';
-  if (s.includes('failed')) return 'failed';
-  if (s.includes('interrupted')) return 'interrupted';
-  if (s.includes('awaiting_approval')) return 'awaiting_approval';
-  if (s.every((x) => x === 'completed')) return 'completed';
-  return 'queued';
-}
 // blockedReason: motivo pelo qual a tarefa não pode rodar agora (calculado no servidor).
 const withStatus = (m) => ({ ...m, status: missionStatus(m), tasks: m.tasks.map((t) => ({ ...t, blockedReason: blockedReason(db, claudeCodeExecutor, m, t) })) });
 
@@ -50,16 +49,16 @@ app.get('/api/state', async (req, res) => {
   const probe = await claudeCodeExecutor.probe();
   const tasks = visibleMissions().flatMap((m) => m.tasks);
   res.json({
-    system: claudeCodeExecutor.isBusy() ? 'running' : probe.available ? 'idle' : 'degraded',
+    system: claudeCodeExecutor.isBusy() || planning() ? 'running' : probe.available ? 'idle' : 'degraded',
     executor: { id: claudeCodeExecutor.id, connected: probe.available, busy: claudeCodeExecutor.isBusy(), current: claudeCodeExecutor.current(), ...probe },
-    planner: { connected: false, detail: 'Planejador ainda não implementado.' },
+    planner: { connected: probe.available, busy: planning(), detail: probe.available ? 'Planner pronto (Claude Code sem ferramentas).' : probe.detail },
     counts: {
-      activeAgents: claudeCodeExecutor.isBusy() ? 1 : 0,
+      activeAgents: (claudeCodeExecutor.isBusy() ? 1 : 0) + (planning() ? 1 : 0),
       running: tasks.filter((t) => t.status === 'running').length,
       pending: tasks.filter((t) => ['queued', 'awaiting_approval'].includes(t.status)).length,
       awaitingApproval: tasks.filter((t) => t.status === 'awaiting_approval').length,
     },
-    settings: db.settings,
+    settings: { cycleMaxIterations: DEFAULT_MAX_ITERATIONS, ...db.settings, cycleHardMax: HARD_MAX_ITERATIONS },
     activeWorkspace: find(db.workspaces, db.settings.activeWorkspaceId) || null,
     usage: (() => { // somado apenas de execuções reais que reportaram custo
       const u = tasks.map((t) => t.usage).filter((x) => x && typeof x.costUsd === 'number');
@@ -152,7 +151,7 @@ app.post('/api/missions', (req, res) => {
 app.delete('/api/missions/:id', (req, res) => {
   const m = find(db.missions, req.params.id);
   if (!m) return bad(res, 'Missão não encontrada.', 404);
-  if (m.tasks.some((t) => t.status === 'running')) return bad(res, 'Há uma tarefa em execução nesta missão.', 409);
+  if (m.tasks.some((t) => t.status === 'running') || (m.cycle && ['planning', 'running'].includes(m.cycle.status))) return bad(res, 'Há uma tarefa ou ciclo em andamento nesta missão.', 409);
   db.missions = db.missions.filter((x) => x.id !== m.id);
   store.log('mission', `Missão removida: ${m.title}`);
   commit();
@@ -210,7 +209,7 @@ app.post('/api/missions/:id/tasks/:tid/reject', decide('reject'));
 app.get('/api/agents', async (req, res) => {
   const probe = await claudeCodeExecutor.probe();
   res.json([
-    { id: 'planner', name: 'Planner', role: 'Divide a missão em tarefas, analisa relatórios e propõe a próxima tarefa.', status: 'not_connected', detail: 'Não implementado nesta fase.', availability: 'unavailable' },
+    { id: 'planner', name: 'Planner', role: 'Decide a próxima tarefa a partir do objetivo e dos relatórios do Executor (continue, complete ou blocked). Não tem ferramentas: só recebe e devolve texto.', status: planning() ? 'running' : probe.available ? 'idle' : 'not_connected', detail: planning() ? 'Planejando a próxima rodada.' : probe.available ? 'Pronto: usa o Claude Code sem ferramentas e é validado pelo backend.' : probe.detail, availability: probe.available ? 'connected' : 'unavailable' },
     { id: 'executor', name: 'Executor (Claude Code)', role: 'Executa uma tarefa autorizada por vez no workspace da missão, com permissões padrão (leitura e edição de arquivos).', status: claudeCodeExecutor.isBusy() ? 'running' : probe.available ? 'idle' : 'not_connected', detail: claudeCodeExecutor.isBusy() ? 'Executando uma tarefa.' : probe.detail, version: probe.version || null, available: probe.available, availability: probe.available ? 'connected' : 'unavailable' },
   ]);
 });
@@ -220,6 +219,10 @@ app.get('/api/activity', (req, res) => res.json(db.activity.slice(0, 200)));
 app.put('/api/settings', (req, res) => {
   const b = req.body || {};
   if (typeof b.showDemoData === 'boolean') db.settings.showDemoData = b.showDemoData;
+  if (b.cycleMaxIterations !== undefined) {
+    if (!Number.isInteger(b.cycleMaxIterations) || b.cycleMaxIterations < 1 || b.cycleMaxIterations > HARD_MAX_ITERATIONS) return bad(res, `cycleMaxIterations deve ser um inteiro de 1 a ${HARD_MAX_ITERATIONS}.`);
+    db.settings.cycleMaxIterations = b.cycleMaxIterations;
+  }
   // requireApproval é fixo: aprovação humana é obrigatória.
   store.log('settings', 'Configurações atualizadas');
   commit();
@@ -233,7 +236,8 @@ if (fs.existsSync(dist)) {
   app.get(/^(?!\/api).*/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
 }
 
-setupExecution(app, { db, executor: claudeCodeExecutor });
+const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor });
+setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun });
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));
 app.use((err, req, res, next) => bad(res, err.type === 'entity.parse.failed' ? 'JSON inválido.' : 'Erro interno.', err.status || 500));

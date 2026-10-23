@@ -26,11 +26,14 @@ function buildPrompt(mission, task) {
     `Missão: ${mission.title}`,
     mission.objective ? `Objetivo da missão: ${mission.objective}` : '',
     `TAREFA A EXECUTAR (somente esta): ${task.title}`,
+    task.instructions ? `Instruções:\n${task.instructions}` : '',
+    task.acceptance?.length ? `Critérios de verificação:\n${task.acceptance.map((c) => `- ${c}`).join('\n')}` : '',
     deps ? `Contexto das tarefas anteriores já aprovadas:\n${deps}` : '',
     'Regras:',
     '- Trabalhe apenas dentro do diretório atual e faça somente esta tarefa; não antecipe tarefas futuras.',
     '- Você só pode ler e editar arquivos (sem shell, sem rede). Não apague arquivos, não faça commit nem push.',
     '- Ao terminar, responda com um relatório curto: o que foi feito, arquivos alterados e pendências.',
+    task.auto ? 'Finalize com um bloco ```json: {"summary": "...", "checks": [{"name": "...", "result": "pass|fail|not_run", "detail": "..."}]} listando SOMENTE verificações que você realmente fez (releitura e conferência dos arquivos). Use not_run para o que não pôde verificar; não invente resultados.' : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -67,20 +70,23 @@ export function setupExecution(app, { db, executor }) {
     res.json(task);
   });
 
-  app.post('/api/missions/:id/tasks/:tid/run', async (req, res) => {
-    const mission = find(db.missions, req.params.id), task = mission && find(mission.tasks, req.params.tid);
-    if (!task) return bad(res, 'Tarefa não encontrada.', 404);
+  /**
+   * Valida, toma o lock do executor e inicia a execução. Usado pela rota manual e pelo ciclo.
+   * @returns {Promise<{ok:false, reason:string} | {ok:true, finished:Promise<void>}>}
+   * `finished` só resolve depois de persistir o estado final da tarefa.
+   */
+  async function startTaskRun(mission, task, { autoAccept = false } = {}) {
     const probe = await executor.probe();
     const check = () => runBlockers({
       mission, task, workspace: find(db.workspaces, mission.workspaceId) || null,
       validateDir, busy: executor.isBusy(), cliAvailable: probe.available,
     });
     let why = check();
-    if (why) return bad(res, why);
+    if (why) return { ok: false, reason: why };
     const workspace = find(db.workspaces, mission.workspaceId);
     const before = await gitChanges(workspace.path); // linha de base para saber o que a execução alterou
     why = check(); // revalida: outra requisição pode ter tomado o lock durante o await
-    if (why) return bad(res, why);
+    if (why) return { ok: false, reason: why };
 
     const beforePaths = new Set(before.files.map((f) => f.path));
     let handle;
@@ -96,33 +102,52 @@ export function setupExecution(app, { db, executor }) {
         },
       });
     } catch (e) {
-      return bad(res, e.code === 'BUSY' ? 'Outra execução está em andamento.' : e.message);
+      return { ok: false, reason: e.code === 'BUSY' ? 'Outra execução está em andamento.' : e.message };
     }
 
     Object.assign(task, {
       status: 'running', authorized: false, startedAt: store.now(), finishedAt: null, exitCode: null, error: null,
       usage: null, report: '', files: [], log: [], logTotal: 0, pid: handle.pid, dirtyBefore: before.files.length > 0, gitRepo: before.isRepo,
+      permissionDenied: false,
     });
     if (task.dirtyBefore) { task.log.push('[aviso] o workspace já tinha alterações não commitadas antes desta execução'); task.logTotal = 1; }
     store.log('execution', `Execução iniciada: ${task.title}`, { missionId: mission.id, taskId: task.id, agent: 'executor' });
     store.save(); emitTask(mission, task); bus.emit('state', {});
-    res.status(202).json(task);
 
-    const r = await handle.done;
-    const after = await gitChanges(workspace.path);
-    task.files = after.files.map((f) => ({ ...f, preexisting: beforePaths.has(f.path) }));
-    task.finishedAt = store.now(); task.exitCode = r.exitCode; task.error = r.error; delete task.pid;
-    task.usage = r.result ? { costUsd: r.result.costUsd, durationMs: r.result.durationMs, turns: r.result.turns } : null;
-    task.report = r.result?.text || (r.error ? `Sem relatório: ${r.error}` : '');
-    // Sucesso do processo NÃO conclui a tarefa: o resultado aguarda revisão humana.
-    task.status = r.status === 'completed' ? 'awaiting_approval' : r.status;
-    const msg = {
-      awaiting_approval: `Execução terminada, aguardando revisão: ${task.title}`,
-      failed: `Execução falhou (${r.error}): ${task.title}`,
-      interrupted: `Execução interrompida: ${task.title}`,
-    }[task.status];
-    store.log('execution', msg, { missionId: mission.id, taskId: task.id, agent: 'executor', exitCode: r.exitCode });
-    store.save(); emitTask(mission, task); bus.emit('state', {});
+    const finished = (async () => {
+      const r = await handle.done;
+      const after = await gitChanges(workspace.path);
+      task.files = after.files.map((f) => ({ ...f, preexisting: beforePaths.has(f.path) }));
+      task.finishedAt = store.now(); task.exitCode = r.exitCode; task.error = r.error; delete task.pid;
+      task.usage = r.result ? { costUsd: r.result.costUsd, durationMs: r.result.durationMs, turns: r.result.turns } : null;
+      task.report = r.result?.text || (r.error ? `Sem relatório: ${r.error}` : '');
+      // Pedido de permissão negado = a execução precisou de algo que não foi concedido (nunca é sucesso).
+      task.permissionDenied = (r.result?.permissionDenials || 0) > 0
+        || task.log.some((l) => /^\[erro de ferramenta\].*(permiss|denied|not allowed|negad)/i.test(l));
+      if (r.status === 'completed' && task.permissionDenied && autoAccept) {
+        r.status = 'failed'; task.error = 'A execução precisou de permissão que não foi concedida (negada automaticamente).';
+      }
+      // Sucesso do processo NÃO conclui a tarefa: aguarda revisão humana, salvo tarefas do ciclo (aceitas no relatório).
+      task.status = r.status === 'completed' ? (autoAccept ? 'completed' : 'awaiting_approval') : r.status;
+      if (autoAccept && task.status === 'completed') task.autoAccepted = true;
+      const msg = {
+        awaiting_approval: `Execução terminada, aguardando revisão: ${task.title}`,
+        completed: `Execução terminada (relatório enviado ao Planner): ${task.title}`,
+        failed: `Execução falhou (${task.error}): ${task.title}`,
+        interrupted: `Execução interrompida: ${task.title}`,
+      }[task.status];
+      store.log('execution', msg, { missionId: mission.id, taskId: task.id, agent: 'executor', exitCode: r.exitCode });
+      store.save(); emitTask(mission, task); bus.emit('state', {});
+    })();
+    return { ok: true, finished };
+  }
+
+  app.post('/api/missions/:id/tasks/:tid/run', async (req, res) => {
+    const mission = find(db.missions, req.params.id), task = mission && find(mission.tasks, req.params.tid);
+    if (!task) return bad(res, 'Tarefa não encontrada.', 404);
+    const r = await startTaskRun(mission, task);
+    if (!r.ok) return bad(res, r.reason);
+    res.status(202).json(task);
   });
 
   app.post('/api/execution/stop', async (req, res) => {
@@ -141,9 +166,11 @@ export function setupExecution(app, { db, executor }) {
     const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     send('hello', { busy: executor.isBusy(), current: executor.current() });
     const on = (event) => (d) => send(event, d);
-    const h = { task: on('task'), log: on('log'), state: on('state') };
+    const h = { task: on('task'), log: on('log'), state: on('state'), cycle: on('cycle') };
     for (const [k, fn] of Object.entries(h)) bus.on(k, fn);
     const ping = setInterval(() => res.write(': ping\n\n'), 20000);
     req.on('close', () => { clearInterval(ping); for (const [k, fn] of Object.entries(h)) bus.off(k, fn); });
   });
+
+  return { startTaskRun };
 }

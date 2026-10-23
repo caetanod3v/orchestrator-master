@@ -2,7 +2,7 @@ import React from 'react';
 
 export const STATUS = {
   running: 'running', completed: 'completed', failed: 'failed', queued: 'queued',
-  awaiting_approval: 'awaiting approval', interrupted: 'interrupted', not_connected: 'not connected', idle: 'idle', degraded: 'degraded',
+  awaiting_approval: 'awaiting approval', interrupted: 'interrupted', planning: 'planning', blocked: 'blocked', cancelled: 'cancelled', limit_reached: 'limit reached', succeeded: 'succeeded', not_connected: 'not connected', idle: 'idle', degraded: 'degraded',
 };
 
 export const Status = ({ value }) => (

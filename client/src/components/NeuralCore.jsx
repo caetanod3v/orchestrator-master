@@ -44,7 +44,8 @@ export function usePrefersReduced() {
   return v;
 }
 const LIVE = new Set(['active', 'idle', 'live', 'awaiting']);
-const BUCKETS = 8;
+const TIERS = [1, 0.7, 0.5, 0.35]; // qualidade em degraus (adaptar de forma contínua faz o brilho oscilar)
+const BUCKETS = 16; // níveis de alfa: quanto mais, menos saltos visíveis entre quadros
 const approach = (cur, target, rate, dt) => cur + (target - cur) * (1 - Math.exp(-rate * dt));
 
 /**
@@ -83,7 +84,7 @@ export default function NeuralCore({ running, awaiting, nodes, links, fresh, sel
   useEffect(() => {
     const cv = canvas.current, ctx = cv.getContext('2d');
     let w = 0, h = 0, dpr = 1, raf = 0, rot = 0, last = performance.now(), time = 0, glow = 0, frames = 0;
-    let tiltX = 0, tiltY = 0, tx = 0, ty = 0, q = 1, ema = 16; // q: qualidade adaptativa (fração das partículas)
+    let tiltX = 0, tiltY = 0, tx = 0, ty = 0, q = 1, ema = 16, tier = 0, lastAdapt = 0; // q: fração das partículas da casca
     const hi = {}; // intensidade de destaque por conexão (suavizada)
     const px = new Float32Array(N), py = new Float32Array(N), pb = new Uint8Array(N);
     const order = new Uint16Array(N), cnt = new Uint32Array(BUCKETS + 1);
@@ -98,9 +99,11 @@ export default function NeuralCore({ running, awaiting, nodes, links, fresh, sel
     function frame(now) {
       const t0 = performance.now();
       const dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); const raw = (now - last) * 1000 / 1000; last = now; frames++;
-      if (!still && frames > 3 && raw < 250) { // mantém ~30+ fps reduzindo partículas se a máquina não acompanhar
+      if (!still && frames > 3 && raw < 250) { // mantém ~30+ fps trocando de nível (com espera) se a máquina não acompanhar
         ema += (raw - ema) * 0.1;
-        q = ema > 30 ? Math.max(0.3, q * 0.97) : ema < 20 ? Math.min(1, q * 1.004) : q;
+        if (ema > 32 && tier < TIERS.length - 1 && now - lastAdapt > 1500) { tier++; lastAdapt = now; }
+        else if (ema < 20 && tier > 0 && now - lastAdapt > 4000) { tier--; lastAdapt = now; }
+        q = TIERS[tier];
       }
       const { running: run, awaiting: wait, nodes: nds, links: lks, center: c, selected: sel } = live.current;
       if (!still) { time += dt; rot += dt * (run ? 0.3 : 0.09); }
@@ -161,7 +164,7 @@ export default function NeuralCore({ running, awaiting, nodes, links, fresh, sel
 
       // partículas
       const ca = Math.cos(rot), sa = Math.sin(rot), tilt = 0.35 + tiltY, ct = Math.cos(tilt), st = Math.sin(tilt);
-      const amp = run ? 0.2 : 0.14, n = Math.max(SPARKS + 500, Math.floor(Math.min(N, Math.max(4500, R * R * 0.2)) * q));
+      const amp = run ? 0.2 : 0.14, n = SPARKS + Math.max(1500, Math.floor(Math.min(N - SPARKS, Math.max(4500, R0 * R0 * 0.2)) * q)); // faíscas internas sempre; só a casca escala com a qualidade
       cnt.fill(0);
       for (let i = 0; i < n; i++) {
         const x = base.x[i], y = base.y[i], z = base.z[i];
@@ -176,10 +179,10 @@ export default function NeuralCore({ running, awaiting, nodes, links, fresh, sel
         const k = 3 / (3 - z2 * 0.8);
         px[i] = cx + x2 * R * k; py[i] = cy + y2 * R * k;
         let b;
-        if (spark) b = 3 + (0.5 + 0.5 * Math.sin(time * 1.1 + base.ph[i]) > 0.6 ? 1 : 0);
+        if (spark) b = Math.floor(BUCKETS * (0.38 + 0.14 * (0.5 + 0.5 * Math.sin(time * 1.1 + base.ph[i])))); // cintilar contínuo
         else {
           const rho = Math.hypot(x2, y2); // limbo mais brilhante, centro escuro
-          const wave = 0.35 * Math.sin(1.6 * x + 1.2 * y - time * 0.5);
+          const wave = 0.22 * Math.sin(1.6 * x + 1.2 * y - time * 0.5);
           b = Math.max(0, Math.min(BUCKETS - 1, Math.floor((rho * 3.6 - 1 + wave) * (BUCKETS / 4))));
         }
         pb[i] = b; cnt[b + 1]++;
@@ -188,10 +191,11 @@ export default function NeuralCore({ running, awaiting, nodes, links, fresh, sel
       const fill = cnt.slice(0, BUCKETS);
       for (let i = 0; i < n; i++) order[fill[pb[i]]++] = i;
       ctx.fillStyle = '#e8edf2';
-      const sz = 1.0 + R / 420;
+      const sz = (1.0 + R / 420) * (1 + (1 - q) * 0.3); // menos partículas: um pouco maiores e mais brilhantes
+      const comp = Math.min(1.3, Math.pow(1 / q, 0.3));
       for (let b = 0, s = 0; b < BUCKETS; b++) {
         const e = cnt[b + 1];
-        ctx.globalAlpha = Math.min(1, (0.12 + (b / (BUCKETS - 1)) * 0.78 + (run ? 0.06 : 0)) * bright);
+        ctx.globalAlpha = Math.min(1, (0.12 + (b / (BUCKETS - 1)) * 0.78 + (run ? 0.06 : 0)) * bright * comp);
         for (; s < e; s++) { const i = order[s]; ctx.fillRect(px[i], py[i], sz, sz); }
       }
       ctx.globalAlpha = 1;
@@ -226,7 +230,7 @@ export default function NeuralCore({ running, awaiting, nodes, links, fresh, sel
           }
         }
       }
-      cv.dataset.pulses = String(list.length); cv.dataset.frames = String(frames); cv.dataset.ms = (performance.now() - t0).toFixed(1); cv.dataset.q = q.toFixed(2);
+      cv.dataset.pulses = String(list.length); cv.dataset.frames = String(frames); cv.dataset.ms = (performance.now() - t0).toFixed(1); cv.dataset.q = q.toFixed(2); cv.dataset.n = String(n);
       if (!still) raf = requestAnimationFrame(frame);
     }
     redraw.current = still ? () => frame(performance.now()) : null;

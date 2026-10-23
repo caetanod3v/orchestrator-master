@@ -200,3 +200,9 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent); }
 
 .s-interrupted { color: #d9843a; }
 .status.s-interrupted i { background: #d9843a; }
+
+.s-planning { color: var(--running); } .s-succeeded { color: var(--completed); } .s-blocked, .s-limit_reached { color: var(--awaiting); } .s-cancelled { color: var(--queued); }
+.cycle { border: 1px solid var(--line); border-radius: 4px; padding: 8px; background: var(--bg2); }
+.cycle .rounds { margin-top: 8px; } .round { border-top: 1px solid var(--line); padding: 4px 0; }
+.round summary { display: flex; gap: 8px; align-items: center; cursor: pointer; } .round .n { color: var(--dim); }
+.round p { margin: 4px 0; } .round .k { margin-top: 6px; }

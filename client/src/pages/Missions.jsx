@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { useStore } from '../store.jsx';
 import { Panel, Btn, Status, DemoTag, Progress, Empty, fmtTime } from '../components/ui.jsx';
 import { TaskQueue } from '../components/Widgets.jsx';
+import CyclePanel from '../components/CyclePanel.jsx';
 
 export default function Missions() {
   const { missions, mission, selectMission, workspaces, state, act } = useStore();
@@ -54,6 +55,8 @@ export default function Missions() {
           <Panel title={`Detalhe: ${mission.title}`} demo={mission.demo}>
             {mission.objective && <p>{mission.objective}</p>}
             <Progress done={mission.tasks.filter((t) => t.status === 'completed').length} total={mission.tasks.length} />
+            <div style={{ height: 10 }} />
+            <CyclePanel mission={mission} />
             <div style={{ height: 10 }} />
             <TaskQueue mission={mission} />
             <form onSubmit={addTask} className="form inline">

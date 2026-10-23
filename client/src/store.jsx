@@ -39,7 +39,7 @@ export function StoreProvider({ children }) {
       })) }));
     });
     const again = () => refresh();
-    es.addEventListener('task', again); es.addEventListener('state', again); es.addEventListener('hello', again);
+    es.addEventListener('task', again); es.addEventListener('state', again); es.addEventListener('hello', again); es.addEventListener('cycle', again);
     return () => es.close();
   }, [refresh]);
 
