@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
 import { Panel, Btn, Empty } from '../components/ui.jsx';
+import VerificationPanel from '../components/VerificationPanel.jsx';
 
 function GitInfo({ id }) {
   const [info, setInfo] = useState(null);
@@ -54,6 +55,7 @@ export default function Workspaces() {
             ))}
           </tbody>
         </table>
+        {state?.activeWorkspace && <div style={{ marginTop: 12 }}><VerificationPanel workspace={state.activeWorkspace} /></div>}
       </Panel>
     </div>
   );

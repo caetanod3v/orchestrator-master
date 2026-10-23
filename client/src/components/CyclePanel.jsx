@@ -6,7 +6,7 @@ import { Btn, Status } from './ui.jsx';
 const CODE = {
   planner_blocked: 'O Planner pediu intervenção humana', planner_invalid: 'Resposta do Planner inválida', planner_error: 'Falha do Planner',
   executor_failures: 'Execuções falharam em sequência', no_progress: 'Sem progresso', needs_approval: 'Permissão necessária',
-  interrupted: 'Execução interrompida', cannot_start: 'Não foi possível iniciar', restarted: 'Servidor reiniciado',
+  interrupted: 'Execução interrompida', verification_blocked: 'Verificação não pôde rodar', cannot_start: 'Não foi possível iniciar', restarted: 'Servidor reiniciado',
   planner_calls_limit: 'Limite de consultas ao Planner', internal_error: 'Erro interno',
 };
 
@@ -16,6 +16,7 @@ function Round({ r }) {
     <details className="round">
       <summary>
         <span className="n">{String(r.n).padStart(2, '0')}</span> <span className="grow">{r.plan.title}</span>
+        {r.phase === 'verifying' && <span className="s-running small">verificando…</span>}
         <Status value={r.status} />
       </summary>
       <div className="small">
@@ -27,7 +28,17 @@ function Round({ r }) {
           <div className="k">relatório do Executor ({rep.status})</div>
           <p>{rep.summary || <span className="dim">sem resumo</span>}</p>
           <div className="dim">arquivos: {rep.filesKnown ? (rep.filesChanged.map((f) => f.path).join(', ') || 'nenhum') : 'desconhecido (sem Git)'}</div>
-          <div className="dim">verificações: {rep.checks.length ? rep.checks.map((c) => `${c.name}=${c.result}`).join('; ') : rep.checksReported ? 'nenhuma' : 'não reportadas'}</div>
+          {rep.verifications?.length > 0 && <>
+            <div className="k">verificações reais (executadas pelo orquestrador)</div>
+            {rep.verifications.map((v) => (
+              <div key={v.id} className={v.status === 'pass' ? 's-completed' : 's-failed'}>
+                {v.command}: <b>{v.status}</b>{v.exitCode != null && ` · código ${v.exitCode}`} · {(v.durationMs / 1000).toFixed(1)} s{v.required && ' · obrigatória'}{v.reason && ` · ${v.reason}`}
+                {v.status !== 'pass' && v.outputTail && <pre className="vout">{v.outputTail.slice(-600)}</pre>}
+              </div>
+            ))}
+          </>}
+          {rep.verificationsSkipped && <div className="dim">verificações reais não executadas: {rep.verificationsSkipped}</div>}
+          <div className="dim">verificações autodeclaradas pelo Executor (confiança menor): {rep.checks.length ? rep.checks.map((c) => `${c.name}=${c.result}`).join('; ') : rep.checksReported ? 'nenhuma' : 'não reportadas'}</div>
           {rep.errors.map((e, i) => <div key={i} className="s-failed">{e}</div>)}
           {rep.blockers.map((e, i) => <div key={i} className="s-blocked">⚠ {e}</div>)}
         </> : <div className="dim">sem relatório ainda</div>}
@@ -61,7 +72,7 @@ export default function CyclePanel({ mission }) {
       <div className="row"><b className="mono">Ciclo autônomo</b>{c && <Status value={c.status} />}</div>
       {c && <div className="dim small">rodada {c.rounds.length} de no máximo {c.maxIterations} · consultas ao Planner: {c.plannerCalls}</div>}
       {blocked && <p className="s-blocked small">⚠ {CODE[c.blockedCode] || c.blockedCode}: {c.blockedReason}</p>}
-      {c?.status === 'completed' && <div className="small"><p><b className="s-completed">Concluído.</b> {c.finalSummary}</p><ul className="plain">{(c.evidence || []).map((e) => <li key={e}>{e}</li>)}</ul></div>}
+      {c?.status === 'completed' && <div className="small"><p><b className="s-completed">Concluído</b> <span className="dim">({c.assurance === 'verified' ? 'com verificações reais obrigatórias aprovadas' : 'sem verificações reais obrigatórias: apenas evidências autodeclaradas'})</span>. {c.finalSummary}</p><ul className="plain">{(c.evidence || []).map((e) => <li key={e}>{e}</li>)}</ul></div>}
       {c?.status === 'limit_reached' && <p className="s-blocked small">Limite de rodadas atingido sem conclusão.</p>}
       {c?.status === 'cancelled' && <p className="dim small">Ciclo cancelado.</p>}
 

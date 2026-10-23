@@ -206,3 +206,6 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent); }
 .cycle .rounds { margin-top: 8px; } .round { border-top: 1px solid var(--line); padding: 4px 0; }
 .round summary { display: flex; gap: 8px; align-items: center; cursor: pointer; } .round .n { color: var(--dim); }
 .round p { margin: 4px 0; } .round .k { margin-top: 6px; }
+
+.vrow { border-top: 1px solid var(--line); padding: 6px 0; } .vrow .check { margin: 2px 0; }
+.vout { margin: 4px 0; padding: 6px; background: #07090b; border: 1px solid var(--line); white-space: pre-wrap; font-size: 11px; max-height: 140px; overflow: auto; color: var(--dim); }

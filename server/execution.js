@@ -34,10 +34,11 @@ function buildPrompt(mission, task) {
     '- Você só pode ler e editar arquivos (sem shell, sem rede). Não apague arquivos, não faça commit nem push.',
     '- Ao terminar, responda com um relatório curto: o que foi feito, arquivos alterados e pendências.',
     task.auto ? 'Finalize com um bloco ```json: {"summary": "...", "checks": [{"name": "...", "result": "pass|fail|not_run", "detail": "..."}]} listando SOMENTE verificações que você realmente fez (releitura e conferência dos arquivos). Use not_run para o que não pôde verificar; não invente resultados.' : '',
+    task.auto ? 'Depois da sua execução, o próprio orquestrador roda as verificações reais (testes/build) do projeto; não afirme que rodou testes.' : '',
   ].filter(Boolean).join('\n');
 }
 
-export function setupExecution(app, { db, executor }) {
+export function setupExecution(app, { db, executor, verifier = null }) {
   const emitTask = (mission, task) => bus.emit('task', { missionId: mission.id, taskId: task.id, status: task.status });
 
   // Processos órfãos: se o servidor caiu no meio de uma execução, o estado real é "interrompida".
@@ -151,7 +152,8 @@ export function setupExecution(app, { db, executor }) {
   });
 
   app.post('/api/execution/stop', async (req, res) => {
-    const r = await executor.stop();
+    let r = await executor.stop();
+    if (!r.stopped && verifier) { const v = await verifier.stop(); if (v.stopped) r = v; } // também interrompe uma verificação real em andamento
     store.log('system', `Interrupção solicitada: ${r.detail}`, { stopped: r.stopped });
     store.save();
     res.json(r);

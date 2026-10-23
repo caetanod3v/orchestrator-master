@@ -17,6 +17,7 @@ process.stdin.on('end', async () => {
   if (slow) await new Promise((r) => setTimeout(r, 2200));
   if (mode === 'sleep') { setInterval(() => {}, 1000); return; } // fica vivo até ser interrompido
   if (mode === 'write') fs.writeFileSync('out.txt', 'criado pelo teste\n');
+  if (mode === 'fixbuild') fs.writeFileSync('BUILD_OK', 'x\n'); // faz o build do fake-verify passar
   const block = (checks) => '```json\n' + JSON.stringify({ summary: 'resumo estruturado', checks }) + '\n```';
   if (mode === 'check') {
     fs.writeFileSync('out.txt', 'conferido\n');

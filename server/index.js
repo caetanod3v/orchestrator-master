@@ -11,11 +11,13 @@ import { setupExecution, blockedReason } from './execution.js';
 import { missionStatus } from './mission-status.js';
 import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle.js';
 import { createClaudePlanner } from './planner.js';
+import { createVerifier, setupVerification } from './verify.js';
 
 // Costura de teste: só código em processo (nunca env, rede ou requisição) pode injetar executor/planner simulados.
 const testDeps = globalThis.__ORCH_TEST_DEPS__ ?? {};
 const claudeCodeExecutor = testDeps.executor ?? realExecutor;
 const planner = testDeps.planner ?? createClaudePlanner();
+const verifier = testDeps.verifier ?? createVerifier();
 const planning = () => planner.busy();
 
 const PORT = Number(process.env.PORT) || 4317;
@@ -236,8 +238,9 @@ if (fs.existsSync(dist)) {
   app.get(/^(?!\/api).*/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
 }
 
-const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor });
-setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun });
+const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor, verifier });
+setupVerification(app, { db, verifier });
+setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier });
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));
 app.use((err, req, res, next) => bad(res, err.type === 'entity.parse.failed' ? 'JSON inválido.' : 'Erro interno.', err.status || 500));

@@ -40,10 +40,12 @@ export function buildReport(task) {
     blockers: task.permissionDenied ? ['Permissão negada automaticamente (ex.: shell, rede ou fora do workspace).'] : [],
     exitCode: task.exitCode ?? null,
     usage: task.usage ?? null,
+    verifications: [], // execuções REAIS feitas pelo orquestrador (source: backend)
+    verificationsSkipped: null,
   };
 }
 
-const passCount = (r) => (r?.checks || []).filter((c) => c.result === 'pass').length;
+const passCount = (r) => (r?.checks || []).filter((c) => c.result === 'pass').length + (r?.verifications || []).filter((v) => v.status === 'pass').length;
 const failCount = (r) => (r?.checks || []).filter((c) => c.result === 'fail').length;
 
 function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
@@ -54,7 +56,8 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
       `[rodada ${r.n}] tarefa: ${r.plan.title}`,
       `  execução: ${rep ? rep.status : r.status}${rep?.errors?.length ? ` | erros: ${rep.errors.slice(0, 2).join(' / ')}` : ''}${rep?.blockers?.length ? ` | BLOQUEIO: ${rep.blockers.join(' ')}` : ''}`,
       rep ? `  arquivos alterados: ${rep.filesKnown ? (rep.filesChanged.map((f) => f.path).join(', ') || 'nenhum') : 'desconhecido (workspace sem Git)'}` : '',
-      rep ? `  verificações: ${rep.checks.map((c) => `${c.name}=${c.result}`).join('; ') || (rep.checksReported ? 'nenhuma' : 'não reportadas')}` : '',
+      rep?.verifications?.length ? `  verificações REAIS (executadas pelo orquestrador): ${rep.verifications.map((v) => `${v.script}=${v.status}${v.exitCode != null ? `(código ${v.exitCode})` : ''}`).join('; ')}${rep.verifications.some((v) => v.status !== 'pass') ? ` | saída da primeira que não passou: ${clip(rep.verifications.find((v) => v.status !== 'pass').outputTail || rep.verifications.find((v) => v.status !== 'pass').reason || '', 400)}` : ''}` : rep?.verificationsSkipped ? `  verificações reais NÃO executadas: ${rep.verificationsSkipped}` : '',
+      rep ? `  verificações autodeclaradas pelo Executor (confiança menor): ${rep.checks.map((c) => `${c.name}=${c.result}`).join('; ') || (rep.checksReported ? 'nenhuma' : 'não reportadas')}` : '',
       rep ? `  resumo: ${clip(rep.summary, 500)}` : '',
       r.decision ? `  sua decisão depois: ${r.decision.decision} — ${clip(r.decision.rationale, 200)}` : '',
     ].filter(Boolean).join('\n');
@@ -68,6 +71,9 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
     '',
     `MISSÃO: ${mission.title}`,
     `OBJETIVO E CRITÉRIOS DE ACEITAÇÃO: ${mission.objective || '(não informado; use o título)'}`,
+    (workspace.verifications || []).some((v) => v.required)
+      ? `VERIFICAÇÕES OBRIGATÓRIAS (rodadas reais pelo orquestrador depois de cada execução bem-sucedida; "complete" só é aceito se TODAS passaram na ÚLTIMA rodada): ${workspace.verifications.filter((v) => v.required).map((v) => v.script).join(', ')}`
+      : 'VERIFICAÇÕES OBRIGATÓRIAS: nenhuma configurada neste workspace (só existem verificações autodeclaradas pelo Executor, de menor confiança).',
     `WORKSPACE: ${workspace.name} — arquivos (até 2 níveis, só nomes):\n${listing.length ? listing.join('\n') : '(vazio)'}`,
     `RODADA A DECIDIR: ${rounds.length + 1} de no máximo ${cycle.maxIterations} (executadas: ${rounds.length})`,
     '',
@@ -80,11 +86,11 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
     '{"decision":"continue","rationale":"...","task":{"title":"...","instructions":"...","acceptance":["critério verificável"]}}',
     '{"decision":"complete","rationale":"...","evidence":["evidência concreta tirada dos relatórios"]}',
     '{"decision":"blocked","rationale":"...","blockedReason":"o que precisa de intervenção humana"}',
-    'Regras: uma tarefa pequena e específica por vez; critérios objetivos; não repita tarefa idêntica; use "complete" apenas se a ÚLTIMA execução foi bem-sucedida e os relatórios trazem verificações aprovadas (pass) sem falhas — o backend rejeita "complete" sem isso; se faltar permissão ou algo fora do alcance do executor, use "blocked".',
+    'Regras: se houver verificações obrigatórias, a decisão "complete" exige que todas tenham passado na última rodada (evidência real do orquestrador). Uma tarefa pequena e específica por vez; critérios objetivos; não repita tarefa idêntica; use "complete" apenas se a ÚLTIMA execução foi bem-sucedida e os relatórios trazem verificações aprovadas (pass) sem falhas — o backend rejeita "complete" sem isso; se faltar permissão ou algo fora do alcance do executor, use "blocked".',
   ].filter((x) => x !== '').join('\n');
 }
 
-export function createCycle({ db, executor, planner, startTaskRun, listFiles = listWorkspace }) {
+export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace }) {
   const loops = new Map();
   const mission = (id) => find(db.missions, id);
   const wsOf = (m) => find(db.workspaces, m.workspaceId);
@@ -108,8 +114,14 @@ export function createCycle({ db, executor, planner, startTaskRun, listFiles = l
     if (d.decision === 'complete') {
       if (!last) return '"complete" sem nenhuma rodada executada: não há evidências';
       if (last.report?.status !== 'success') return `"complete" rejeitado: a última execução terminou como "${last.report?.status ?? last.status}"`;
+      const vs = last.report.verifications || [];
+      const notPass = vs.filter((v) => v.status !== 'pass');
+      if (notPass.length) return `"complete" rejeitado: verificações reais que não passaram: ${notPass.map((v) => `${v.script}=${v.status}`).join(', ')}`;
+      const required = (wsOf(m)?.verifications || []).filter((v) => v.required);
+      const missing = required.filter((v) => !vs.some((x) => x.id === v.id));
+      if (missing.length) return `"complete" rejeitado: verificação obrigatória não executada nesta rodada: ${missing.map((v) => v.script).join(', ')}`;
       if (failCount(last.report) > 0) return '"complete" rejeitado: o último relatório tem verificações com falha';
-      if (passCount(last.report) < 1) return '"complete" rejeitado: o último relatório não traz nenhuma verificação aprovada (pass)';
+      if (!required.length && passCount(last.report) < 1) return '"complete" rejeitado: o último relatório não traz nenhuma verificação aprovada (pass)';
     }
     if (d.decision === 'continue') {
       const fp = fingerprint(d.task);
@@ -161,12 +173,36 @@ export function createCycle({ db, executor, planner, startTaskRun, listFiles = l
     round.report = report; round.finishedAt = store.now();
     round.status = report.status === 'success' ? 'succeeded' : report.status;
     emit(m);
+
+    // Verificações REAIS (testes/build) pelo backend: evidência que o modelo não pode autodeclarar.
+    const items = wsOf(m)?.verifications || [];
+    if (items.length) {
+      if (report.status !== 'success') report.verificationsSkipped = 'a execução não foi bem-sucedida';
+      else if (!verifier) report.verificationsSkipped = 'o verificador não está disponível';
+      else {
+        round.phase = 'verifying'; emit(m);
+        for (const item of items) {
+          if (c.cancelRequested) break;
+          const res = await verifier.run(wsOf(m), item);
+          report.verifications.push(res);
+          const line = `[verificação] ${res.command} -> ${res.status}${res.exitCode != null ? ` (código ${res.exitCode})` : ''} em ${(res.durationMs / 1000).toFixed(1)} s${res.reason ? ` · ${res.reason}` : ''}`;
+          task.logTotal = (task.logTotal || 0) + 1; task.log.push(line);
+          bus.emit('log', { missionId: m.id, taskId: task.id, count: task.logTotal, line });
+          emit(m);
+          if (['blocked', 'error'].includes(res.status)) break; // projeto suspeito/ambiente quebrado: não roda mais nada nele
+        }
+        round.phase = 'done';
+      }
+    }
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
 
     // Política explícita (o Planner é informado no próximo prompt, via histórico):
     if (task.permissionDenied) return stop(m, 'needs_approval', 'A execução precisou de uma permissão que não foi concedida (negada automaticamente). Um humano precisa decidir; ao retomar, o Planner verá este bloqueio.');
     if (report.status === 'interrupted') return stop(m, 'interrupted', 'A execução foi interrompida (não é sucesso). Retome para o Planner reavaliar ou cancele.');
     if (report.status === 'failed') { c.consecutiveFailures++; if (c.consecutiveFailures >= 2) return stop(m, 'executor_failures', `Duas execuções seguidas falharam: ${clip(task.error, 200)}`); } else c.consecutiveFailures = 0;
+
+    const envProblem = report.verifications.find((v) => ['blocked', 'error'].includes(v.status));
+    if (envProblem) return stop(m, 'verification_blocked', `Não foi possível executar a verificação "${envProblem.script}": ${envProblem.reason} Um humano precisa resolver.`);
 
     const prev = c.rounds.at(-2)?.report;
     const progress = report.status === 'success' && (report.filesChanged.some((f) => !f.preexisting) || passCount(report) > passCount(prev) || !report.filesKnown);
@@ -187,7 +223,7 @@ export function createCycle({ db, executor, planner, startTaskRun, listFiles = l
       if (plan.invalid) return stop(m, 'planner_invalid', `O Planner não produziu uma decisão válida após nova tentativa: ${plan.invalid}`);
       const d = plan.decision, last = c.rounds.at(-1);
       if (last) last.decision = { decision: d.decision, rationale: d.rationale, at: store.now() };
-      if (d.decision === 'complete') { c.finalSummary = d.rationale; c.evidence = d.evidence; return end(m, 'completed', `Planner declarou a missão concluída: ${clip(d.rationale, 200)}`); }
+      if (d.decision === 'complete') { c.finalSummary = d.rationale; c.evidence = d.evidence; c.assurance = (wsOf(m)?.verifications || []).some((v) => v.required) ? 'verified' : 'self-declared'; return end(m, 'completed', `Planner declarou a missão concluída: ${clip(d.rationale, 200)}`); }
       if (d.decision === 'blocked') { note(m, 'cycle', `Planner pediu intervenção humana: ${clip(d.blockedReason, 200)}`, 'planner'); return stop(m, 'planner_blocked', d.blockedReason); }
       if (c.rounds.length >= c.maxIterations) return end(m, 'limit_reached', `Limite de ${c.maxIterations} rodadas atingido; o Planner ainda queria continuar.`);
       if ((await runRound(m, d)) === 'stop') return undefined;
@@ -231,6 +267,7 @@ export function createCycle({ db, executor, planner, startTaskRun, listFiles = l
     c.cancelRequested = true;
     if (c.status === 'blocked') { end(m, 'cancelled', 'Ciclo cancelado pelo usuário.'); return ok(c); }
     await planner.cancel?.();
+    await verifier?.stop?.();
     const round = c.rounds.at(-1);
     if (round?.status === 'running' && executor.current()?.taskId === round.taskId) await executor.stop();
     return ok(c);
@@ -262,7 +299,7 @@ export function createCycle({ db, executor, planner, startTaskRun, listFiles = l
       if (round?.status === 'running') {
         const t = find(m.tasks, round.taskId);
         if (t && t.status === 'running') t.status = 'interrupted';
-        round.report = t ? buildReport(t) : null; round.status = 'interrupted'; round.finishedAt = store.now();
+        round.report = t ? buildReport(t) : null; round.status = 'interrupted'; round.phase = 'done'; round.finishedAt = store.now();
       }
       stop(m, 'restarted', 'O servidor foi reiniciado durante o ciclo. Retome para o Planner reavaliar ou cancele.');
     }
