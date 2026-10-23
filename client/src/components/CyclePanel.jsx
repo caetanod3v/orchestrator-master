@@ -37,6 +37,7 @@ function Round({ r }) {
               </div>
             ))}
           </>}
+          {rep.previousVerifications?.length > 0 && <div className="dim">verificações refeitas após retomada ({rep.previousVerifications.length} resultado(s) anterior(es) guardado(s) para auditoria)</div>}
           {rep.verificationsSkipped && <div className="dim">verificações reais não executadas: {rep.verificationsSkipped}</div>}
           <div className="dim">verificações autodeclaradas pelo Executor (confiança menor): {rep.checks.length ? rep.checks.map((c) => `${c.name}=${c.result}`).join('; ') : rep.checksReported ? 'nenhuma' : 'não reportadas'}</div>
           {rep.errors.map((e, i) => <div key={i} className="s-failed">{e}</div>)}

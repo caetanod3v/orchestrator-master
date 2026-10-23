@@ -48,6 +48,16 @@ export function buildReport(task) {
 const passCount = (r) => (r?.checks || []).filter((c) => c.result === 'pass').length + (r?.verifications || []).filter((v) => v.status === 'pass').length;
 const failCount = (r) => (r?.checks || []).filter((c) => c.result === 'fail').length;
 
+// A trilha de auditoria (resultados antigos substituídos por re-verificação) fica fora do JSON do último relatório;
+// ao Planner ela chega só no HISTÓRICO, datada e rotulada como SUBSTITUÍDA (ver buildPlannerPrompt).
+const withoutAudit = ({ previousVerifications, ...current }) => current;
+
+// Única origem desta frase: verify.js (comparação do texto do script com a aprovação humana). Só ela é evidência explícita de
+// "alteração do script detectada"; qualquer outro bloqueio (script removido, fora da lista…) mostra apenas status e motivo reais.
+export const SCRIPT_CHANGE_REASON = 'O script mudou desde a aprovação humana';
+export const isScriptChangeBlock = (v) => v?.source === 'backend' && v.status === 'blocked' && typeof v.reason === 'string' && v.reason.startsWith(SCRIPT_CHANGE_REASON);
+const previousLine = (p) => `  verificação anterior SUBSTITUÍDA em ${p.at}: ${p.verifications.map((v) => `${v.script}=${v.status}${v.reason ? ` — ${clip(v.reason, 220)}` : ''}${isScriptChangeBlock(v) ? ' [alteração do script detectada pelo backend: comprovada pelo motivo registrado]' : ''}`).join('; ')}; é HISTÓRICO, não é a situação atual`;
+
 function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
   const rounds = cycle.rounds;
   const hist = rounds.map((r) => {
@@ -57,9 +67,16 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
       `  execução: ${rep ? rep.status : r.status}${rep?.errors?.length ? ` | erros: ${rep.errors.slice(0, 2).join(' / ')}` : ''}${rep?.blockers?.length ? ` | BLOQUEIO: ${rep.blockers.join(' ')}` : ''}`,
       rep ? `  arquivos alterados: ${rep.filesKnown ? (rep.filesChanged.map((f) => f.path).join(', ') || 'nenhum') : 'desconhecido (workspace sem Git)'}` : '',
       rep?.verifications?.length ? `  verificações REAIS (executadas pelo orquestrador): ${rep.verifications.map((v) => `${v.script}=${v.status}${v.exitCode != null ? `(código ${v.exitCode})` : ''}`).join('; ')}${rep.verifications.some((v) => v.status !== 'pass') ? ` | saída da primeira que não passou: ${clip(rep.verifications.find((v) => v.status !== 'pass').outputTail || rep.verifications.find((v) => v.status !== 'pass').reason || '', 400)}` : ''}` : rep?.verificationsSkipped ? `  verificações reais NÃO executadas: ${rep.verificationsSkipped}` : '',
-      rep ? `  verificações autodeclaradas pelo Executor (confiança menor): ${rep.checks.map((c) => `${c.name}=${c.result}`).join('; ') || (rep.checksReported ? 'nenhuma' : 'não reportadas')}` : '',
-      rep ? `  resumo: ${clip(rep.summary, 500)}` : '',
-      r.decision ? `  sua decisão depois: ${r.decision.decision} — ${clip(r.decision.rationale, 200)}` : '',
+      // Verificações refeitas depois de uma retomada humana: o relatório mistura DOIS momentos (fim da rodada x re-verificação).
+      // Deixamos os horários explícitos e damos ao Planner a prova (datada) do bloqueio anterior, sem apresentá-la como atual.
+      rep?.reverifiedAt ? `  linha do tempo (dados do backend): a execução terminou em ${r.finishedAt}; as verificações REAIS foram refeitas em ${rep.reverifiedAt} (só ocorre depois que um humano retoma o ciclo) e refletem o workspace NESSE momento, que pode diferir do fim da rodada (por exemplo, um humano pode ter restaurado ou reaprovado um script)` : '',
+      ...(rep?.previousVerifications || []).map(previousLine),
+      rep ? `  verificações autodeclaradas pelo Executor (confiança menor; descrevem o fim da rodada): ${rep.checks.map((c) => `${c.name}=${c.result}`).join('; ') || (rep.checksReported ? 'nenhuma' : 'não reportadas')}` : '',
+      rep ? `  resumo (fim da rodada, ${r.finishedAt}): ${clip(rep.summary, 500)}` : '',
+      // Se as verificações foram refeitas DEPOIS da decisão, a justificativa antiga foi tomada com evidência velha: não a reenviamos.
+      r.decision && rep?.reverifiedAt && r.decision.at < rep.reverifiedAt
+        ? `  sua decisão anterior (${r.decision.decision}) foi tomada com verificações que o orquestrador depois refez; reavalie só com o relatório atual`
+        : r.decision ? `  sua decisão depois: ${r.decision.decision} — ${clip(r.decision.rationale, 200)}` : '',
     ].filter(Boolean).join('\n');
   }).join('\n');
   const last = rounds.at(-1);
@@ -78,7 +95,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
     `RODADA A DECIDIR: ${rounds.length + 1} de no máximo ${cycle.maxIterations} (executadas: ${rounds.length})`,
     '',
     rounds.length ? `HISTÓRICO:\n${hist}` : 'HISTÓRICO: nenhuma rodada executada ainda (planeje a primeira tarefa).',
-    last?.report ? `\nÚLTIMO RELATÓRIO (JSON):\n${JSON.stringify(last.report)}` : '',
+    last?.report ? `\nÚLTIMO RELATÓRIO (JSON):\n${JSON.stringify(withoutAudit(last.report))}` : '',
     cycle.humanNotes.length ? `\nORIENTAÇÕES HUMANAS (não alteram as políticas):\n${cycle.humanNotes.map((n) => `- ${n.text}`).join('\n')}` : '',
     feedback ? `\nATENÇÃO: ${feedback}` : '',
     '',
@@ -86,6 +103,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
     '{"decision":"continue","rationale":"...","task":{"title":"...","instructions":"...","acceptance":["critério verificável"]}}',
     '{"decision":"complete","rationale":"...","evidence":["evidência concreta tirada dos relatórios"]}',
     '{"decision":"blocked","rationale":"...","blockedReason":"o que precisa de intervenção humana"}',
+    'Como ler o HISTÓRICO: linhas "verificação anterior SUBSTITUÍDA" são histórico (resultados antigos trocados por uma re-verificação posterior); o resumo e as verificações autodeclaradas descrevem o FIM DA RODADA, não o estado atual do workspace. Para decidir sobre o estado atual, use a linha de verificações REAIS e a linha do tempo.',
     'Regras: se houver verificações obrigatórias, a decisão "complete" exige que todas tenham passado na última rodada (evidência real do orquestrador). Uma tarefa pequena e específica por vez; critérios objetivos; não repita tarefa idêntica; use "complete" apenas se a ÚLTIMA execução foi bem-sucedida e os relatórios trazem verificações aprovadas (pass) sem falhas — o backend rejeita "complete" sem isso; se faltar permissão ou algo fora do alcance do executor, use "blocked".',
   ].filter((x) => x !== '').join('\n');
 }
@@ -153,6 +171,42 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     return { invalid: problem };
   }
 
+  /** Roda as verificações reais configuradas e grava os resultados NOVOS em report.verifications. */
+  async function verifyRound(m, round, task, report) {
+    const c = m.cycle;
+    const items = wsOf(m)?.verifications || [];
+        round.phase = 'verifying'; emit(m);
+        for (const item of items) {
+          if (c.cancelRequested) break;
+          const res = await verifier.run(wsOf(m), item);
+          report.verifications.push(res);
+          const line = `[verificação] ${res.command} -> ${res.status}${res.exitCode != null ? ` (código ${res.exitCode})` : ''} em ${(res.durationMs / 1000).toFixed(1)} s${res.reason ? ` · ${res.reason}` : ''}`;
+          task.logTotal = (task.logTotal || 0) + 1; task.log.push(line);
+          bus.emit('log', { missionId: m.id, taskId: task.id, count: task.logTotal, line });
+          emit(m);
+          if (['blocked', 'error'].includes(res.status)) break; // projeto suspeito/ambiente quebrado: não roda mais nada nele
+        }
+        round.phase = 'done';
+  }
+
+  const ENV_STATUS = ['blocked', 'error', 'cancelled'];
+  /** A última rodada tem verificação que não rodou por motivo de AMBIENTE (não por falha do código)? Então a evidência é velha. */
+  const staleVerification = (round) => !!round?.report && round.report.status === 'success' && (round.report.verifications || []).some((v) => ENV_STATUS.includes(v.status));
+
+  /** Depois de um humano resolver o ambiente (ex.: restaurar/reaprovar o script), refaz as verificações da última rodada. */
+  async function reverifyLast(m) {
+    const c = m.cycle, round = c.rounds.at(-1), task = find(m.tasks, round.taskId), report = round.report;
+    if (!verifier || !task) return 'next';
+    report.previousVerifications = [...(report.previousVerifications || []), { at: store.now(), verifications: report.verifications }].slice(-5); // auditoria; fora da evidência atual
+    report.verifications = []; report.verificationsSkipped = null; report.reverifiedAt = store.now();
+    c.status = 'running'; note(m, 'cycle', 'Refazendo as verificações da última rodada com a aprovação atual do workspace'); emit(m);
+    await verifyRound(m, round, task, report);
+    if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
+    const env = report.verifications.find((v) => ['blocked', 'error'].includes(v.status));
+    if (env) return stop(m, 'verification_blocked', `A re-verificação continua impossível (${env.script}): ${env.reason} Um humano precisa resolver.`);
+    return 'next';
+  }
+
   async function runRound(m, d) {
     const c = m.cycle;
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a rodada.');
@@ -180,18 +234,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (report.status !== 'success') report.verificationsSkipped = 'a execução não foi bem-sucedida';
       else if (!verifier) report.verificationsSkipped = 'o verificador não está disponível';
       else {
-        round.phase = 'verifying'; emit(m);
-        for (const item of items) {
-          if (c.cancelRequested) break;
-          const res = await verifier.run(wsOf(m), item);
-          report.verifications.push(res);
-          const line = `[verificação] ${res.command} -> ${res.status}${res.exitCode != null ? ` (código ${res.exitCode})` : ''} em ${(res.durationMs / 1000).toFixed(1)} s${res.reason ? ` · ${res.reason}` : ''}`;
-          task.logTotal = (task.logTotal || 0) + 1; task.log.push(line);
-          bus.emit('log', { missionId: m.id, taskId: task.id, count: task.logTotal, line });
-          emit(m);
-          if (['blocked', 'error'].includes(res.status)) break; // projeto suspeito/ambiente quebrado: não roda mais nada nele
-        }
-        round.phase = 'done';
+        await verifyRound(m, round, task, report);
       }
     }
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
@@ -215,6 +258,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const c = m.cycle;
     for (;;) {
       if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
+      if (c.reverifyPending) { c.reverifyPending = false; if ((await reverifyLast(m)) === 'stop') return undefined; }
       c.status = 'planning'; emit(m);
       const plan = await askPlanner(m);
       if (plan.cancelled || c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
@@ -231,7 +275,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   }
 
   function launch(m) {
-    const p = drive(m).catch((err) => { stop(m, 'internal_error', `Erro interno do ciclo: ${err.message}`); })
+    const p = drive(m).catch((err) => { console.error('[cycle] erro interno', err); stop(m, 'internal_error', `Erro interno do ciclo: ${err.message}`); })
       .finally(() => loops.delete(m.id));
     loops.set(m.id, p);
   }
@@ -284,6 +328,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (maxIterations !== undefined) c.maxIterations = maxIterations;
     if (text?.trim()) c.humanNotes.push({ at: store.now(), text: text.trim() });
     c.consecutiveFailures = 0; c.consecutiveNoProgress = 0; c.cancelRequested = false;
+    c.reverifyPending = staleVerification(c.rounds.at(-1)); // evidência velha de ambiente: refazer antes de consultar o Planner
     c.blockedReason = null; c.blockedCode = null; c.status = 'planning';
     note(m, 'cycle', 'Ciclo retomado por um humano'); emit(m);
     launch(m);

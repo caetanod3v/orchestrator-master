@@ -48,10 +48,24 @@ export function saveSoon() {
   saveTimer = setTimeout(() => { saveTimer = null; save(); }, 500);
 }
 
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const TRANSIENT = ['EPERM', 'EBUSY', 'EACCES', 'ENOENT'];
+
+// No Windows, renomear por cima do db.json falha de forma transitória (EPERM/EBUSY) quando antivírus ou
+// indexador estão com o arquivo aberto. Tenta de novo; por fim grava direto; nunca derruba o chamador por isso.
 export function save() {
+  const json = JSON.stringify(db, null, 2);
   const tmp = `${DB_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
-  fs.renameSync(tmp, DB_FILE);
+  for (let i = 0; i < 8; i++) {
+    try { fs.writeFileSync(tmp, json); fs.renameSync(tmp, DB_FILE); return true; } catch (e) {
+      if (!TRANSIENT.includes(e.code)) throw e; // erro de verdade (disco cheio, I/O…) continua visível
+      sleepSync(15 * (i + 1));
+    }
+  }
+  try { fs.writeFileSync(DB_FILE, json); return true; } catch (e) {
+    console.error('[store] não foi possível salvar o banco:', e.code, e.message);
+    return false; // o estado segue em memória e o próximo save() tenta de novo
+  }
 }
 
 export const get = () => db;

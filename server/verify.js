@@ -77,7 +77,10 @@ export function createVerifier({ timeoutMs = DEFAULT_TIMEOUT_MS, maxOutputBytes 
     const proj = inspectProject(v.path);
     if (!proj.ok) return stop('error', proj.error);
     if (proj.scripts[script] === undefined) return stop('blocked', `O script "${script}" não existe mais no package.json.`);
-    if (proj.scripts[script] !== item.command) return stop('blocked', 'O script mudou desde a aprovação humana; aprove novamente em Workspaces.');
+    if (proj.scripts[script] !== item.command) {
+      const show = (t) => JSON.stringify(String(t).slice(0, 160));
+      return stop('blocked', `O script mudou desde a aprovação humana (aprovado: ${show(item.command)} · atual: ${show(proj.scripts[script])}); aprove novamente em Workspaces.`);
+    }
     const spec = spawnSpec(script);
     if (!spec) return stop('error', 'npm não foi encontrado junto ao Node.');
 
