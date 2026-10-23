@@ -1,0 +1,27 @@
+node_modules
+client/dist
+data/db.json
+data/*.tmp
+.test-workspace
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local data and logs
+data/db.json
+data/*.tmp
+*.log
+
+# Dependencies and build output
+node_modules/
+client/dist/
+
+# Test workspaces
+.test-workspace/
+
+# Local visual references
+/referencia.gif
+/referencia2.jpg
+/videoframe_1591.png

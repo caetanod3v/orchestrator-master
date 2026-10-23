@@ -1,0 +1,23 @@
+{
+  "name": "ai-dev-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Central local de operações para coordenar agentes de IA em desenvolvimento de software",
+  "scripts": {
+    "server": "node server/index.js",
+    "client": "npm --prefix client run dev",
+    "dev": "concurrently -n api,ui -c gray,blue \"npm run server\" \"npm run client\"",
+    "build": "npm --prefix client run build",
+    "start": "npm run build && node server/index.js",
+    "install:all": "npm install && npm --prefix client install",
+    "test": "node --test server/test/*.test.mjs",
+    "test:real": "node server/test/manual/real-run.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
