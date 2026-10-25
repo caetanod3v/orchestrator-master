@@ -5,6 +5,8 @@ import { Progress, DemoTag, Empty, Btn, fmtTime } from '../components/ui.jsx';
 import { AgentCard, TaskQueue, Terminal, ReviewPanel } from '../components/Widgets.jsx';
 import NeuralCore, { reactionFor, usePrefersReduced } from '../components/NeuralCore.jsx';
 import CyclePanel from '../components/CyclePanel.jsx';
+import TokenMonitor from '../components/TokenMonitor.jsx';
+import { hudText } from '../usage-view.js';
 
 // Posição de cada nó (fração da área) e conexões justificadas pela arquitetura:
 // planner propõe -> portão humano aprova -> executor executa no workspace; a fila alimenta o núcleo.
@@ -14,7 +16,7 @@ const LINKS = [
   ['core', 'planner'], ['core', 'executor'], ['core', 'gate'], ['core', 'workspace'], ['core', 'queue'],
   ['planner', 'gate'], ['gate', 'executor'], ['executor', 'workspace'],
 ];
-const LABEL = { planner: 'Planner', executor: 'Executor', gate: 'Aprovação humana', queue: 'Fila de tarefas', workspace: 'Workspace' };
+const LABEL = { planner: 'Planner', executor: 'Executor', gate: 'Aprovação humana', queue: 'Fila de tarefas', workspace: 'Workspace', tokens: 'Monitor de tokens' };
 const KIND = { planner: 'agent', executor: 'agent', gate: 'gate', queue: 'res', workspace: 'res' };
 const STATE_LABEL = {
   active: 'ativo', idle: 'ocioso', live: 'disponível', awaiting: 'aguardando aprovação',
@@ -203,6 +205,9 @@ export default function Cockpit() {
         <div className="legend">
           {['active', 'idle', 'awaiting', 'disconnected', 'unavailable', 'error'].map((s) => <span key={s} className={`st-${s}`}><i />{STATE_LABEL[s]}</span>)}
         </div>
+        <button id="node-tokens" type="button" className="btn" aria-pressed={sel === 'tokens'} onClick={() => choose('tokens')} title="Consumo de tokens reportado pela CLI (não é saldo da assinatura)">
+          {sel === 'tokens' ? '▾' : '▴'} Tokens{hudText(state?.usage) && <span className="dim small"> · {hudText(state.usage)}</span>}
+        </button>
         <button type="button" className="btn" aria-pressed={sel === 'queue'} onClick={() => choose('queue')}>{sel === 'queue' ? '▾' : '▴'} Fila e terminal</button>
       </div>
 
@@ -210,7 +215,14 @@ export default function Cockpit() {
         <Node key={id} id={id} state={st[id]} line={lines[id]} selected={sel === id} flash={flash[id] !== undefined} onClick={() => choose(id)} />
       ))}
 
-      {panel && panel !== 'queue' && (
+      {panel === 'tokens' && (
+        <aside className={`overlay wide${closing ? ' out' : ''}`} ref={panelRef} tabIndex={-1} role="dialog" aria-label="Detalhes: Monitor de tokens">
+          <header><h3>Monitor de tokens</h3>{closeBtn}</header>
+          <TokenMonitor />
+        </aside>
+      )}
+
+      {panel && panel !== 'queue' && panel !== 'tokens' && (
         <aside className={`overlay${closing ? ' out' : ''}`} ref={panelRef} tabIndex={-1} role="dialog" aria-label={`Detalhes: ${LABEL[panel]}`}>
           <header><h3>{LABEL[panel]} {panel === 'gate' && mission?.demo && <DemoTag />}</h3>{closeBtn}</header>
           <div className="rowline"><span className={`st-${st[panel]}`}><i className="dot" />{STATE_LABEL[st[panel]]}</span><span className="dim small">{KIND_LABEL[KIND[panel]]}</span></div>

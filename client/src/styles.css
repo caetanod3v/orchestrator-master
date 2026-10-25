@@ -209,3 +209,17 @@ input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent); }
 
 .vrow { border-top: 1px solid var(--line); padding: 6px 0; } .vrow .check { margin: 2px 0; }
 .vout { margin: 4px 0; padding: 6px; background: #07090b; border: 1px solid var(--line); white-space: pre-wrap; font-size: 11px; max-height: 140px; overflow: auto; color: var(--dim); }
+
+/* Monitor de tokens */
+.overlay.wide { width: min(460px, 92%); }
+.hud.br .btn .dim { white-space: nowrap; }
+.tok { width: 100%; border-collapse: collapse; font-size: 11px; margin: 4px 0; }
+.tok th, .tok td { padding: 3px 4px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+.tok thead th { color: var(--dim); font-weight: 400; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.tok tbody th { text-align: left; color: var(--text); font-weight: 600; }
+.tok-state { font-size: 10px; color: var(--completed); } .tok-state.provisional, .tok-state.mixed { color: var(--awaiting); } .tok-state.none { color: var(--dim); }
+.tok-mission { border-top: 1px solid var(--line); padding: 4px 0; }
+.tok-mission summary { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 11px; }
+.tok-mission .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tok-limit.ok { color: var(--completed); } .tok-limit.warn { color: var(--awaiting); } .tok-limit.bad { color: var(--failed); } .tok-limit.unknown { color: var(--dim); }
+.tokmon summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
