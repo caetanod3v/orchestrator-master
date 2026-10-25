@@ -5,6 +5,7 @@ import { bus } from './executor/index.js';
 import { runBlockers, authorizeBlockers } from './executor/policy.js';
 import { validateDir } from './workspaces.js';
 import { gitChanges } from './git.js';
+import { reclaimOrphans } from './orphans.js';
 
 const MAX_LOG = 600;
 const find = (arr, id) => arr.find((x) => x.id === id);
@@ -38,17 +39,37 @@ function buildPrompt(mission, task) {
   ].filter(Boolean).join('\n');
 }
 
-export function setupExecution(app, { db, executor, verifier = null }) {
+export function setupExecution(app, { db, executor, verifier = null, orphanTools = {} }) {
   const emitTask = (mission, task) => bus.emit('task', { missionId: mission.id, taskId: task.id, status: task.status });
 
-  // Processos órfãos: se o servidor caiu no meio de uma execução, o estado real é "interrompida".
+  // Processos órfãos: se o servidor caiu no meio de uma execução, o estado real é "interrompida" e o processo filho (que sobrevive ao pai)
+  // pode continuar editando o workspace. Os PIDs gravados são conferidos e a execução abandonada é encerrada (ver orphans.js).
+  const ORPHAN_NOTE = {
+    gone: 'o processo da execução anterior já não existia',
+    killed: 'o processo da execução anterior ainda estava vivo e foi ENCERRADO (com seus subprocessos)',
+    reused: 'o PID gravado pertence a outro processo (reaproveitado); nada foi encerrado',
+    unverified: 'o processo gravado está vivo, mas não foi possível confirmar que é a execução anterior; NÃO foi encerrado e novas execuções ficam bloqueadas até ele terminar',
+    kill_failed: 'o processo da execução anterior continua vivo e NÃO pôde ser encerrado; novas execuções ficam bloqueadas até ele terminar',
+  };
+  // Candidatos: toda tarefa que ainda guarda um PID (a que estava "running" e também a que ficou "interrupted" com processo não resolvido).
+  const withPid = [];
   for (const m of db.missions) for (const t of m.tasks) {
+    if (t.pid != null) withPid.push({ m, t });
     if (t.status === 'running') {
       t.status = 'interrupted'; t.error = 'O servidor foi reiniciado durante a execução.'; t.finishedAt = store.now();
       t.log = [...(t.log || []), '[sistema] servidor reiniciado durante a execução; processo não é mais acompanhado'];
       store.log('execution', `Execução interrompida (servidor reiniciado): ${t.title}`, { missionId: m.id, taskId: t.id, agent: 'executor' });
     }
   }
+  const results = reclaimOrphans(withPid.map(({ t }) => ({ pid: t.pid, startedAt: t.startedAt })), orphanTools);
+  results.forEach((r, i) => {
+    const { m, t } = withPid[i];
+    t.log = [...(t.log || []), `[sistema] PID ${r.pid}: ${ORPHAN_NOTE[r.outcome]}${r.detail ? ` (${r.detail})` : ''}`];
+    store.log('execution', `Processo órfão (PID ${r.pid}) — ${r.outcome}: ${t.title}`, { missionId: m.id, taskId: t.id, agent: 'executor', orphan: r.outcome });
+    if (r.outcome === 'kill_failed' || r.outcome === 'unverified') {
+      executor.adoptOrphan?.(r.pid, r.processStart ?? r.expectedStart ?? null); // vivo e possivelmente ativo: o executor fica ocupado; o PID é mantido para reavaliar no próximo boot
+    } else delete t.pid;
+  });
   store.save();
 
   app.post('/api/missions/:id/tasks/:tid/authorize', (req, res) => {
