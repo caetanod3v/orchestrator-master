@@ -6,7 +6,7 @@ import * as store from './store.js';
 import { uid, now } from './store.js';
 import { claudeCodeExecutor as realExecutor } from './executor/index.js';
 import { gitInfo } from './git.js';
-import { validateDir } from './workspaces.js';
+import { validateDir, setupWorkspaceRemoval } from './workspaces.js';
 import { setupExecution, blockedReason } from './execution.js';
 import { missionStatus } from './mission-status.js';
 import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle.js';
@@ -102,17 +102,6 @@ app.post('/api/workspaces/:id/activate', (req, res) => {
   store.log('workspace', `Workspace ativo: ${ws.name}`, { workspaceId: ws.id });
   commit();
   res.json(ws);
-});
-
-app.delete('/api/workspaces/:id', (req, res) => {
-  const ws = find(db.workspaces, req.params.id);
-  if (!ws) return bad(res, 'Workspace não encontrado.', 404);
-  if (db.missions.some((m) => m.workspaceId === ws.id && m.tasks.some((t) => t.status === 'running'))) return bad(res, 'Há uma execução em andamento neste workspace.', 409);
-  db.workspaces = db.workspaces.filter((w) => w.id !== ws.id);
-  if (db.settings.activeWorkspaceId === ws.id) db.settings.activeWorkspaceId = db.workspaces[0]?.id ?? null;
-  store.log('workspace', `Workspace removido do cadastro: ${ws.name} (arquivos intactos)`);
-  commit();
-  res.status(204).end();
 });
 
 app.get('/api/workspaces/:id/git', async (req, res) => {
@@ -240,6 +229,7 @@ if (fs.existsSync(dist)) {
 
 const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor, verifier });
 setupVerification(app, { db, verifier });
+setupWorkspaceRemoval(app, { db });
 setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier });
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));
