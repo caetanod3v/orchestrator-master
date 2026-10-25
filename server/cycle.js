@@ -47,6 +47,8 @@ export function buildReport(task) {
 }
 
 const passCount = (r) => (r?.checks || []).filter((c) => c.result === 'pass').length + (r?.verifications || []).filter((v) => v.status === 'pass').length;
+// Progresso só conta evidência INDEPENDENTE do agente: o Executor não pode evitar "no_progress" declarando mais checks "pass".
+const realPassCount = (r) => (r?.verifications || []).filter((v) => v.status === 'pass').length;
 const failCount = (r) => (r?.checks || []).filter((c) => c.result === 'fail').length;
 
 // A trilha de auditoria (resultados antigos substituídos por re-verificação) fica fora do JSON do último relatório;
@@ -292,7 +294,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (envProblem) return stop(m, 'verification_blocked', `Não foi possível executar a verificação "${envProblem.script}": ${envProblem.reason} Um humano precisa resolver.`);
 
     const prev = c.rounds.at(-2)?.report;
-    const progress = report.status === 'success' && (report.filesChanged.some((f) => !f.preexisting) || passCount(report) > passCount(prev) || !report.filesKnown);
+    const progress = report.status === 'success' && (report.filesChanged.some((f) => !f.preexisting) || realPassCount(report) > realPassCount(prev) || !report.filesKnown);
     c.consecutiveNoProgress = progress ? 0 : c.consecutiveNoProgress + 1;
     if (c.consecutiveNoProgress >= 2) return stop(m, 'no_progress', 'Duas rodadas seguidas sem progresso (nenhum arquivo novo alterado nem verificação nova aprovada).');
     return 'next';
