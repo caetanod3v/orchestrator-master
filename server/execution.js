@@ -115,7 +115,7 @@ export function setupExecution(app, { db, executor, verifier = null }) {
     store.log('execution', `Execução iniciada: ${task.title}`, { missionId: mission.id, taskId: task.id, agent: 'executor' });
     store.save(); emitTask(mission, task); bus.emit('state', {});
 
-    const finished = (async () => {
+    const finalize = async () => {
       const r = await handle.done;
       const after = await gitChanges(workspace.path);
       task.files = after.files.map((f) => ({ ...f, preexisting: beforePaths.has(f.path) }));
@@ -139,7 +139,18 @@ export function setupExecution(app, { db, executor, verifier = null }) {
       }[task.status];
       store.log('execution', msg, { missionId: mission.id, taskId: task.id, agent: 'executor', exitCode: r.exitCode });
       store.save(); emitTask(mission, task); bus.emit('state', {});
-    })();
+    };
+    // Nunca rejeita: qualquer erro na finalização leva a tarefa a um estado terminal coerente (jamais "running" sem processo).
+    const finished = finalize().catch((e) => {
+      try {
+        if (task.status === 'running' || task.status === 'queued') {
+          task.status = 'failed'; task.finishedAt = store.now(); task.error = `Falha ao finalizar a execução: ${e.message}`; delete task.pid;
+          task.report = task.report || `Sem relatório: ${task.error}`; task.permissionDenied = !!task.permissionDenied;
+        }
+        store.log('execution', `Execução falhou ao finalizar (${e.message}): ${task.title}`, { missionId: mission.id, taskId: task.id, agent: 'executor' });
+        store.save(); emitTask(mission, task); bus.emit('state', {});
+      } catch (e2) { console.error('[execution] falha ao registrar o erro de finalização', e2); }
+    });
     return { ok: true, finished };
   }
 

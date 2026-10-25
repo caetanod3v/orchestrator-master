@@ -42,6 +42,7 @@ export function buildReport(task) {
     usage: task.usage ?? null,
     verifications: [], // execuções REAIS feitas pelo orquestrador (source: backend)
     verificationsSkipped: null,
+    verificationsInterrupted: null, // texto quando a verificação real foi interrompida (queda/reinício/erro) e precisa ser refeita
   };
 }
 
@@ -70,6 +71,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
       // Verificações refeitas depois de uma retomada humana: o relatório mistura DOIS momentos (fim da rodada x re-verificação).
       // Deixamos os horários explícitos e damos ao Planner a prova (datada) do bloqueio anterior, sem apresentá-la como atual.
       rep?.reverifiedAt ? `  linha do tempo (dados do backend): a execução terminou em ${r.finishedAt}; as verificações REAIS foram refeitas em ${rep.reverifiedAt} (só ocorre depois que um humano retoma o ciclo) e refletem o workspace NESSE momento, que pode diferir do fim da rodada (por exemplo, um humano pode ter restaurado ou reaprovado um script)` : '',
+      rep?.verificationsInterrupted ? `  verificações REAIS INTERROMPIDAS: ${rep.verificationsInterrupted}; resultados parciais (se houver) NÃO são evidência da situação atual e "complete" será rejeitado até serem refeitas` : '',
       ...(rep?.previousVerifications || []).map(previousLine),
       rep ? `  verificações autodeclaradas pelo Executor (confiança menor; descrevem o fim da rodada): ${rep.checks.map((c) => `${c.name}=${c.result}`).join('; ') || (rep.checksReported ? 'nenhuma' : 'não reportadas')}` : '',
       rep ? `  resumo (fim da rodada, ${r.finishedAt}): ${clip(rep.summary, 500)}` : '',
@@ -110,6 +112,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
 
 export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace }) {
   const loops = new Map();
+  let starting = null; // reserva síncrona (missionId) enquanto start() aguarda o probe
   const mission = (id) => find(db.missions, id);
   const wsOf = (m) => find(db.workspaces, m.workspaceId);
 
@@ -132,6 +135,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (d.decision === 'complete') {
       if (!last) return '"complete" sem nenhuma rodada executada: não há evidências';
       if (last.report?.status !== 'success') return `"complete" rejeitado: a última execução terminou como "${last.report?.status ?? last.status}"`;
+      if (last.report.verificationsInterrupted) return '"complete" rejeitado: as verificações reais da última rodada foram interrompidas e ainda não foram refeitas';
       const vs = last.report.verifications || [];
       const notPass = vs.filter((v) => v.status !== 'pass');
       if (notPass.length) return `"complete" rejeitado: verificações reais que não passaram: ${notPass.map((v) => `${v.script}=${v.status}`).join(', ')}`;
@@ -190,8 +194,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   }
 
   const ENV_STATUS = ['blocked', 'error', 'cancelled'];
-  /** A última rodada tem verificação que não rodou por motivo de AMBIENTE (não por falha do código)? Então a evidência é velha. */
-  const staleVerification = (round) => !!round?.report && round.report.status === 'success' && (round.report.verifications || []).some((v) => ENV_STATUS.includes(v.status));
+  /** A última rodada tem verificação que não rodou por motivo de AMBIENTE (não por falha do código) ou foi interrompida? Então a evidência é velha. */
+  const staleVerification = (round) => !!round?.report && round.report.status === 'success'
+    && (!!round.report.verificationsInterrupted || (round.report.verifications || []).some((v) => ENV_STATUS.includes(v.status)));
 
   /** Depois de um humano resolver o ambiente (ex.: restaurar/reaprovar o script), refaz as verificações da última rodada. */
   async function reverifyLast(m) {
@@ -200,8 +205,10 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     report.previousVerifications = [...(report.previousVerifications || []), { at: store.now(), verifications: report.verifications }].slice(-5); // auditoria; fora da evidência atual
     report.verifications = []; report.verificationsSkipped = null; report.reverifiedAt = store.now();
     c.status = 'running'; note(m, 'cycle', 'Refazendo as verificações da última rodada com a aprovação atual do workspace'); emit(m);
+    report.verificationsInterrupted = report.verificationsInterrupted || 'a re-verificação não terminou';
     await verifyRound(m, round, task, report);
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
+    report.verificationsInterrupted = null; // a fila inteira rodou (o resultado, bom ou ruim, é real e atual)
     const env = report.verifications.find((v) => ['blocked', 'error'].includes(v.status));
     if (env) return stop(m, 'verification_blocked', `A re-verificação continua impossível (${env.script}): ${env.reason} Um humano precisa resolver.`);
     return 'next';
@@ -274,10 +281,45 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     }
   }
 
+  /** Depois de um erro interno: nenhuma tarefa/rodada fica "running" sem processo; verificação em curso vira "interrompida". */
+  function settleAfterError(m, err) {
+    const round = m.cycle.rounds.at(-1);
+    if (!round) return;
+    const task = find(m.tasks, round.taskId);
+    if (round.status === 'running') {
+      if (task && task.status === 'running') { task.status = 'failed'; task.error = `Falha ao finalizar a execução: ${err.message}`; task.finishedAt = store.now(); delete task.pid; }
+      // Falha ANTES de a tarefa chegar a "running": não pode sobrar tarefa enfileirada com autorização residual.
+      else if (task && task.status === 'queued') { task.status = 'failed'; task.authorized = false; task.error = `Falha ao iniciar a execução: ${err.message}`; task.finishedAt = store.now(); }
+      round.report = task ? buildReport(task) : null; round.status = 'failed'; round.phase = 'done'; round.finishedAt = store.now();
+    } else if (round.status === 'succeeded' && round.phase === 'verifying' && round.report) {
+      round.phase = 'done'; round.report.verificationsInterrupted = `erro interno durante a verificação (${clip(err.message, 150)})`;
+    }
+  }
+
   function launch(m) {
-    const p = drive(m).catch((err) => { console.error('[cycle] erro interno', err); stop(m, 'internal_error', `Erro interno do ciclo: ${err.message}`); })
-      .finally(() => loops.delete(m.id));
+    const p = drive(m).catch((err) => {
+      console.error('[cycle] erro interno', err);
+      try { settleAfterError(m, err); } catch (e) { console.error('[cycle] falha ao normalizar o estado', e); }
+      try { stop(m, 'internal_error', `Erro interno do ciclo: ${err.message}`); } catch (e) {
+        // segunda exceção (persistência/evento): o estado em memória precisa ficar coerente mesmo assim
+        console.error('[cycle] falha ao registrar o bloqueio', e);
+        const c = m.cycle; c.status = 'blocked'; c.blockedCode = 'internal_error'; c.blockedReason = `Erro interno do ciclo: ${err.message}`;
+      }
+    }).finally(() => { if (loops.get(m.id) === p) loops.delete(m.id); });
     loops.set(m.id, p);
+  }
+
+  /** Condições para iniciar um ciclo NESTA missão agora. Chamada antes da reserva e DE NOVO depois do probe (o estado pode ter mudado). */
+  function startBlocker(m) {
+    if (mission(m.id) !== m) return fail(404, 'Missão não encontrada.');
+    if (m.cycle && (ACTIVE.includes(m.cycle.status) || m.cycle.status === 'blocked')) return fail(409, 'Já existe um ciclo ativo ou bloqueado nesta missão: retome ou cancele.');
+    const ws = wsOf(m);
+    if (!ws) return fail(409, 'A missão não tem workspace cadastrado.');
+    const v = validateDir(ws.path);
+    if (!v.ok) return fail(409, `Workspace inválido: ${v.error}`);
+    if (executor.isBusy() || planner.busy?.() || loops.size) return fail(409, 'Outra execução ou ciclo está em andamento.');
+    if (m.tasks.some((t) => t.status === 'running')) return fail(409, 'Há uma tarefa em execução nesta missão.');
+    return null;
   }
 
   async function start(missionId, maxIterations) {
@@ -286,22 +328,35 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (m.demo) return fail(409, 'Missão demonstrativa: o ciclo real está desabilitado.');
     const max = maxIterations === undefined ? (db.settings.cycleMaxIterations || DEFAULT_MAX_ITERATIONS) : maxIterations;
     if (!Number.isInteger(max) || max < 1 || max > HARD_MAX_ITERATIONS) return fail(400, `maxIterations deve ser um inteiro de 1 a ${HARD_MAX_ITERATIONS}.`);
-    if (m.cycle && (ACTIVE.includes(m.cycle.status) || m.cycle.status === 'blocked')) return fail(409, 'Já existe um ciclo ativo ou bloqueado nesta missão: retome ou cancele.');
-    const ws = wsOf(m);
-    if (!ws) return fail(409, 'A missão não tem workspace cadastrado.');
-    const v = validateDir(ws.path);
-    if (!v.ok) return fail(409, `Workspace inválido: ${v.error}`);
-    if (executor.isBusy() || planner.busy?.() || [...loops.keys()].length) return fail(409, 'Outra execução ou ciclo está em andamento.');
-    if (m.tasks.some((t) => t.status === 'running')) return fail(409, 'Há uma tarefa em execução nesta missão.');
-    const probe = await executor.probe();
-    if (!probe.available) return fail(409, 'Claude Code não foi encontrado no PATH.');
-    if (m.cycle) { m.pastCycles = [m.cycle, ...(m.pastCycles || [])].slice(0, 5); }
-    m.cycle = {
-      id: store.uid('cyc'), status: 'planning', maxIterations: max, rounds: [], plannerCalls: 0, consecutiveFailures: 0, consecutiveNoProgress: 0,
-      humanNotes: [], rejections: [], blocks: [], blockedCode: null, blockedReason: null, finalSummary: null, evidence: null, cancelRequested: false, startedAt: store.now(), finishedAt: null,
-    };
-    note(m, 'cycle', `Ciclo autônomo iniciado por um humano (limite: ${max} rodadas)`); emit(m);
-    launch(m);
+    if (starting) return fail(409, 'Outra execução ou ciclo está em andamento.');
+    const blocked = startBlocker(m);
+    if (blocked) return blocked;
+    starting = m.id; // reserva SÍNCRONA: nenhum await entre a checagem acima e esta linha
+    try {
+      const probe = await executor.probe();
+      if (!probe.available) return fail(409, 'Claude Code não foi encontrado no PATH.');
+      return startBlocker(m) || begin(m, max); // revalida: durante o await a missão, o workspace ou o executor podem ter mudado
+    } finally { starting = null; } // begin() é síncrono: ao liberar, o ciclo já está registrado em loops (ou foi revertido)
+  }
+
+  function begin(m, max) {
+    const prev = { cycle: m.cycle, pastCycles: m.pastCycles };
+    try {
+      if (m.cycle) { m.pastCycles = [m.cycle, ...(m.pastCycles || [])].slice(0, 5); }
+      m.cycle = {
+        id: store.uid('cyc'), status: 'planning', maxIterations: max, rounds: [], plannerCalls: 0, consecutiveFailures: 0, consecutiveNoProgress: 0,
+        humanNotes: [], rejections: [], blocks: [], blockedCode: null, blockedReason: null, finalSummary: null, evidence: null, cancelRequested: false, startedAt: store.now(), finishedAt: null,
+      };
+      note(m, 'cycle', `Ciclo autônomo iniciado por um humano (limite: ${max} rodadas)`); emit(m);
+      launch(m);
+    } catch (err) {
+      // nada de ciclo "planning" sem laço: desfaz o que foi criado (launch só roda por último e não lança de forma síncrona)
+      m.cycle = prev.cycle;
+      if (prev.pastCycles === undefined) delete m.pastCycles; else m.pastCycles = prev.pastCycles;
+      console.error('[cycle] falha ao iniciar o ciclo', err);
+      try { note(m, 'cycle', `Falha ao iniciar o ciclo (revertido): ${err.message}`); } catch { /* o registro é só informativo */ }
+      return fail(500, `Falha ao iniciar o ciclo: ${err.message}`);
+    }
     return { status: 202, cycle: m.cycle };
   }
 
@@ -322,7 +377,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (!c || c.status !== 'blocked') return fail(409, 'Só é possível retomar um ciclo bloqueado.');
     if (text !== undefined && (typeof text !== 'string' || text.length > 1000)) return fail(400, 'A orientação deve ser um texto de até 1000 caracteres.');
     if (maxIterations !== undefined && (!Number.isInteger(maxIterations) || maxIterations < c.rounds.length || maxIterations > HARD_MAX_ITERATIONS)) return fail(400, `maxIterations deve ser inteiro entre ${c.rounds.length} e ${HARD_MAX_ITERATIONS}.`);
-    if (executor.isBusy() || loops.size) return fail(409, 'Outra execução ou ciclo está em andamento.');
+    if (starting || executor.isBusy() || loops.size) return fail(409, 'Outra execução ou ciclo está em andamento.');
     const ws = wsOf(m);
     if (!ws || !validateDir(ws.path).ok) return fail(409, 'Workspace inválido ou removido.');
     if (maxIterations !== undefined) c.maxIterations = maxIterations;
@@ -345,6 +400,10 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
         const t = find(m.tasks, round.taskId);
         if (t && t.status === 'running') t.status = 'interrupted';
         round.report = t ? buildReport(t) : null; round.status = 'interrupted'; round.phase = 'done'; round.finishedAt = store.now();
+      }
+      // Rodada que terminou, mas cuja verificação real não chegou ao fim: resultado parcial/ausente NÃO é sucesso.
+      if (round?.status === 'succeeded' && round.phase !== 'done' && round.report && !round.report.verificationsSkipped && (find(db.workspaces, m.workspaceId)?.verifications || []).length) {
+        round.phase = 'done'; round.report.verificationsInterrupted = 'o servidor foi reiniciado durante a verificação';
       }
       stop(m, 'restarted', 'O servidor foi reiniciado durante o ciclo. Retome para o Planner reavaliar ou cancele.');
     }
