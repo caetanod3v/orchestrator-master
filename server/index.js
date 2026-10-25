@@ -11,6 +11,7 @@ import { setupExecution, blockedReason } from './execution.js';
 import { missionStatus } from './mission-status.js';
 import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle.js';
 import { createClaudePlanner } from './planner.js';
+import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { installShutdown } from './shutdown.js';
@@ -69,10 +70,8 @@ app.get('/api/state', async (req, res) => {
     persistence: store.persistenceStatus(), // aditivo: ok, código do último erro, quando falhou e quantas falhas seguidas (sem caminhos)
     settings: { cycleMaxIterations: DEFAULT_MAX_ITERATIONS, ...db.settings, cycleHardMax: HARD_MAX_ITERATIONS },
     activeWorkspace: find(db.workspaces, db.settings.activeWorkspaceId) || null,
-    usage: (() => { // somado apenas de execuções reais que reportaram custo
-      const u = tasks.map((t) => t.usage).filter((x) => x && typeof x.costUsd === 'number');
-      return u.length ? { costUsd: u.reduce((a, x) => a + x.costUsd, 0), runs: u.length } : null;
-    })(),
+    // costUsd/runs (legado: execuções reais que reportaram custo) + durationMs + tokens agregados por agente/missão/ciclo (ver usage.js); null sem nenhum dado
+    usage: summarizeUsage(visibleMissions()),
   });
 });
 
