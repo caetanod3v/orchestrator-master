@@ -127,6 +127,18 @@ export function saveSoon() {
   saveTimer = setTimeout(() => { saveTimer = null; save(); }, 500);
 }
 
+const cancelPending = () => { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; } };
+
+/**
+ * Grava AGORA o que o saveSoon() deixou pendente (usado no encerramento, de forma síncrona). Sem pendência não escreve. Nunca lança: uma falha
+ * aqui não pode impedir o servidor de encerrar o filho, liberar a trava e sair. Devolve true só se gravou.
+ */
+export function flush() {
+  if (!saveTimer) return false;
+  cancelPending();
+  try { return save(); } catch (e) { console.error('[store] flush não gravou o banco:', e.code || e.message); return false; }
+}
+
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const TRANSIENT = ['EPERM', 'EBUSY', 'EACCES', 'ENOENT'];
 
@@ -134,7 +146,7 @@ const TRANSIENT = ['EPERM', 'EBUSY', 'EACCES', 'ENOENT'];
 export function save() {
   const json = JSON.stringify(db, null, 2);
   const ok = writeMain(json);
-  if (ok) afterMainSaved(json);
+  if (ok) { cancelPending(); afterMainSaved(json); } // o save() grava o estado INTEIRO: o saveSoon pendente fica redundante (se a gravação falhar, ele continua agendado)
   return ok;
 }
 

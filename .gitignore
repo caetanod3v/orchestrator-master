@@ -4,6 +4,8 @@ data/db.json
 data/*.tmp
 data/server.lock*
 data/db.json.bak
+data/*.corrupt-*
+data/db.json.restore
 .test-workspace
 
 # Environment and secrets

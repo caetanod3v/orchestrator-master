@@ -27,7 +27,7 @@ const HOST = '127.0.0.1'; // somente local
 // Trava de instância ANTES de qualquer operação que possa tocar o banco (load, setupExecution, recover): uma 2ª instância sai sem alterar nada.
 const lock = acquireInstanceLock({ dir: store.dataDir, autoRelease: true });
 if (!lock.ok) { console.error(`[orchestrator] ${lock.message}`); process.exit(1); }
-installShutdown({ lock, executor: claudeCodeExecutor }); // encerra o filho do executor e libera a trava ao sair
+installShutdown({ lock, executor: claudeCodeExecutor, store }); // ao sair: encerra o filho do executor, grava o que está pendente e libera a trava
 const db = store.load();
 const app = express();
 app.use(express.json({ limit: '100kb' }));
