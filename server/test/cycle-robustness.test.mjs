@@ -282,3 +282,83 @@ test('sem verificador disponível na retomada: o resultado parcial NÃO é aceit
   assert.match(planner.calls[0], /verificações REAIS INTERROMPIDAS/);
   assert.notEqual(m.cycle.status, 'completed');
 });
+
+// ---- 5. M2: cancelamento durante a inicialização da execução ------------------------------------
+/** Executor real (CLI falsa) com ganchos: conta start(), expõe probe/isBusy para barreiras e sinaliza quando o processo inicia. */
+function hookedExecutor() {
+  const real = createExecutor({ command: process.execPath, prefixArgs: [FAKE], args: [] });
+  const h = { starts: 0, started: deferred(), onProbe: null, onBusy: null };
+  const executor = {
+    ...real,
+    probe: async () => { if (h.onProbe) await h.onProbe(); return real.probe(); },
+    isBusy: () => { h.onBusy?.(); return real.isBusy(); },
+    start: (o) => { h.starts++; const handle = real.start(o); h.started.resolve(); return handle; },
+  };
+  const { startTaskRun } = setupExecution(express(), { db, executor });
+  return { executor, real, h, startTaskRun };
+}
+/** Planner que decide "continue" (tarefa que dormiria até ser interrompida) e chama `arm()` antes de devolver a decisão. */
+const sleepingPlanner = (arm) => { const calls = []; return { calls, busy: () => false, cancel: async () => {}, decide: async ({ prompt }) => { calls.push(prompt); if (calls.length > 1) return { error: 'não deveria consultar de novo' }; arm(); return { text: cont('Longa', 'sleep') }; } }; };
+function assertCancelledBeforeStart(m, h, real, planner) {
+  const c = m.cycle, t = m.tasks[0], r = c.rounds[0];
+  assert.equal(h.starts, 0, 'o Executor nunca foi iniciado'); assert.equal(real.isBusy(), false);
+  assert.equal(c.status, 'cancelled'); assert.equal(c.blockedCode, null, 'não é cannot_start'); assert.ok(c.finishedAt);
+  assert.equal(r.status, 'interrupted'); assert.equal(r.report.status, 'interrupted'); assert.ok(r.finishedAt);
+  assert.equal(t.status, 'interrupted'); assert.equal(t.authorized, false); assert.equal(t.pid, undefined); assert.match(t.error, /Cancelado antes de iniciar/);
+  assert.ok(!m.tasks.some((x) => ['queued', 'running'].includes(x.status) || x.authorized));
+  assert.equal(planner.calls.length, 1, 'o Planner não foi consultado de novo');
+  assert.deepEqual(unhandled, []);
+}
+
+test('M2: cancel() enquanto executor.probe() está pendente (tarefa "queued", executor.current() null) => nada inicia e o ciclo termina "cancelled"', async () => {
+  db.missions = []; const m = mkMission('c1');
+  const { executor, real, h, startTaskRun } = hookedExecutor();
+  const gate = deferred(), entered = deferred();
+  const planner = sleepingPlanner(() => { h.onProbe = () => { h.onProbe = null; entered.resolve(); return gate.promise; }; }); // arma DEPOIS do probe do start()
+  const cy = createCycle({ db, executor, planner, startTaskRun, listFiles: () => [] });
+  assert.equal((await cy.start('c1', 3)).status, 202);
+  await entered.promise;                                              // startTaskRun está parado dentro do probe
+  assert.equal(m.tasks[0].status, 'queued'); assert.equal(m.cycle.rounds[0].status, 'running'); assert.equal(executor.current(), null);
+  const res = await cy.cancel('c1');
+  assert.equal(res.status, 200); assert.equal(m.cycle.cancelRequested, true);
+  gate.resolve();
+  await cy.idle();
+  assertCancelledBeforeStart(m, h, real, planner);
+});
+
+test('M2: cancel() enquanto gitChanges() está em andamento => nada inicia e o ciclo termina "cancelled"', async () => {
+  db.missions = []; const m = mkMission('c2');
+  const { executor, real, h, startTaskRun } = hookedExecutor();
+  let cancelling = null, cy;
+  // 1ª consulta a isBusy() depois que a rodada existe = check() de startTaskRun, imediatamente ANTES de `await gitChanges`: o cancel() é pedido ali
+  const planner = sleepingPlanner(() => { h.onBusy = () => { h.onBusy = null; cancelling = cy.cancel('c2'); }; });
+  cy = createCycle({ db, executor, planner, startTaskRun, listFiles: () => [] });
+  assert.equal((await cy.start('c2', 3)).status, 202);
+  await cy.idle();
+  assert.equal((await cancelling).status, 200); assert.equal(m.cycle.cancelRequested, true);
+  assertCancelledBeforeStart(m, h, real, planner);
+});
+
+test('M2: cancelar uma execução JÁ iniciada continua encerrando o processo (rodada e tarefa "interrupted")', async () => {
+  db.missions = []; const m = mkMission('c3');
+  const { executor, real, h, startTaskRun } = hookedExecutor();
+  const planner = sleepingPlanner(() => {});
+  const cy = createCycle({ db, executor, planner, startTaskRun, listFiles: () => [] });
+  assert.equal((await cy.start('c3', 3)).status, 202);
+  await h.started.promise;                                            // processo iniciado (sinalizado por start())
+  assert.equal(executor.current()?.taskId, m.tasks[0].id);
+  assert.equal((await cy.cancel('c3')).status, 200);
+  await cy.idle();
+  assert.equal(h.starts, 1); assert.equal(real.isBusy(), false);
+  assert.equal(m.cycle.status, 'cancelled'); assert.equal(m.cycle.rounds[0].status, 'interrupted'); assert.equal(m.tasks[0].status, 'interrupted');
+  assert.equal(planner.calls.length, 1); assert.deepEqual(unhandled, []);
+});
+
+test('M2: sem cancelamento, a inicialização segue normal (shouldAbort falso não muda nada)', async () => {
+  db.missions = []; const m = mkMission('c4');
+  const { executor, h, startTaskRun } = hookedExecutor();
+  const planner = scripted([cont('Normal', 'check'), JSON.stringify({ decision: 'blocked', rationale: 'r', blockedReason: 'fim' })]);
+  const cy = createCycle({ db, executor, planner, startTaskRun, listFiles: () => [] });
+  assert.equal((await cy.start('c4', 3)).status, 202); await cy.idle();
+  assert.equal(h.starts, 1); assert.equal(m.tasks[0].status, 'completed'); assert.equal(m.cycle.rounds[0].status, 'succeeded'); assert.equal(m.cycle.blockedCode, 'planner_blocked');
+});

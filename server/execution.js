@@ -73,11 +73,15 @@ export function setupExecution(app, { db, executor, verifier = null }) {
 
   /**
    * Valida, toma o lock do executor e inicia a execução. Usado pela rota manual e pelo ciclo.
-   * @returns {Promise<{ok:false, reason:string} | {ok:true, finished:Promise<void>}>}
+   * @returns {Promise<{ok:false, reason:string, cancelled?:true} | {ok:true, finished:Promise<void>}>}  `cancelled`: `shouldAbort()` ficou verdadeiro antes de o processo iniciar
    * `finished` só resolve depois de persistir o estado final da tarefa.
    */
-  async function startTaskRun(mission, task, { autoAccept = false } = {}) {
+  async function startTaskRun(mission, task, { autoAccept = false, shouldAbort = null } = {}) {
+    // Cancelamento pedido durante a preparação: nada é iniciado (e não é falha). Cada checagem vem logo após um await; a última fica
+    // colada em executor.start() SEM await no meio, então não há corrida entre "ainda não cancelado" e "processo iniciado".
+    const aborted = () => (shouldAbort?.() ? { ok: false, cancelled: true, reason: 'Cancelado antes de iniciar a execução.' } : null);
     const probe = await executor.probe();
+    if (aborted()) return aborted();
     const check = () => runBlockers({
       mission, task, workspace: find(db.workspaces, mission.workspaceId) || null,
       validateDir, busy: executor.isBusy(), cliAvailable: probe.available,
@@ -86,6 +90,7 @@ export function setupExecution(app, { db, executor, verifier = null }) {
     if (why) return { ok: false, reason: why };
     const workspace = find(db.workspaces, mission.workspaceId);
     const before = await gitChanges(workspace.path); // linha de base para saber o que a execução alterou
+    if (aborted()) return aborted();
     why = check(); // revalida: outra requisição pode ter tomado o lock durante o await
     if (why) return { ok: false, reason: why };
 

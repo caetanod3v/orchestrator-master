@@ -226,7 +226,12 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     m.tasks.push(task); c.rounds.push(round); c.status = 'running';
     note(m, 'cycle', `Rodada ${n} planejada: ${d.task.title}`, 'planner'); emit(m);
 
-    const r = await startTaskRun(m, task, { autoAccept: true });
+    const r = await startTaskRun(m, task, { autoAccept: true, shouldAbort: () => c.cancelRequested });
+    if (!r.ok && r.cancelled) { // cancelado antes de o processo existir: não é falha nem cannot_start; mesmo estado de uma execução interrompida
+      task.status = 'interrupted'; task.authorized = false; task.error = r.reason; task.finishedAt = store.now();
+      round.status = 'interrupted'; round.phase = 'done'; round.finishedAt = store.now(); round.report = buildReport(task);
+      return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a execução.');
+    }
     if (!r.ok) { task.status = 'failed'; task.authorized = false; task.error = r.reason; round.status = 'failed'; round.finishedAt = store.now(); round.report = buildReport(task); return stop(m, 'cannot_start', `Não foi possível iniciar a execução: ${r.reason}`); }
     await r.finished;
 
