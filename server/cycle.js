@@ -3,7 +3,10 @@
 // Estados (separados de propósito):
 //   missão  : mission.status (derivado das tarefas, como antes)
 //   ciclo   : mission.cycle.status  planning | running | blocked | completed | cancelled | limit_reached
-//   rodada  : round.status          running | succeeded | failed | interrupted
+//   rodada  : round.status          running | succeeded | failed | interrupted  (resultado da EXECUÇÃO do Executor; "succeeded" NÃO diz nada
+//                                   sobre as verificações reais, que podem ter falhado)
+//             round.verification    none | passed | failed | blocked | skipped  (resultado das verificações REAIS da rodada; ver
+//                                   verificationOutcome/roundVerification; rodadas antigas sem o campo são derivadas do relatório, sem gravar)
 //   execução: task.status           (running, completed, failed, interrupted … – do executor existente)
 //
 // O Planner só pode escolher continue | complete | blocked, e o backend valida formato, decisão e
@@ -44,6 +47,34 @@ export function buildReport(task) {
     verificationsSkipped: null,
     verificationsInterrupted: null, // texto quando a verificação real foi interrompida (queda/reinício/erro) e precisa ser refeita
   };
+}
+
+/**
+ * Resultado agregado das verificações REAIS de uma rodada, a partir do relatório (sem inventar nada):
+ *   none    : nada configurado / nada a verificar
+ *   skipped : configurado, mas não rodou (execução falhou, verificador indisponível, interrompida ou cancelada)
+ *   blocked : problema de ambiente/aprovação (status blocked ou error) – precede os demais
+ *   failed  : alguma fail, timeout ou output_limit
+ *   passed  : todas as executadas passaram
+ * `configured` (nº de verificações do workspace) é opcional: sem ele, "sem resultados e sem motivo de pulo" vira none.
+ */
+export function verificationOutcome(report, configured) {
+  if (!report) return configured > 0 ? 'skipped' : 'none';
+  if (report.verificationsInterrupted) return 'skipped';
+  const vs = report.verifications || [];
+  if (!vs.length) return report.verificationsSkipped || configured > 0 ? 'skipped' : 'none';
+  const st = vs.map((v) => v.status);
+  if (st.some((x) => ['blocked', 'error'].includes(x))) return 'blocked';
+  if (st.some((x) => ['fail', 'timeout', 'output_limit'].includes(x))) return 'failed';
+  if (configured > vs.length) return 'skipped'; // fila incompleta (ex.: cancelada no meio): o que passou não prova o resto
+  if (st.some((x) => x !== 'pass')) return 'skipped'; // cancelled ou valor desconhecido: não vale como aprovado
+  return 'passed';
+}
+
+/** Leitura segura do resultado das verificações de uma rodada: usa o campo gravado; rodadas históricas (sem o campo) são DERIVADAS na leitura, sem alterar o dado. */
+export function roundVerification(round) {
+  if (round?.report?.verificationsInterrupted) return 'skipped'; // interrompida depois de gravar: o valor antigo não vale mais
+  return round?.verification ?? verificationOutcome(round?.report);
 }
 
 const passCount = (r) => (r?.checks || []).filter((c) => c.result === 'pass').length + (r?.verifications || []).filter((v) => v.status === 'pass').length;
@@ -240,9 +271,11 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     report.verifications = []; report.verificationsSkipped = null; report.reverifiedAt = store.now();
     c.status = 'running'; note(m, 'cycle', 'Refazendo as verificações da última rodada com a aprovação atual do workspace'); emit(m);
     report.verificationsInterrupted = report.verificationsInterrupted || 'a re-verificação não terminou';
+    round.verification = 'skipped'; // os resultados antigos foram arquivados: até terminar, não há resultado atual
     await verifyRound(m, round, task, report);
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
     report.verificationsInterrupted = null; // a fila inteira rodou (o resultado, bom ou ruim, é real e atual)
+    round.verification = verificationOutcome(report, (wsOf(m)?.verifications || []).length);
     const env = report.verifications.find((v) => ['blocked', 'error'].includes(v.status));
     if (env) return stop(m, 'verification_blocked', `A re-verificação continua impossível (${env.script}): ${env.reason} Um humano precisa resolver.`);
     return 'next';
@@ -264,9 +297,10 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (!r.ok && r.cancelled) { // cancelado antes de o processo existir: não é falha nem cannot_start; mesmo estado de uma execução interrompida
       task.status = 'interrupted'; task.authorized = false; task.error = r.reason; task.finishedAt = store.now();
       round.status = 'interrupted'; round.phase = 'done'; round.finishedAt = store.now(); round.report = buildReport(task);
+      round.verification = verificationOutcome(round.report, (wsOf(m)?.verifications || []).length);
       return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a execução.');
     }
-    if (!r.ok) { task.status = 'failed'; task.authorized = false; task.error = r.reason; round.status = 'failed'; round.finishedAt = store.now(); round.report = buildReport(task); return stop(m, 'cannot_start', `Não foi possível iniciar a execução: ${r.reason}`); }
+    if (!r.ok) { task.status = 'failed'; task.authorized = false; task.error = r.reason; round.status = 'failed'; round.finishedAt = store.now(); round.report = buildReport(task); round.verification = verificationOutcome(round.report, (wsOf(m)?.verifications || []).length); return stop(m, 'cannot_start', `Não foi possível iniciar a execução: ${r.reason}`); }
     await r.finished;
 
     const report = buildReport(task);
@@ -283,6 +317,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
         await verifyRound(m, round, task, report);
       }
     }
+    round.verification = verificationOutcome(report, items.length);
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
 
     // Política explícita (o Planner é informado no próximo prompt, via histórico):
