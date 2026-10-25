@@ -98,10 +98,13 @@ export function createExecutor({ command = 'claude', prefixArgs = [], args = CLA
       if (run.stopping) status = 'interrupted';
       else if (run.timedOut) { status = 'failed'; error = `Tempo máximo excedido (${Math.round(timeoutMs / 60000)} min)`; }
       else if (spawnFailed) status = 'failed';
-      else if (exitCode === 0 && !(result && result.isError)) status = 'completed';
+      // Código 0 SEM o evento de resultado final não é sucesso: nada comprova que a CLI terminou o trabalho (saída truncada/quebrada).
+      else if (exitCode === 0 && result && !result.isError) status = 'completed';
       else {
         status = 'failed';
-        error = error || (result?.isError ? `A CLI reportou erro: ${result.text || 'sem detalhes'}` : `Processo terminou com código ${exitCode}`);
+        error = error || (result?.isError ? `A CLI reportou erro: ${result.text || 'sem detalhes'}`
+          : exitCode === 0 ? 'A CLI terminou com código 0, mas não emitiu o resultado final (saída incompleta); a execução não pode ser considerada concluída.'
+          : `Processo terminou com código ${exitCode}`);
       }
       active = null;
       resolveDone({ status, exitCode, error, result, spawnFailed });
