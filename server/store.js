@@ -34,6 +34,26 @@ let backup = { ok: true, error: null, at: null };
 /** Situação da última atualização do backup (melhor esforço: uma falha aqui NÃO impede o salvamento do banco). */
 export const backupStatus = () => ({ ...backup });
 
+// Estado de persistência OBSERVÁVEL (exposto em /api/state): save() devolve false (ou lança) quando o db.json não pôde ser gravado e os chamadores
+// ignoram isso; sem este estado o servidor seguiria "normal", sem persistir, sem ninguém saber. Só guarda o CÓDIGO do erro (nunca caminhos).
+let persistence = { ok: true, error: null, failedAt: null, consecutiveFailures: 0, lastOkAt: null };
+let lastWriteError = null;
+export const persistenceStatus = () => ({ ...persistence });
+function markFailed(e) {
+  const first = persistence.ok;
+  persistence = { ok: false, error: e?.code || 'ERRO', failedAt: now(), consecutiveFailures: persistence.consecutiveFailures + 1, lastOkAt: persistence.lastOkAt };
+  if (!first) return; // só a TRANSIÇÃO é anunciada: falha persistente não inunda o console nem a atividade
+  console.error(`[store] FALHA DE PERSISTÊNCIA (${persistence.error}): o banco não está sendo gravado em disco; o estado segue em memória`);
+  try { log('system', `Falha ao gravar o banco em disco (${persistence.error}). O estado continua em memória; cada nova gravação tenta de novo.`, { persistence: 'failed' }); } catch { /* sem banco carregado */ }
+}
+function markOk() {
+  if (persistence.ok) { persistence.lastOkAt = now(); return; }
+  const n = persistence.consecutiveFailures;
+  persistence = { ok: true, error: null, failedAt: null, consecutiveFailures: 0, lastOkAt: now() };
+  console.error(`[store] persistência restabelecida depois de ${n} falha(s) consecutiva(s)`);
+  try { log('system', `Gravação do banco restabelecida depois de ${n} falha(s) consecutiva(s).`, { persistence: 'restored' }); } catch { /* sem banco carregado */ }
+}
+
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 
 /**
@@ -124,7 +144,9 @@ let saveTimer = null;
 // Salva em lote (logs de execução chegam em rajadas); o estado importante usa save() direto.
 export function saveSoon() {
   if (saveTimer) return;
-  saveTimer = setTimeout(() => { saveTimer = null; save(); }, 500);
+  // sem try/catch uma falha de disco aqui seria uma exceção não tratada e derrubaria o servidor; save() já registra a falha em persistenceStatus()
+  // e a próxima chamada de saveSoon() (ou qualquer save()) tenta de novo.
+  saveTimer = setTimeout(() => { saveTimer = null; try { save(); } catch { /* registrado em markFailed */ } }, 500);
 }
 
 const cancelPending = () => { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; } };
@@ -140,13 +162,15 @@ export function flush() {
 }
 
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-const TRANSIENT = ['EPERM', 'EBUSY', 'EACCES', 'ENOENT'];
+// ENOENT fica FORA da lista: "pasta de dados sumiu" (recriar e repetir já) e "o temporário sumiu" (poucas tentativas curtas) são tratados à parte.
+const TRANSIENT = ['EPERM', 'EBUSY', 'EACCES'];
 
 /** Persiste o banco. true = db.json gravado (o backup é atualizado depois, em melhor esforço; ver backupStatus()). */
 export function save() {
   const json = JSON.stringify(db, null, 2);
-  const ok = writeMain(json);
-  if (ok) { cancelPending(); afterMainSaved(json); } // o save() grava o estado INTEIRO: o saveSoon pendente fica redundante (se a gravação falhar, ele continua agendado)
+  let ok;
+  try { ok = writeMain(json); } catch (e) { markFailed(e); throw e; } // o contrato não muda: erro real continua sendo lançado
+  if (ok) { markOk(); cancelPending(); afterMainSaved(json); } else markFailed(lastWriteError); // o save() grava o estado INTEIRO: o saveSoon pendente fica redundante (se a gravação falhar, ele continua agendado)
   return ok;
 }
 
@@ -164,7 +188,8 @@ function refreshBackup(content) {
   for (let i = 0; i < 3; i++) {
     try { fs.writeFileSync(tmp, content); fs.renameSync(tmp, BAK_FILE); bakContent = content; backup = { ok: true, error: null, at: now() }; return; } catch (e) {
       last = e;
-      if (!TRANSIENT.includes(e.code)) break;
+      if (e.code === 'ENOENT') { if (!fs.existsSync(DATA_DIR)) break; } // pasta sumiu: sem esperas aqui (o próximo salvamento principal a recria); temporário sumido: tentativas curtas
+      else if (!TRANSIENT.includes(e.code)) break;
       sleepSync(15 * (i + 1));
     }
   }
@@ -177,15 +202,28 @@ function refreshBackup(content) {
 // indexador estão com o arquivo aberto. Tenta de novo; por fim grava direto; nunca derruba o chamador por isso.
 function writeMain(json) {
   const tmp = `${DB_FILE}.tmp`;
+  let enoent = 0, recreated = 0;
   for (let i = 0; i < 8; i++) {
     try { fs.writeFileSync(tmp, json); fs.renameSync(tmp, DB_FILE); return true; } catch (e) {
+      if (e.code === 'ENOENT') {
+        if (!fs.existsSync(DATA_DIR)) { // a PASTA de dados desapareceu: recria e repete na hora, sem esperar; se não der, falha rápida
+          lastWriteError = e;
+          if (recreated++ >= 2) return false;
+          try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch (m) { lastWriteError = m; return false; }
+          bakContent = null; // o .bak (se existia) foi embora com a pasta
+          continue;
+        }
+        if (++enoent > 2) break; // o ARQUIVO temporário sumiu (antivírus?): poucas tentativas curtas
+        sleepSync(15 * enoent);
+        continue;
+      }
       if (!TRANSIENT.includes(e.code)) throw e; // erro de verdade (disco cheio, I/O…) continua visível
       sleepSync(15 * (i + 1));
     }
   }
   try { fs.writeFileSync(DB_FILE, json); return true; } catch (e) {
-    console.error('[store] não foi possível salvar o banco:', e.code, e.message);
-    return false; // o estado segue em memória e o próximo save() tenta de novo
+    lastWriteError = e;
+    return false; // o estado segue em memória e o próximo save() tenta de novo (a falha é anunciada por markFailed, uma vez)
   }
 }
 

@@ -6,6 +6,8 @@ import { runBlockers, authorizeBlockers } from './executor/policy.js';
 import { validateDir } from './workspaces.js';
 import { gitChanges } from './git.js';
 import { reclaimOrphans } from './orphans.js';
+import { asyncRoute } from './async-route.js';
+import { pidAlive } from './instance-lock.js';
 
 const MAX_LOG = 600;
 const find = (arr, id) => arr.find((x) => x.id === id);
@@ -132,14 +134,31 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
       return { ok: false, reason: e.code === 'BUSY' ? 'Outra execução está em andamento.' : e.message };
     }
 
-    Object.assign(task, {
-      status: 'running', authorized: false, startedAt: store.now(), finishedAt: null, exitCode: null, error: null,
-      usage: null, report: '', files: [], log: [], logTotal: 0, pid: handle.pid, dirtyBefore: before.files.length > 0, gitRepo: before.isRepo,
-      permissionDenied: false,
-    });
-    if (task.dirtyBefore) { task.log.push('[aviso] o workspace já tinha alterações não commitadas antes desta execução'); task.logTotal = 1; }
-    store.log('execution', `Execução iniciada: ${task.title}`, { missionId: mission.id, taskId: task.id, agent: 'executor' });
-    store.save(); emitTask(mission, task); bus.emit('state', {});
+    // Trecho crítico: o processo filho JÁ existe e o finalize ainda não foi ligado. Se registrar o início falhar (ex.: erro real de disco em
+    // store.save()), o filho NÃO pode ficar rodando sem ninguém acompanhando: encerra-se o processo (liberando o executor), a tarefa vira
+    // "failed" sem PID e o erro original segue para quem chamou (a rota devolve 500; o ciclo trata como erro interno).
+    try {
+      Object.assign(task, {
+        status: 'running', authorized: false, startedAt: store.now(), finishedAt: null, exitCode: null, error: null,
+        usage: null, report: '', files: [], log: [], logTotal: 0, pid: handle.pid, dirtyBefore: before.files.length > 0, gitRepo: before.isRepo,
+        permissionDenied: false,
+      });
+      if (task.dirtyBefore) { task.log.push('[aviso] o workspace já tinha alterações não commitadas antes desta execução'); task.logTotal = 1; }
+      store.log('execution', `Execução iniciada: ${task.title}`, { missionId: mission.id, taskId: task.id, agent: 'executor' });
+      store.save(); emitTask(mission, task); bus.emit('state', {});
+    } catch (e) {
+      let stopped = false;
+      try { stopped = (await executor.stop()).stopped === true; } catch { try { executor.killActiveSync?.(); } catch { /* sem mais o que fazer */ } }
+      // Encerramento NÃO confirmado e o processo ainda existe: o PID real fica na tarefa (junto com startedAt) para que um próximo salvamento o grave e
+      // a recuperação de órfãs (P4) consiga identificá-lo depois de um reinício. O executor segue ocupado até o processo terminar (sem execução concorrente).
+      const alive = !stopped && pidAlive(handle.pid);
+      task.status = 'failed'; task.authorized = false; task.finishedAt = store.now();
+      if (alive) task.pid = handle.pid; else delete task.pid;
+      task.error = alive
+        ? `Falha ao registrar o início da execução (${e.code || 'erro'}); o encerramento do processo NÃO foi confirmado (PID ${handle.pid} mantido para recuperação).`
+        : `Falha ao registrar o início da execução (${e.code || 'erro'}); o processo foi encerrado.`;
+      throw e;
+    }
 
     const finalize = async () => {
       const r = await handle.done;
@@ -180,21 +199,21 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
     return { ok: true, finished };
   }
 
-  app.post('/api/missions/:id/tasks/:tid/run', async (req, res) => {
+  app.post('/api/missions/:id/tasks/:tid/run', asyncRoute(async (req, res) => {
     const mission = find(db.missions, req.params.id), task = mission && find(mission.tasks, req.params.tid);
     if (!task) return bad(res, 'Tarefa não encontrada.', 404);
     const r = await startTaskRun(mission, task);
     if (!r.ok) return bad(res, r.reason);
     res.status(202).json(task);
-  });
+  }));
 
-  app.post('/api/execution/stop', async (req, res) => {
+  app.post('/api/execution/stop', asyncRoute(async (req, res) => {
     let r = await executor.stop();
     if (!r.stopped && verifier) { const v = await verifier.stop(); if (v.stopped) r = v; } // também interrompe uma verificação real em andamento
     store.log('system', `Interrupção solicitada: ${r.detail}`, { stopped: r.stopped });
     store.save();
     res.json(r);
-  });
+  }));
 
   app.get('/api/execution', (req, res) => res.json({ busy: executor.isBusy(), current: executor.current() }));
 

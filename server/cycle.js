@@ -16,6 +16,7 @@ import { bus } from './executor/index.js';
 import { validateDir } from './workspaces.js';
 import { validateDecision, fingerprint, parseExecutorReport } from './cycle-schema.js';
 import { listWorkspace } from './planner.js';
+import { asyncRoute } from './async-route.js';
 
 export const DEFAULT_MAX_ITERATIONS = 5;
 export const HARD_MAX_ITERATIONS = 10;
@@ -525,8 +526,8 @@ export function setupCycle(app, deps) {
   cycle.recover();
   const reply = (res) => (r) => res.status(r.status).json(r.error ? { error: r.error } : r.cycle);
   const body = (req) => (req.body && typeof req.body === 'object' ? req.body : {});
-  app.post('/api/missions/:id/cycle/start', async (req, res) => reply(res)(await cycle.start(req.params.id, body(req).maxIterations)));
-  app.post('/api/missions/:id/cycle/cancel', async (req, res) => reply(res)(await cycle.cancel(req.params.id)));
-  app.post('/api/missions/:id/cycle/resume', async (req, res) => reply(res)(await cycle.resume(req.params.id, body(req))));
+  app.post('/api/missions/:id/cycle/start', asyncRoute(async (req, res) => reply(res)(await cycle.start(req.params.id, body(req).maxIterations))));
+  app.post('/api/missions/:id/cycle/cancel', asyncRoute(async (req, res) => reply(res)(await cycle.cancel(req.params.id))));
+  app.post('/api/missions/:id/cycle/resume', asyncRoute(async (req, res) => reply(res)(await cycle.resume(req.params.id, body(req)))));
   return cycle;
 }
