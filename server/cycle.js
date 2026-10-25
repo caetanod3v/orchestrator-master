@@ -341,23 +341,29 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
 
   function begin(m, max) {
     const prev = { cycle: m.cycle, pastCycles: m.pastCycles };
-    try {
-      if (m.cycle) { m.pastCycles = [m.cycle, ...(m.pastCycles || [])].slice(0, 5); }
-      m.cycle = {
-        id: store.uid('cyc'), status: 'planning', maxIterations: max, rounds: [], plannerCalls: 0, consecutiveFailures: 0, consecutiveNoProgress: 0,
-        humanNotes: [], rejections: [], blocks: [], blockedCode: null, blockedReason: null, finalSummary: null, evidence: null, cancelRequested: false, startedAt: store.now(), finishedAt: null,
-      };
-      note(m, 'cycle', `Ciclo autônomo iniciado por um humano (limite: ${max} rodadas)`); emit(m);
-      launch(m);
-    } catch (err) {
-      // nada de ciclo "planning" sem laço: desfaz o que foi criado (launch só roda por último e não lança de forma síncrona)
+    if (m.cycle) { m.pastCycles = [m.cycle, ...(m.pastCycles || [])].slice(0, 5); }
+    m.cycle = {
+      id: store.uid('cyc'), status: 'planning', maxIterations: max, rounds: [], plannerCalls: 0, consecutiveFailures: 0, consecutiveNoProgress: 0,
+      humanNotes: [], rejections: [], blocks: [], blockedCode: null, blockedReason: null, finalSummary: null, evidence: null, cancelRequested: false, startedAt: store.now(), finishedAt: null,
+    };
+    return launchOrRollback(m, `Ciclo autônomo iniciado por um humano (limite: ${max} rodadas)`, 'iniciar o ciclo', () => {
       m.cycle = prev.cycle;
       if (prev.pastCycles === undefined) delete m.pastCycles; else m.pastCycles = prev.pastCycles;
-      console.error('[cycle] falha ao iniciar o ciclo', err);
-      try { note(m, 'cycle', `Falha ao iniciar o ciclo (revertido): ${err.message}`); } catch { /* o registro é só informativo */ }
-      return fail(500, `Falha ao iniciar o ciclo: ${err.message}`);
+    }) || { status: 202, cycle: m.cycle };
+  }
+
+  /**
+   * Registra, notifica e inicia o laço. Se algo lançar ANTES de o laço existir (launch só roda por último e não lança de forma
+   * síncrona), chama `restore` para voltar ao estado anterior: nunca fica ciclo "planning" sem laço. Devolve null em sucesso ou o erro 500.
+   */
+  function launchOrRollback(m, message, what, restore) {
+    try { note(m, 'cycle', message); emit(m); launch(m); return null; } catch (err) {
+      restore();
+      console.error(`[cycle] falha ao ${what}`, err);
+      try { note(m, 'cycle', `Falha ao ${what} (revertido): ${err.message}`); } catch { /* o registro é só informativo */ }
+      try { store.save(); } catch { /* se o disco falhou, o próximo save() regrava; recover() cobre a queda */ }
+      return fail(500, `Falha ao ${what}: ${err.message}`);
     }
-    return { status: 202, cycle: m.cycle };
   }
 
   async function cancel(missionId) {
@@ -380,14 +386,19 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (starting || executor.isBusy() || loops.size) return fail(409, 'Outra execução ou ciclo está em andamento.');
     const ws = wsOf(m);
     if (!ws || !validateDir(ws.path).ok) return fail(409, 'Workspace inválido ou removido.');
+    const prev = { ...c, humanNotes: c.humanNotes.length }; // só campos escalares mudam; humanNotes só ganha 1 item no fim
     if (maxIterations !== undefined) c.maxIterations = maxIterations;
     if (text?.trim()) c.humanNotes.push({ at: store.now(), text: text.trim() });
     c.consecutiveFailures = 0; c.consecutiveNoProgress = 0; c.cancelRequested = false;
     c.reverifyPending = staleVerification(c.rounds.at(-1)); // evidência velha de ambiente: refazer antes de consultar o Planner
     c.blockedReason = null; c.blockedCode = null; c.status = 'planning';
-    note(m, 'cycle', 'Ciclo retomado por um humano'); emit(m);
-    launch(m);
-    return { status: 202, cycle: c };
+    return launchOrRollback(m, 'Ciclo retomado por um humano', 'retomar o ciclo', () => {
+      // volta a "blocked" com o mesmo motivo, sem a orientação humana nova e sem perder o histórico (rounds, blocks, notas anteriores)
+      c.humanNotes.length = prev.humanNotes;
+      for (const k of ['status', 'blockedCode', 'blockedReason', 'maxIterations', 'consecutiveFailures', 'consecutiveNoProgress', 'cancelRequested', 'reverifyPending']) {
+        if (prev[k] === undefined) delete c[k]; else c[k] = prev[k];
+      }
+    }) || { status: 202, cycle: c };
   }
 
   /** Ao subir o servidor, nenhum ciclo pode estar "ativo": o processo que o conduzia morreu. */
