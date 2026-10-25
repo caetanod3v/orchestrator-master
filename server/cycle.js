@@ -423,6 +423,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (starting || executor.isBusy() || loops.size) return fail(409, 'Outra execução ou ciclo está em andamento.');
     const ws = wsOf(m);
     if (!ws || !validateDir(ws.path).ok) return fail(409, 'Workspace inválido ou removido.');
+    // Orçamento de consultas esgotado: retomar sem ampliar o limite só bloquearia de novo na hora (sem consultar o Planner). Recusa ANTES de
+    // qualquer mutação, nota, bloco ou atividade; plannerCalls segue cumulativo (não é zerado).
+    if (c.blockedCode === 'planner_calls_limit' && c.plannerCalls >= ((maxIterations ?? c.maxIterations) + 1) * 3) return fail(409, 'O limite de consultas ao Planner deste ciclo foi atingido; aumente o limite de rodadas (maxIterations) para continuar.');
     const prev = { ...c, humanNotes: c.humanNotes.length }; // só campos escalares mudam; humanNotes só ganha 1 item no fim
     if (maxIterations !== undefined) c.maxIterations = maxIterations;
     if (text?.trim()) c.humanNotes.push({ at: store.now(), text: text.trim() });
