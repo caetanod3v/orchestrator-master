@@ -479,7 +479,27 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   }
 
   /** Ao subir o servidor, nenhum ciclo pode estar "ativo": o processo que o conduzia morreu. */
+  /**
+   * Tarefa de ciclo que ficou "queued" já AUTORIZADA: o servidor caiu entre criar a rodada e iniciar o processo (janela do probe/gitChanges).
+   * Ela nunca rodou e ninguém a autorizou de fato (a autorização foi do próprio ciclo): vira "interrupted", sem autorização, para não
+   * aparecer como executável (a UI mostraria "Executar") nem rodar fora do ciclo. Tarefas manuais, de outros estados, com PID (P4) ou com autorização
+   * EXPLÍCITA de um humano (`authorizedAt`, gravado só pela rota de autorização; o ciclo nunca o define) não mudam.
+   */
+  function normalizeResidualTask(m, t) {
+    if (!t.auto || t.status !== 'queued' || !t.authorized || t.pid != null || t.authorizedAt) return false;
+    t.status = 'interrupted'; t.authorized = false; t.finishedAt = store.now();
+    t.error = 'O servidor foi reiniciado antes de a execução começar; a tarefa não chegou a ser executada.';
+    t.log = [...(t.log || []), '[sistema] servidor reiniciado antes de a execução começar; a autorização do ciclo foi revogada'];
+    store.log('execution', `Tarefa de ciclo interrompida antes de iniciar (servidor reiniciado): ${t.title}`, { missionId: m.id, taskId: t.id, agent: 'executor' });
+    return true;
+  }
+
   function recover() {
+    // Resíduos de autorização em QUALQUER ciclo (inclui bancos gravados antes desta correção). Roda antes da recuperação das rodadas para o
+    // relatório da rodada interrompida já refletir a tarefa normalizada. Idempotente: a tarefa normalizada não casa mais com o critério.
+    let normalized = false;
+    for (const m of db.missions) for (const t of m.tasks || []) if (normalizeResidualTask(m, t)) normalized = true;
+    if (normalized) store.save();
     for (const m of db.missions) {
       const c = m.cycle;
       if (!c || !ACTIVE.includes(c.status)) continue;
