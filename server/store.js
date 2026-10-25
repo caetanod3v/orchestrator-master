@@ -8,6 +8,7 @@ import { buildDemoMissions } from './demo.js';
 // ORCH_DATA_DIR só serve para os testes isolarem o banco; não afeta o que é executado.
 const DATA_DIR = process.env.ORCH_DATA_DIR || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
+export const dataDir = DATA_DIR; // usado pela trava de instância (instance-lock.js)
 
 export const uid = (p) => `${p}_${randomUUID().slice(0, 8)}`;
 export const now = () => new Date().toISOString();

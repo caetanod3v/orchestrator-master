@@ -2,6 +2,7 @@ node_modules
 client/dist
 data/db.json
 data/*.tmp
+data/server.lock*
 .test-workspace
 
 # Environment and secrets
