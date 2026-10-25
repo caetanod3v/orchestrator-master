@@ -19,6 +19,10 @@ process.stdin.on('end', async () => {
   if (mode === 'write') fs.writeFileSync('out.txt', 'criado pelo teste\n');
   if (mode === 'fixbuild') fs.writeFileSync('BUILD_OK', 'x\n'); // faz o build do fake-verify passar
   const block = (checks) => '```json\n' + JSON.stringify({ summary: 'resumo estruturado', checks }) + '\n```';
+  if (mode === 'usagepartial') { // reporta uso e fica vivo SEM emitir result (para testar interrupção/falha com métricas parciais)
+    out({ type: 'assistant', message: { id: 'msg_P', content: [{ type: 'text', text: 'p' }], usage: { input_tokens: 7, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 70 } } });
+    setInterval(() => {}, 1000); return;
+  }
   if (mode === 'usage') { // métricas sintéticas no formato do stream real (sem textos nem ids reais)
     const u = (i, o, cc, cr) => ({ input_tokens: i, output_tokens: o, cache_creation_input_tokens: cc, cache_read_input_tokens: cr, service_tier: 'standard' });
     out({ type: 'assistant', message: { id: 'msg_A', content: [{ type: 'text', text: 'a' }], usage: u(2, 1, 100, 50) } });

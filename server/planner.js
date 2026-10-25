@@ -16,9 +16,9 @@ export function createClaudePlanner({ runner = createExecutor({ args: PLANNER_AR
   return {
     id: 'claude-planner',
     busy: () => runner.isBusy(),
-    async decide({ prompt, cwd }) {
+    async decide({ prompt, cwd, onUsage }) {
       let handle;
-      try { handle = runner.start({ missionId: 'planner', taskId: 'planner', cwd, prompt, onLine: () => {} }); } catch (e) { return { error: e.message }; }
+      try { handle = runner.start({ missionId: 'planner', taskId: 'planner', cwd, prompt, onLine: () => {}, onUsage }); } catch (e) { return { error: e.message }; }
       const r = await handle.done;
       // `metrics` (aditivo): tokens/modelos/limite reportados pela CLI (ver executor/stream.js); também nas falhas, que consomem tokens.
       if (r.status === 'completed' && r.result?.text) return { text: r.result.text, usage: { costUsd: r.result.costUsd, turns: r.result.turns, metrics: r.usage } };

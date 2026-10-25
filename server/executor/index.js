@@ -66,7 +66,7 @@ export function createExecutor({ command = 'claude', prefixArgs = [], args = CLA
    * `usage` (aditivo) = métricas reportadas pela CLI: { final (evento result), live (mensagens distintas, provisório), rateLimit }; cada parte é null se a CLI não a emitiu.
    * @returns {{pid:number, done:Promise<{status:'completed'|'failed'|'interrupted', exitCode:number|null, error:string|null, result:object|null, usage:{final:object|null, live:object|null, rateLimit:object|null}, spawnFailed:boolean}>}}
    */
-  function start({ missionId, taskId, cwd, prompt, onLine }) {
+  function start({ missionId, taskId, cwd, prompt, onLine, onUsage }) {
     if (active || liveOrphans()) { const e = new Error('Outra execução está em andamento.'); e.code = 'BUSY'; throw e; }
     const run = { missionId, taskId, startedAt: new Date().toISOString(), stopping: false, timedOut: false, child: null, finished: null };
     active = run;
@@ -91,7 +91,8 @@ export function createExecutor({ command = 'claude', prefixArgs = [], args = CLA
       if (kind === 'err') { if (raw.trim()) onLine(`[stderr] ${raw.slice(0, 2000)}`); return; }
       const parsed = parseLine(raw);
       if (parsed.result) result = parsed.result;
-      if (parsed.usage) usageTracker.add(parsed.usage);
+      // onUsage (opcional) recebe o snapshot a cada mudança relevante; um erro do consumidor nunca interrompe a leitura do stream.
+      if (parsed.usage && usageTracker.add(parsed.usage) && onUsage) { try { onUsage(usageTracker.snapshot()); } catch { /* métricas são acessórias */ } }
       parsed.lines.forEach(onLine);
     };
     child.stdout.on('data', (c) => feed('out', c));

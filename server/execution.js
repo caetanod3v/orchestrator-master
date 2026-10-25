@@ -8,6 +8,7 @@ import { gitChanges } from './git.js';
 import { reclaimOrphans } from './orphans.js';
 import { asyncRoute } from './async-route.js';
 import { pidAlive } from './instance-lock.js';
+import { usageRecord, usageEvent } from './usage.js';
 
 const MAX_LOG = 600;
 const find = (arr, id) => arr.find((x) => x.id === id);
@@ -43,6 +44,10 @@ function buildPrompt(mission, task) {
 
 export function setupExecution(app, { db, executor, verifier = null, orphanTools = {} }) {
   const emitTask = (mission, task) => bus.emit('task', { missionId: mission.id, taskId: task.id, status: task.status });
+  // SSE `usage`: métricas da tarefa (task.tokenUsage); acessórias, então nunca interrompem a execução nem a finalização.
+  const emitUsage = (mission, task) => {
+    try { if (task.tokenUsage) bus.emit('usage', usageEvent('executor', { missionId: mission.id, taskId: task.id }, task.tokenUsage)); } catch { /* métricas são acessórias */ }
+  };
 
   // Processos órfãos: se o servidor caiu no meio de uma execução, o estado real é "interrompida" e o processo filho (que sobrevive ao pai)
   // pode continuar editando o workspace. Os PIDs gravados são conferidos e a execução abandonada é encerrada (ver orphans.js).
@@ -60,6 +65,7 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
     if (t.status === 'running') {
       t.status = 'interrupted'; t.error = 'O servidor foi reiniciado durante a execução.'; t.finishedAt = store.now();
       t.log = [...(t.log || []), '[sistema] servidor reiniciado durante a execução; processo não é mais acompanhado'];
+      if (t.tokenUsage) t.tokenUsage = { ...t.tokenUsage, ended: true }; // métricas parciais (provisórias) da execução perdida são preservadas
       store.log('execution', `Execução interrompida (servidor reiniciado): ${t.title}`, { missionId: m.id, taskId: t.id, agent: 'executor' });
     }
   }
@@ -129,6 +135,11 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
           bus.emit('log', { missionId: mission.id, taskId: task.id, count: task.logTotal, line: line.slice(0, 2000) });
           store.saveSoon();
         },
+        // Atualização provisória durante a execução (mensagens distintas do stream) e, quando chega, o result final.
+        onUsage: (snap) => {
+          task.tokenUsage = usageRecord(snap, { ended: false, at: store.now() });
+          emitUsage(mission, task); store.saveSoon();
+        },
       });
     } catch (e) {
       return { ok: false, reason: e.code === 'BUSY' ? 'Outra execução está em andamento.' : e.message };
@@ -140,7 +151,7 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
     try {
       Object.assign(task, {
         status: 'running', authorized: false, startedAt: store.now(), finishedAt: null, exitCode: null, error: null,
-        usage: null, report: '', files: [], log: [], logTotal: 0, pid: handle.pid, dirtyBefore: before.files.length > 0, gitRepo: before.isRepo,
+        usage: null, tokenUsage: null, report: '', files: [], log: [], logTotal: 0, pid: handle.pid, dirtyBefore: before.files.length > 0, gitRepo: before.isRepo,
         permissionDenied: false,
       });
       if (task.dirtyBefore) { task.log.push('[aviso] o workspace já tinha alterações não commitadas antes desta execução'); task.logTotal = 1; }
@@ -166,6 +177,8 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
       task.files = after.files.map((f) => ({ ...f, preexisting: beforePaths.has(f.path) }));
       task.finishedAt = store.now(); task.exitCode = r.exitCode; task.error = r.error; delete task.pid;
       task.usage = r.result ? { costUsd: r.result.costUsd, durationMs: r.result.durationMs, turns: r.result.turns } : null;
+      // Estado final das métricas: com result -> basis 'final'; sem result (falha/interrupção) -> o parcial fica como 'live' provisório; nada reportado -> null.
+      task.tokenUsage = usageRecord(r.usage, { ended: true, at: store.now() });
       task.report = r.result?.text || (r.error ? `Sem relatório: ${r.error}` : '');
       // Pedido de permissão negado = a execução precisou de algo que não foi concedido (nunca é sucesso).
       task.permissionDenied = (r.result?.permissionDenials || 0) > 0
@@ -183,7 +196,7 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
         interrupted: `Execução interrompida: ${task.title}`,
       }[task.status];
       store.log('execution', msg, { missionId: mission.id, taskId: task.id, agent: 'executor', exitCode: r.exitCode });
-      store.save(); emitTask(mission, task); bus.emit('state', {});
+      store.save(); emitTask(mission, task); emitUsage(mission, task); bus.emit('state', {});
     };
     // Nunca rejeita: qualquer erro na finalização leva a tarefa a um estado terminal coerente (jamais "running" sem processo).
     const finished = finalize().catch((e) => {
@@ -224,7 +237,7 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
     const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     send('hello', { busy: executor.isBusy(), current: executor.current() });
     const on = (event) => (d) => send(event, d);
-    const h = { task: on('task'), log: on('log'), state: on('state'), cycle: on('cycle') };
+    const h = { task: on('task'), log: on('log'), state: on('state'), cycle: on('cycle'), usage: on('usage') };
     for (const [k, fn] of Object.entries(h)) bus.on(k, fn);
     const ping = setInterval(() => res.write(': ping\n\n'), 20000);
     req.on('close', () => { clearInterval(ping); for (const [k, fn] of Object.entries(h)) bus.off(k, fn); });

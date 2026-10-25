@@ -17,6 +17,7 @@ import { validateDir } from './workspaces.js';
 import { validateDecision, fingerprint, parseExecutorReport } from './cycle-schema.js';
 import { listWorkspace } from './planner.js';
 import { asyncRoute } from './async-route.js';
+import { usageRecord, usageEvent } from './usage.js';
 
 export const DEFAULT_MAX_ITERATIONS = 5;
 export const HARD_MAX_ITERATIONS = 10;
@@ -218,6 +219,21 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     return null;
   }
 
+  // Métricas do Planner (SSE `usage`): atualização provisória durante a chamada e, ao fim, UM registro por chamada em cycle.plannerUsage
+  // (lista limitada, sem agregação nesta fase; um planner sem métricas não gera nada). Acessórias: nunca interrompem o ciclo.
+  const plannerUsageLive = (m, call, snap) => {
+    try { const rec = usageRecord(snap, { ended: false, at: store.now() }); if (rec) bus.emit('usage', usageEvent('planner', { missionId: m.id, cycleId: m.cycle.id ?? null, call }, rec)); } catch { /* acessório */ }
+  };
+  const recordPlannerUsage = (m, call, snap) => {
+    try {
+      const rec = usageRecord(snap, { ended: true, at: store.now() });
+      if (!rec) return;
+      const c = m.cycle;
+      c.plannerUsage = [...(c.plannerUsage || []), { call, ...rec }].slice(-100);
+      store.saveSoon(); bus.emit('usage', usageEvent('planner', { missionId: m.id, cycleId: c.id ?? null, call }, rec));
+    } catch { /* acessório */ }
+  };
+
   /** Consulta o Planner (com 1 nova tentativa se a resposta for inválida). */
   async function askPlanner(m) {
     const c = m.cycle, ws = wsOf(m);
@@ -227,7 +243,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (c.cancelRequested) return { cancelled: true };
       c.plannerCalls++;
       const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing: listFiles(ws.path), cycle: c, feedback });
-      const res = await planner.decide({ prompt, cwd: ws.path });
+      const call = c.plannerCalls;
+      const res = await planner.decide({ prompt, cwd: ws.path, onUsage: (snap) => plannerUsageLive(m, call, snap) });
+      recordPlannerUsage(m, call, res.usage?.metrics); // o consumo existiu mesmo se a chamada foi cancelada ou falhou
       if (c.cancelRequested) return { cancelled: true };
       if (res.error) return { error: res.error };
       const v = validateDecision(res.text);

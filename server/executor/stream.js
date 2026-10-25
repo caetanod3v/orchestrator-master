@@ -77,11 +77,20 @@ export function createUsageTracker() {
   const messages = new Map();   // message.id -> tokens da última ocorrência
   let unidentified = 0, final = null, rateLimit = null;
   return {
+    /** @returns {boolean} true se o evento MUDOU o estado (mensagem repetida/idêntica, subagente e eventos sem métricas devolvem false) */
     add(u) {
-      if (!u) return;
-      if (u.kind === 'message') { if (u.subagent) return; if (u.messageId === null) unidentified++; else messages.set(u.messageId, u.tokens); }
-      else if (u.kind === 'final') { const { kind, ...rest } = u; final = rest; }
-      else if (u.kind === 'rate_limit') { const { kind, ...rest } = u; rateLimit = rest; }
+      if (!u) return false;
+      if (u.kind === 'message') {
+        if (u.subagent) return false;
+        if (u.messageId === null) { unidentified++; return true; }
+        const prev = messages.get(u.messageId);
+        messages.set(u.messageId, u.tokens);
+        return !prev || JSON.stringify(prev) !== JSON.stringify(u.tokens);
+      }
+      if (u.kind !== 'final' && u.kind !== 'rate_limit') return false;
+      const { kind, ...rest } = u, prev = kind === 'final' ? final : rateLimit, changed = JSON.stringify(prev) !== JSON.stringify(rest);
+      if (kind === 'final') final = rest; else rateLimit = rest;
+      return changed;
     },
     snapshot() {
       let live = null;
