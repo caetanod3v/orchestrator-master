@@ -9,7 +9,7 @@
 //  - o prompt vai por stdin (sem limite/escape de linha de comando).
 import { spawn, execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { parseLine } from './stream.js';
+import { parseLine, createUsageTracker } from './stream.js';
 import { killTreeSync, processStartedAt, waitGone, START_TOLERANCE_MS } from '../orphans.js';
 import { pidAlive } from '../instance-lock.js';
 
@@ -63,13 +63,15 @@ export function createExecutor({ command = 'claude', prefixArgs = [], args = CLA
 
   /**
    * Inicia a execução (síncrono: o lock é tomado aqui). Lança se já houver execução ativa.
-   * @returns {{pid:number, done:Promise<{status:'completed'|'failed'|'interrupted', exitCode:number|null, error:string|null, result:object|null, spawnFailed:boolean}>}}
+   * `usage` (aditivo) = métricas reportadas pela CLI: { final (evento result), live (mensagens distintas, provisório), rateLimit }; cada parte é null se a CLI não a emitiu.
+   * @returns {{pid:number, done:Promise<{status:'completed'|'failed'|'interrupted', exitCode:number|null, error:string|null, result:object|null, usage:{final:object|null, live:object|null, rateLimit:object|null}, spawnFailed:boolean}>}}
    */
   function start({ missionId, taskId, cwd, prompt, onLine }) {
     if (active || liveOrphans()) { const e = new Error('Outra execução está em andamento.'); e.code = 'BUSY'; throw e; }
     const run = { missionId, taskId, startedAt: new Date().toISOString(), stopping: false, timedOut: false, child: null, finished: null };
     active = run;
     let result = null, error = null, spawnFailed = false, settled = false;
+    const usageTracker = createUsageTracker();
     let resolveDone;
     const done = new Promise((r) => { resolveDone = r; });
     run.finished = done;
@@ -89,6 +91,7 @@ export function createExecutor({ command = 'claude', prefixArgs = [], args = CLA
       if (kind === 'err') { if (raw.trim()) onLine(`[stderr] ${raw.slice(0, 2000)}`); return; }
       const parsed = parseLine(raw);
       if (parsed.result) result = parsed.result;
+      if (parsed.usage) usageTracker.add(parsed.usage);
       parsed.lines.forEach(onLine);
     };
     child.stdout.on('data', (c) => feed('out', c));
@@ -115,7 +118,7 @@ export function createExecutor({ command = 'claude', prefixArgs = [], args = CLA
           : `Processo terminou com código ${exitCode}`);
       }
       active = null;
-      resolveDone({ status, exitCode, error, result, spawnFailed });
+      resolveDone({ status, exitCode, error, result, usage: usageTracker.snapshot(), spawnFailed });
     };
     child.on('error', (err) => { spawnFailed = true; error = `Falha ao iniciar a CLI: ${err.message}`; finish(null); });
     child.on('close', (code) => finish(code));

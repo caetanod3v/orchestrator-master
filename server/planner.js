@@ -20,8 +20,9 @@ export function createClaudePlanner({ runner = createExecutor({ args: PLANNER_AR
       let handle;
       try { handle = runner.start({ missionId: 'planner', taskId: 'planner', cwd, prompt, onLine: () => {} }); } catch (e) { return { error: e.message }; }
       const r = await handle.done;
-      if (r.status === 'completed' && r.result?.text) return { text: r.result.text, usage: { costUsd: r.result.costUsd, turns: r.result.turns } };
-      return { error: r.error || `Planner terminou com status ${r.status}`, interrupted: r.status === 'interrupted' };
+      // `metrics` (aditivo): tokens/modelos/limite reportados pela CLI (ver executor/stream.js); também nas falhas, que consomem tokens.
+      if (r.status === 'completed' && r.result?.text) return { text: r.result.text, usage: { costUsd: r.result.costUsd, turns: r.result.turns, metrics: r.usage } };
+      return { error: r.error || `Planner terminou com status ${r.status}`, interrupted: r.status === 'interrupted', usage: { metrics: r.usage } };
     },
     cancel: () => runner.stop(),
   };

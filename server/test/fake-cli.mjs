@@ -19,6 +19,18 @@ process.stdin.on('end', async () => {
   if (mode === 'write') fs.writeFileSync('out.txt', 'criado pelo teste\n');
   if (mode === 'fixbuild') fs.writeFileSync('BUILD_OK', 'x\n'); // faz o build do fake-verify passar
   const block = (checks) => '```json\n' + JSON.stringify({ summary: 'resumo estruturado', checks }) + '\n```';
+  if (mode === 'usage') { // métricas sintéticas no formato do stream real (sem textos nem ids reais)
+    const u = (i, o, cc, cr) => ({ input_tokens: i, output_tokens: o, cache_creation_input_tokens: cc, cache_read_input_tokens: cr, service_tier: 'standard' });
+    out({ type: 'assistant', message: { id: 'msg_A', content: [{ type: 'text', text: 'a' }], usage: u(2, 1, 100, 50) } });
+    out({ type: 'assistant', message: { id: 'msg_A', content: [{ type: 'tool_use', name: 'Read', input: {} }], usage: u(2, 1, 100, 50) } }); // mesma resposta repetida
+    out({ type: 'assistant', parent_tool_use_id: 'toolu_x', message: { id: 'msg_S', content: [], usage: u(999, 999, 999, 999) } });     // subagente: fora do live
+    out({ type: 'assistant', message: { id: 'msg_B', content: [{ type: 'text', text: 'b' }], usage: u(3, 1, 0, 150) } });
+    out({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', resetsAt: 1792922400 } });
+    out({ type: 'result', subtype: 'success', is_error: false, result: 'Relatório de uso.', total_cost_usd: 0.05, duration_ms: 7, num_turns: 2,
+      usage: { ...u(5, 9, 100, 200), output_tokens_details: { thinking_tokens: 0 } },
+      modelUsage: { 'modelo-sintetico': { inputTokens: 5, outputTokens: 9, cacheReadInputTokens: 200, cacheCreationInputTokens: 100, webSearchRequests: 0, costUSD: 0.05, contextWindow: 1000000, maxOutputTokens: 128000, thinkingTokens: 0 } } });
+    process.exit(0);
+  }
   if (mode === 'check') {
     fs.writeFileSync('out.txt', 'conferido\n');
     out({ type: 'result', subtype: 'success', is_error: false, result: 'Criei out.txt e conferi o conteúdo.\n' + block([{ name: 'out.txt existe', result: 'pass', detail: 'conteúdo conferido' }]), total_cost_usd: 0.002, duration_ms: 10, num_turns: 2 });
