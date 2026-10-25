@@ -24,19 +24,88 @@ function initial() {
 
 let db;
 
-export function load() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (fs.existsSync(DB_FILE)) {
-    try {
-      db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-      return db;
-    } catch (err) {
-      const bak = `${DB_FILE}.corrupt-${Date.now()}`;
-      fs.renameSync(DB_FILE, bak);
-      console.error(`db.json inválido; preservado em ${bak}`);
+const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+
+/**
+ * Estrutura MÍNIMA que o servidor usa logo no boot e nas rotas (initial(), setupExecution, recover, store.log): nada além disso é exigido,
+ * para não rejeitar bancos antigos legítimos. Devolve o motivo da rejeição ou null.
+ */
+export function validateDb(d) {
+  if (!isObj(d)) return 'a raiz não é um objeto';
+  if (!isObj(d.settings)) return '"settings" ausente ou inválido';
+  for (const k of ['workspaces', 'missions', 'activity']) if (!Array.isArray(d[k])) return `"${k}" ausente ou não é uma lista`;
+  if (d.workspaces.some((w) => !isObj(w) || typeof w.id !== 'string' || typeof w.path !== 'string')) return 'há workspace sem id/path';
+  for (const m of d.missions) {
+    if (!isObj(m) || typeof m.id !== 'string' || !Array.isArray(m.tasks)) return 'há missão sem id ou sem lista de tarefas';
+    if (m.tasks.some((t) => !isObj(t))) return `a missão ${m.id} tem tarefa inválida`;
+    if (m.cycle != null && (!isObj(m.cycle) || !Array.isArray(m.cycle.rounds))) return `o ciclo da missão ${m.id} não tem a lista de rodadas`;
+  }
+  return null;
+}
+
+/** Lê e valida um arquivo do banco SEM alterá-lo. */
+function readCandidate(file) {
+  let raw;
+  for (let i = 0; ; i++) {
+    try { raw = fs.readFileSync(file, 'utf8'); break; } catch (e) {
+      if (e.code === 'ENOENT') return { missing: true };
+      if (TRANSIENT.includes(e.code) && i < 4) { sleepSync(15 * (i + 1)); continue; } // antivírus/indexador com o arquivo aberto
+      return { unreadable: true, reason: `ilegível (${e.code || e.message})` }; // não é dado inválido: nada se conclui sobre o conteúdo
     }
   }
+  if (!raw.trim()) return { reason: 'arquivo vazio' };
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch (e) { return { reason: `JSON inválido (${e.message})` }; }
+  const why = validateDb(parsed);
+  return why ? { reason: `estrutura inválida: ${why}` } : { db: parsed };
+}
+
+/** Guarda uma cópia de diagnóstico de um arquivo inválido (nunca o apaga). Lança se não conseguir: melhor falhar alto do que perdê-lo. */
+function preserve(file, label) {
+  const dest = `${file}.corrupt-${Date.now()}`;
+  fs.copyFileSync(file, dest);
+  console.error(`[store] ${label} inválido; cópia preservada em ${dest}`);
+  return dest;
+}
+
+/**
+ * Carrega o banco. Ordem: db.json -> db.json.tmp -> db.json.bak (a 1ª cópia VÁLIDA vence). Um arquivo inválido é preservado
+ * (db.json.corrupt-*) e só é substituído depois de a alternativa ter sido lida e validada. Sem nenhuma cópia válida o servidor sobe
+ * em modo degradado, com um registro explícito na atividade (nunca um reset silencioso). Arquivo ausente sem cópias = primeira execução.
+ */
+export function load() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const main = readCandidate(DB_FILE);
+  if (main.db) { db = main.db; return db; }
+  // Falha de LEITURA (não de conteúdo) do db.json: nunca trocar um arquivo possivelmente bom por uma cópia mais antiga. Falha alto, sem tocar em nada.
+  if (main.unreadable) throw new Error(`[store] db.json ${main.reason}; nada foi alterado. Resolva o acesso ao arquivo e inicie novamente.`);
+
+  const alts = [`${DB_FILE}.tmp`, `${DB_FILE}.bak`].map((file) => ({ file, ...readCandidate(file) }));
+  const good = alts.find((x) => x.db);
+  const problems = [!main.missing && `db.json: ${main.reason}`, ...alts.filter((x) => x.reason).map((x) => `${path.basename(x.file)}: ${x.reason}`)].filter(Boolean);
+
+  if (good) {
+    // 1) a cópia boa já foi lida e validada; 2) preserva o db.json inválido; 3) só então troca o db.json (copia para um nome auxiliar e renomeia)
+    const kept = main.missing ? null : preserve(DB_FILE, 'db.json');
+    const staged = `${DB_FILE}.restore`;
+    fs.copyFileSync(good.file, staged);
+    try { fs.renameSync(staged, DB_FILE); } catch (e) { console.error('[store] não foi possível substituir db.json agora; o próximo save() tentará de novo:', e.code, e.message); }
+    db = good.db;
+    log('system', `Banco recuperado de ${path.basename(good.file)}: ${main.missing ? 'db.json não existia' : `db.json estava inválido (${main.reason}); cópia em ${path.basename(kept)}`}.`, { recovery: 'restored', source: path.basename(good.file) });
+    console.error(`[store] banco recuperado de ${path.basename(good.file)}`);
+    save();
+    return db;
+  }
+
+  if (!problems.length) { db = initial(); save(); return db; } // primeira execução: nada existia
+
+  // Sem cópia válida: preserva o que existia (db.json é movido, os demais copiados) e sobe em modo DEGRADADO, deixando isso explícito.
+  const kept = [];
+  if (!main.missing) { kept.push(preserve(DB_FILE, 'db.json')); fs.rmSync(DB_FILE, { force: true }); }
+  for (const x of alts) if (x.reason) kept.push(preserve(x.file, path.basename(x.file)));
   db = initial();
+  log('system', `RECUPERAÇÃO DEGRADADA: nenhuma cópia válida do banco (${problems.join('; ')}). Foi iniciado um banco novo (com missões de demonstração); os arquivos originais foram preservados: ${kept.map((f) => path.basename(f)).join(', ')}.`, { recovery: 'degraded' });
+  console.error('[store] RECUPERAÇÃO DEGRADADA: banco novo iniciado; veja os arquivos .corrupt-*');
   save();
   return db;
 }
