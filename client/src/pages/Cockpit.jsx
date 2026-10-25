@@ -5,8 +5,7 @@ import { Progress, DemoTag, Empty, Btn, fmtTime } from '../components/ui.jsx';
 import { AgentCard, TaskQueue, Terminal, ReviewPanel } from '../components/Widgets.jsx';
 import NeuralCore, { reactionFor, usePrefersReduced } from '../components/NeuralCore.jsx';
 import CyclePanel from '../components/CyclePanel.jsx';
-import TokenMonitor from '../components/TokenMonitor.jsx';
-import { hudText } from '../usage-view.js';
+import { agentTokens } from '../usage-view.js';
 
 // Posição de cada nó (fração da área) e conexões justificadas pela arquitetura:
 // planner propõe -> portão humano aprova -> executor executa no workspace; a fila alimenta o núcleo.
@@ -16,7 +15,7 @@ const LINKS = [
   ['core', 'planner'], ['core', 'executor'], ['core', 'gate'], ['core', 'workspace'], ['core', 'queue'],
   ['planner', 'gate'], ['gate', 'executor'], ['executor', 'workspace'],
 ];
-const LABEL = { planner: 'Planner', executor: 'Executor', gate: 'Aprovação humana', queue: 'Fila de tarefas', workspace: 'Workspace', tokens: 'Monitor de tokens' };
+const LABEL = { planner: 'Planner', executor: 'Executor', gate: 'Aprovação humana', queue: 'Fila de tarefas', workspace: 'Workspace' };
 const KIND = { planner: 'agent', executor: 'agent', gate: 'gate', queue: 'res', workspace: 'res' };
 const STATE_LABEL = {
   active: 'ativo', idle: 'ocioso', live: 'disponível', awaiting: 'aguardando aprovação',
@@ -42,17 +41,22 @@ function useFresh(events, ready) {
   return fresh;
 }
 
-function Node({ id, line, state, selected, flash, onClick }) {
+function Node({ id, line, tokens, state, selected, flash, onClick }) {
   const kind = KIND[id];
   return (
     <button id={`node-${id}`} type="button" aria-pressed={selected}
-      aria-label={`${LABEL[id]}, ${KIND_LABEL[kind]}, estado: ${STATE_LABEL[state]}${line ? `, ${line}` : ''}`}
+      aria-label={`${LABEL[id]}, ${KIND_LABEL[kind]}, estado: ${STATE_LABEL[state]}${line ? `, ${line}` : ''}${tokens ? `, tokens: ${tokens.text}${tokens.partial ? ' (parcial)' : ''}` : ''}`}
       className={`node k-${kind} st-${state}${selected ? ' sel' : ''}${flash ? ' flash' : ''}${POS[id][0] > 0.7 ? ' shiftable' : ''}`}
       style={{ '--x': `${POS[id][0] * 100}%`, '--y': `${POS[id][1] * 100}%` }} onClick={onClick}>
       <span className="kind">{KIND_LABEL[kind]}</span>
       <b>{LABEL[id]}</b>
       <span className="st"><i />{STATE_LABEL[state]}</span>
       {line && <span className="line">{line}</span>}
+      {tokens && (
+        <span className="tokens" title="Tokens reportados pela CLI do Claude Code nesta missão. Parcial: ainda sem o total final da execução.">
+          Tokens: {tokens.text}{tokens.partial && <em> parcial</em>}
+        </span>
+      )}
     </button>
   );
 }
@@ -146,6 +150,9 @@ export default function Cockpit() {
     queue: `${state?.counts.pending ?? 0} pendentes`, workspace: ws ? ws.name : 'nenhum ativo',
   };
 
+  // Tokens desta missão por agente (/api/state.usage, já deduplicado pelo servidor); só os nós dos agentes mostram.
+  const tokens = { planner: agentTokens(state?.usage, mission?.id, 'planner'), executor: agentTokens(state?.usage, mission?.id, 'executor') };
+
   const choose = (id) => {
     if (sel === id) { close(); return; }
     if (id === 'gate' && pendingTasks[0]) setTaskId(pendingTasks[0].id);
@@ -205,24 +212,14 @@ export default function Cockpit() {
         <div className="legend">
           {['active', 'idle', 'awaiting', 'disconnected', 'unavailable', 'error'].map((s) => <span key={s} className={`st-${s}`}><i />{STATE_LABEL[s]}</span>)}
         </div>
-        <button id="node-tokens" type="button" className="btn" aria-pressed={sel === 'tokens'} onClick={() => choose('tokens')} title="Consumo de tokens reportado pela CLI (não é saldo da assinatura)">
-          {sel === 'tokens' ? '▾' : '▴'} Tokens{hudText(state?.usage) && <span className="dim small"> · {hudText(state.usage)}</span>}
-        </button>
         <button type="button" className="btn" aria-pressed={sel === 'queue'} onClick={() => choose('queue')}>{sel === 'queue' ? '▾' : '▴'} Fila e terminal</button>
       </div>
 
       {Object.keys(POS).filter((id) => (id !== 'planner' || planner) && (id !== 'executor' || executor)).map((id) => (
-        <Node key={id} id={id} state={st[id]} line={lines[id]} selected={sel === id} flash={flash[id] !== undefined} onClick={() => choose(id)} />
+        <Node key={id} id={id} state={st[id]} line={lines[id]} tokens={tokens[id]} selected={sel === id} flash={flash[id] !== undefined} onClick={() => choose(id)} />
       ))}
 
-      {panel === 'tokens' && (
-        <aside className={`overlay wide${closing ? ' out' : ''}`} ref={panelRef} tabIndex={-1} role="dialog" aria-label="Detalhes: Monitor de tokens">
-          <header><h3>Monitor de tokens</h3>{closeBtn}</header>
-          <TokenMonitor />
-        </aside>
-      )}
-
-      {panel && panel !== 'queue' && panel !== 'tokens' && (
+      {panel && panel !== 'queue' && (
         <aside className={`overlay${closing ? ' out' : ''}`} ref={panelRef} tabIndex={-1} role="dialog" aria-label={`Detalhes: ${LABEL[panel]}`}>
           <header><h3>{LABEL[panel]} {panel === 'gate' && mission?.demo && <DemoTag />}</h3>{closeBtn}</header>
           <div className="rowline"><span className={`st-${st[panel]}`}><i className="dot" />{STATE_LABEL[st[panel]]}</span><span className="dim small">{KIND_LABEL[KIND[panel]]}</span></div>
