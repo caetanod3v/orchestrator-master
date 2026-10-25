@@ -51,7 +51,7 @@ test('a 2ª instância (outra porta OU a mesma) sai com erro claro sem alterar o
   const lock1 = JSON.parse(fs.readFileSync(lockFile(dir), 'utf8')); assert.equal(lock1.pid, s1.child.pid);
 
   plantDb(dir);                                                                    // "a 1ª instância está no meio de uma execução": tarefa running de novo
-  const before = snapshot(dir), lockBefore = fs.readFileSync(lockFile(dir), 'utf8');
+  const before = snapshot(dir), lockBefore = fs.readFileSync(lockFile(dir), 'utf8'), listing = () => fs.readdirSync(dir).sort(), filesBefore = listing(); // a 1ª instância já criou db.json.bak no boot
   for (const port of [await freePort(), p1]) {                                    // outra porta (mesmo diretório de dados) e a mesma porta
     const s2 = server(dir, port);
     assert.equal(await s2.exited, 1, 'código de saída 1');
@@ -62,7 +62,7 @@ test('a 2ª instância (outra porta OU a mesma) sai com erro claro sem alterar o
     assert.equal(taskStatus(dir), 'running', 'a tarefa running não foi marcada como interrompida pela 2ª instância');
     assert.equal(fs.readFileSync(lockFile(dir), 'utf8'), lockBefore, 'a trava da 1ª está intacta');
   }
-  assert.deepEqual(fs.readdirSync(dir).filter((f) => f !== 'db.json' && f !== 'server.lock'), [], 'nenhum arquivo extra (.corrupt, .tmp, .stale…)');
+  assert.deepEqual(listing(), filesBefore, 'a 2ª instância não criou nenhum arquivo (.corrupt, .tmp, .stale, .bak…)');
 
   // A trava vem ANTES do store.load(): com um db.json inválido o load() de uma 2ª instância preservaria/recriaria arquivos.
   fs.writeFileSync(path.join(dir, 'db.json'), '{"quebrado":');
@@ -70,7 +70,7 @@ test('a 2ª instância (outra porta OU a mesma) sai com erro claro sem alterar o
   const s2b = server(dir, await freePort());
   assert.equal(await s2b.exited, 1); assert.doesNotMatch(s2b.out(), /RECUPERAÇÃO|banco recuperado|preservada/, 'o load() nem chegou a rodar');
   assert.equal(snapshot(dir).bytes, invalid.bytes); assert.equal(snapshot(dir).mtime, invalid.mtime);
-  assert.deepEqual(fs.readdirSync(dir).filter((f) => f !== 'db.json' && f !== 'server.lock'), [], 'sem .corrupt-*, .restore nem .tmp criados pela 2ª instância');
+  assert.deepEqual(listing(), filesBefore, 'sem .corrupt-*, .restore nem .tmp criados pela 2ª instância');
   plantDb(dir);                                                                    // volta ao estado "tarefa running" para o restante do cenário
 
   // 1ª instância morre sem liberar (encerramento forçado): trava abandonada

@@ -8,6 +8,7 @@ import { buildDemoMissions } from './demo.js';
 // ORCH_DATA_DIR só serve para os testes isolarem o banco; não afeta o que é executado.
 const DATA_DIR = process.env.ORCH_DATA_DIR || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
+const BAK_FILE = `${DB_FILE}.bak`;
 export const dataDir = DATA_DIR; // usado pela trava de instância (instance-lock.js)
 
 export const uid = (p) => `${p}_${randomUUID().slice(0, 8)}`;
@@ -24,6 +25,14 @@ function initial() {
 }
 
 let db;
+// Backup: db.json.bak guarda o ÚLTIMO ESTADO VÁLIDO anterior ao db.json atual. `lastGood` é o texto do último estado válido persistido (ou
+// carregado); `bakContent` é o que sabemos estar em .bak. O backup só muda DEPOIS de o db.json novo estar gravado, só recebe um estado
+// que passou em validateDb, e é trocado por rename atômico (nunca por escrita direta: não pode corromper a única cópia boa).
+let lastGood = null;
+let bakContent = null;
+let backup = { ok: true, error: null, at: null };
+/** Situação da última atualização do backup (melhor esforço: uma falha aqui NÃO impede o salvamento do banco). */
+export const backupStatus = () => ({ ...backup });
 
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 
@@ -58,7 +67,7 @@ function readCandidate(file) {
   let parsed;
   try { parsed = JSON.parse(raw); } catch (e) { return { reason: `JSON inválido (${e.message})` }; }
   const why = validateDb(parsed);
-  return why ? { reason: `estrutura inválida: ${why}` } : { db: parsed };
+  return why ? { reason: `estrutura inválida: ${why}` } : { db: parsed, raw };
 }
 
 /** Guarda uma cópia de diagnóstico de um arquivo inválido (nunca o apaga). Lança se não conseguir: melhor falhar alto do que perdê-lo. */
@@ -77,7 +86,7 @@ function preserve(file, label) {
 export function load() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const main = readCandidate(DB_FILE);
-  if (main.db) { db = main.db; return db; }
+  if (main.db) { db = main.db; lastGood = main.raw; return db; }
   // Falha de LEITURA (não de conteúdo) do db.json: nunca trocar um arquivo possivelmente bom por uma cópia mais antiga. Falha alto, sem tocar em nada.
   if (main.unreadable) throw new Error(`[store] db.json ${main.reason}; nada foi alterado. Resolva o acesso ao arquivo e inicie novamente.`);
 
@@ -91,7 +100,7 @@ export function load() {
     const staged = `${DB_FILE}.restore`;
     fs.copyFileSync(good.file, staged);
     try { fs.renameSync(staged, DB_FILE); } catch (e) { console.error('[store] não foi possível substituir db.json agora; o próximo save() tentará de novo:', e.code, e.message); }
-    db = good.db;
+    db = good.db; lastGood = good.raw; bakContent = good.file.endsWith('.bak') ? good.raw : null;
     log('system', `Banco recuperado de ${path.basename(good.file)}: ${main.missing ? 'db.json não existia' : `db.json estava inválido (${main.reason}); cópia em ${path.basename(kept)}`}.`, { recovery: 'restored', source: path.basename(good.file) });
     console.error(`[store] banco recuperado de ${path.basename(good.file)}`);
     save();
@@ -121,10 +130,40 @@ export function saveSoon() {
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const TRANSIENT = ['EPERM', 'EBUSY', 'EACCES', 'ENOENT'];
 
-// No Windows, renomear por cima do db.json falha de forma transitória (EPERM/EBUSY) quando antivírus ou
-// indexador estão com o arquivo aberto. Tenta de novo; por fim grava direto; nunca derruba o chamador por isso.
+/** Persiste o banco. true = db.json gravado (o backup é atualizado depois, em melhor esforço; ver backupStatus()). */
 export function save() {
   const json = JSON.stringify(db, null, 2);
+  const ok = writeMain(json);
+  if (ok) afterMainSaved(json);
+  return ok;
+}
+
+/** Depois que o db.json novo está gravado: o estado válido ANTERIOR vira o .bak (se mudou) e o novo passa a ser o "último válido". */
+function afterMainSaved(json) {
+  const prev = lastGood;
+  if (prev && json !== prev && prev !== bakContent) refreshBackup(prev);
+  if (validateDb(db) === null) lastGood = json;
+  else console.error('[store] o estado em memória não passa na validação; o backup anterior foi mantido como último estado válido');
+}
+
+function refreshBackup(content) {
+  const tmp = `${BAK_FILE}.tmp`;
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try { fs.writeFileSync(tmp, content); fs.renameSync(tmp, BAK_FILE); bakContent = content; backup = { ok: true, error: null, at: now() }; return; } catch (e) {
+      last = e;
+      if (!TRANSIENT.includes(e.code)) break;
+      sleepSync(15 * (i + 1));
+    }
+  }
+  try { fs.rmSync(tmp, { force: true }); } catch { /* resíduo inofensivo */ }
+  backup = { ok: false, error: last?.code || last?.message || 'erro desconhecido', at: now() };
+  console.error('[store] backup não atualizado (o .bak anterior foi mantido):', backup.error);
+}
+
+// No Windows, renomear por cima do db.json falha de forma transitória (EPERM/EBUSY) quando antivírus ou
+// indexador estão com o arquivo aberto. Tenta de novo; por fim grava direto; nunca derruba o chamador por isso.
+function writeMain(json) {
   const tmp = `${DB_FILE}.tmp`;
   for (let i = 0; i < 8; i++) {
     try { fs.writeFileSync(tmp, json); fs.renameSync(tmp, DB_FILE); return true; } catch (e) {

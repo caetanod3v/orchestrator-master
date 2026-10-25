@@ -3,6 +3,7 @@ client/dist
 data/db.json
 data/*.tmp
 data/server.lock*
+data/db.json.bak
 .test-workspace
 
 # Environment and secrets
