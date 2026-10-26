@@ -10,7 +10,7 @@ import { validateDir, setupWorkspaceRemoval } from './workspaces.js';
 import { setupExecution, blockedReason } from './execution.js';
 import { missionStatus } from './mission-status.js';
 import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle.js';
-import { createClaudePlanner } from './planner.js';
+import { createClaudePlanner, plannerConfigFromEnv } from './planner.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
 import { acquireInstanceLock } from './instance-lock.js';
@@ -19,7 +19,7 @@ import { installShutdown } from './shutdown.js';
 // Costura de teste: só código em processo (nunca env, rede ou requisição) pode injetar executor/planner simulados.
 const testDeps = globalThis.__ORCH_TEST_DEPS__ ?? {};
 const claudeCodeExecutor = testDeps.executor ?? realExecutor;
-const planner = testDeps.planner ?? createClaudePlanner();
+const planner = testDeps.planner ?? createClaudePlanner(plannerConfigFromEnv()); // ORCH_PLANNER_MODEL / ORCH_PLANNER_EFFORT (opcionais); valor inválido impede o boot
 const verifier = testDeps.verifier ?? createVerifier();
 const planning = () => planner.busy();
 

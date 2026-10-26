@@ -11,10 +11,31 @@ export const PLANNER_ARGS = [
   '--tools', '',
 ];
 
+// Modelo e esforço SÓ do Planner (o Executor não os recebe). Sem configuração, os argumentos são exatamente PLANNER_ARGS (modelo e esforço
+// padrão da CLI). Valores vêm do ambiente do servidor (ORCH_PLANNER_MODEL / ORCH_PLANNER_EFFORT), nunca de requisições, e são validados:
+// o modelo precisa começar por letra ou dígito (nunca vira uma opção da CLI) e o esforço é um dos níveis que a CLI aceita (`claude --help`).
+export const PLANNER_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,63}$/;
+
+/** Argumentos do `claude` do Planner. Lança Error se modelo/esforço forem inválidos. */
+export function plannerArgs({ model, effort } = {}) {
+  if (model !== undefined && model !== null && model !== '' && (typeof model !== 'string' || !MODEL_RE.test(model))) throw new Error(`ORCH_PLANNER_MODEL inválido: use só letras, números e . _ : - [ ] (até 64 caracteres, começando por letra ou número).`);
+  if (effort !== undefined && effort !== null && effort !== '' && !PLANNER_EFFORTS.includes(effort)) throw new Error(`ORCH_PLANNER_EFFORT inválido: use um de ${PLANNER_EFFORTS.join(', ')}.`);
+  const extra = [...(model ? ['--model', model] : []), ...(effort ? ['--effort', effort] : [])];
+  const at = PLANNER_ARGS.lastIndexOf('--tools'); // as opções entram ANTES de "--tools ''" (essa opção aceita lista)
+  return [...PLANNER_ARGS.slice(0, at), ...extra, ...PLANNER_ARGS.slice(at)];
+}
+
+/** Lê a configuração do Planner do ambiente do servidor (vazio = padrão da CLI). */
+export const plannerConfigFromEnv = (env = process.env) => ({ model: env.ORCH_PLANNER_MODEL?.trim() || undefined, effort: env.ORCH_PLANNER_EFFORT?.trim() || undefined });
+
 /** @returns {{ id:string, busy:()=>boolean, decide:(a:{prompt:string,cwd:string})=>Promise<{text?:string,error?:string,interrupted?:boolean}>, cancel:()=>Promise<any> }} */
-export function createClaudePlanner({ runner = createExecutor({ args: PLANNER_ARGS, timeoutMs: 3 * 60 * 1000 }) } = {}) {
+export function createClaudePlanner({ model, effort, runner, runnerOptions = {} } = {}) { // runnerOptions: só testes (CLI falsa)
+  const args = plannerArgs({ model, effort }); // valida sempre, mesmo com um runner injetado (testes)
+  runner ??= createExecutor({ args, timeoutMs: 3 * 60 * 1000, ...runnerOptions });
   return {
     id: 'claude-planner',
+    args,
     busy: () => runner.isBusy(),
     async decide({ prompt, cwd, onUsage }) {
       let handle;

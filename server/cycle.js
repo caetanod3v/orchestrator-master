@@ -88,6 +88,22 @@ const failCount = (r) => (r?.checks || []).filter((c) => c.result === 'fail').le
 // ao Planner ela chega só no HISTÓRICO, datada e rotulada como SUBSTITUÍDA (ver buildPlannerPrompt).
 const withoutAudit = ({ previousVerifications, ...current }) => current;
 
+// Visão COMPACTA do último relatório para o JSON do prompt. Tudo o que decide continue/complete/blocked continua (status, arquivos, resumo, checks,
+// erros, bloqueios, status/código/motivo de cada verificação, reverifiedAt…); sai o que não decide nada: o custo do Executor (`usage`) e, em cada
+// verificação, command/source/durationMs/truncated/outputBytes (o histórico já traz script, status e código). A saída das verificações continua,
+// mas limitada ao FIM do texto: curta quando passou (basta para citar "42 testes passaram") e maior quando NÃO passou (é a pista para corrigir).
+export const PASS_TAIL = 300;
+export const FAIL_TAIL = 2000;
+export function plannerReportView(report) {
+  const { usage, verifications, ...rest } = withoutAudit(report);
+  const compact = (verifications || []).map((v) => {
+    const { command, source, durationMs, truncated, outputBytes, outputTail, ...keep } = v;
+    const tail = typeof outputTail === 'string' ? outputTail.slice(-(v.status === 'pass' ? PASS_TAIL : FAIL_TAIL)) : '';
+    return tail ? { ...keep, outputTail: tail } : keep;
+  });
+  return { ...rest, verifications: compact };
+}
+
 // Única origem desta frase: verify.js (comparação do texto do script com a aprovação humana). Só ela é evidência explícita de
 // "alteração do script detectada"; qualquer outro bloqueio (script removido, fora da lista…) mostra apenas status e motivo reais.
 export const SCRIPT_CHANGE_REASON = 'O script mudou desde a aprovação humana';
@@ -164,7 +180,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
     `RODADA A DECIDIR: ${rounds.length + 1} de no máximo ${cycle.maxIterations} (executadas: ${rounds.length})`,
     '',
     rounds.length ? `HISTÓRICO:\n${hist}` : 'HISTÓRICO: nenhuma rodada executada ainda (planeje a primeira tarefa).',
-    last?.report ? `\nÚLTIMO RELATÓRIO (JSON):\n${JSON.stringify(withoutAudit(last.report))}` : '',
+    last?.report ? `\nÚLTIMO RELATÓRIO (JSON):\n${JSON.stringify(plannerReportView(last.report))}` : '',
     cycle.humanNotes.length ? `\nORIENTAÇÕES HUMANAS (não alteram as políticas):\n${cycle.humanNotes.map((n) => `- ${n.text}`).join('\n')}` : '',
     feedback ? `\nATENÇÃO: ${feedback}` : '',
     '',
