@@ -11,6 +11,7 @@ import { setupExecution, blockedReason } from './execution.js';
 import { missionStatus } from './mission-status.js';
 import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle.js';
 import { createClaudePlanner, plannerConfigFromEnv } from './planner.js';
+import { routingFromEnv, createRouter } from './routing.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
 import { acquireInstanceLock } from './instance-lock.js';
@@ -19,7 +20,9 @@ import { installShutdown } from './shutdown.js';
 // Costura de teste: só código em processo (nunca env, rede ou requisição) pode injetar executor/planner simulados.
 const testDeps = globalThis.__ORCH_TEST_DEPS__ ?? {};
 const claudeCodeExecutor = testDeps.executor ?? realExecutor;
-const planner = testDeps.planner ?? createClaudePlanner(plannerConfigFromEnv()); // ORCH_PLANNER_MODEL / ORCH_PLANNER_EFFORT (opcionais); valor inválido impede o boot
+const routingMode = routingFromEnv(); // ORCH_PLANNER_ROUTING=off|on (padrão off); valor inválido impede o boot, antes de qualquer acesso a dados
+const router = routingMode === 'on' ? createRouter() : null;
+const planner = testDeps.planner ?? createClaudePlanner({ ...plannerConfigFromEnv(), routing: routingMode }); // ORCH_PLANNER_MODEL / ORCH_PLANNER_EFFORT (opcionais); valor inválido impede o boot
 const verifier = testDeps.verifier ?? createVerifier();
 const planning = () => planner.busy();
 
@@ -236,7 +239,7 @@ if (fs.existsSync(dist)) {
 const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor, verifier });
 setupVerification(app, { db, verifier });
 setupWorkspaceRemoval(app, { db });
-setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier });
+setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router });
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));
 app.use((err, req, res, next) => bad(res, err.type === 'entity.parse.failed' ? 'JSON inválido.' : 'Erro interno.', err.status || 500));

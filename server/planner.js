@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createExecutor } from './executor/index.js';
+import { tierSettings } from './routing.js';
 
 export const PLANNER_ARGS = [
   '-p', '--output-format', 'stream-json', '--verbose',
@@ -30,16 +31,24 @@ export function plannerArgs({ model, effort } = {}) {
 export const plannerConfigFromEnv = (env = process.env) => ({ model: env.ORCH_PLANNER_MODEL?.trim() || undefined, effort: env.ORCH_PLANNER_EFFORT?.trim() || undefined });
 
 /** @returns {{ id:string, busy:()=>boolean, decide:(a:{prompt:string,cwd:string})=>Promise<{text?:string,error?:string,interrupted?:boolean}>, cancel:()=>Promise<any> }} */
-export function createClaudePlanner({ model, effort, runner, runnerOptions = {} } = {}) { // runnerOptions: só testes (CLI falsa)
+export function createClaudePlanner({ model, effort, routing = 'off', runner, runnerOptions = {} } = {}) { // runnerOptions: só testes (CLI falsa)
   const args = plannerArgs({ model, effort }); // valida sempre, mesmo com um runner injetado (testes)
   runner ??= createExecutor({ args, timeoutMs: 3 * 60 * 1000, ...runnerOptions });
+  // Camadas (só com routing 'on'): UM runner, argumentos por chamada. Assim o lock, o cancelamento, o timeout e a recuperação de processos são os de sempre.
+  // Com routing 'off', `tier` é ignorado e a chamada é idêntica à de antes.
+  const argsFor = (tier) => { const s = tierSettings(tier, { model, effort }); return s ? plannerArgs(s) : null; };
   return {
     id: 'claude-planner',
     args,
+    routing,
+    /** Modelo/esforço SOLICITADOS pela camada (null = padrão da CLI); null se o roteamento está desligado ou a camada não existe. */
+    describeTier: (tier) => { const s = routing === 'on' ? tierSettings(tier, { model, effort }) : null; return s ? { tier, model: s.model ?? null, effort: s.effort ?? null } : null; },
     busy: () => runner.isBusy(),
-    async decide({ prompt, cwd, onUsage }) {
+    async decide({ prompt, cwd, onUsage, tier }) {
+      let callArgs; // undefined = argumentos do runner (comportamento de sempre)
+      if (routing === 'on' && tier !== undefined) { callArgs = argsFor(tier); if (!callArgs) return { error: `Camada do Planner desconhecida: ${String(tier).slice(0, 40)}` }; }
       let handle;
-      try { handle = runner.start({ missionId: 'planner', taskId: 'planner', cwd, prompt, onLine: () => {}, onUsage }); } catch (e) { return { error: e.message }; }
+      try { handle = runner.start({ missionId: 'planner', taskId: 'planner', cwd, prompt, onLine: () => {}, onUsage, ...(callArgs ? { args: callArgs } : {}) }); } catch (e) { return { error: e.message }; }
       const r = await handle.done;
       // `metrics` (aditivo): tokens/modelos/limite reportados pela CLI (ver executor/stream.js); também nas falhas, que consomem tokens.
       if (r.status === 'completed' && r.result?.text) return { text: r.result.text, usage: { costUsd: r.result.costUsd, turns: r.result.turns, metrics: r.usage } };

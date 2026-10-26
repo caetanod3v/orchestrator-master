@@ -193,7 +193,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
   ].filter((x) => x !== '').join('\n');
 }
 
-export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace }) {
+export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null }) {
   const loops = new Map();
   let starting = null; // reserva síncrona (missionId) enquanto start() aguarda o probe
   const mission = (id) => find(db.missions, id);
@@ -237,16 +237,16 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
 
   // Métricas do Planner (SSE `usage`): atualização provisória durante a chamada e, ao fim, UM registro por chamada em cycle.plannerUsage
   // (lista limitada, sem agregação nesta fase; um planner sem métricas não gera nada). Acessórias: nunca interrompem o ciclo.
-  const plannerUsageLive = (m, call, snap) => {
-    try { const rec = usageRecord(snap, { ended: false, at: store.now() }); if (rec) bus.emit('usage', usageEvent('planner', { missionId: m.id, cycleId: m.cycle.id ?? null, call }, rec)); } catch { /* acessório */ }
+  const plannerUsageLive = (m, call, snap, route) => {
+    try { const rec = usageRecord(snap, { ended: false, at: store.now() }); if (rec) bus.emit('usage', usageEvent('planner', { missionId: m.id, cycleId: m.cycle.id ?? null, call, ...(route ? { route } : {}) }, rec)); } catch { /* acessório */ }
   };
-  const recordPlannerUsage = (m, call, snap) => {
+  const recordPlannerUsage = (m, call, snap, route) => {
     try {
       const rec = usageRecord(snap, { ended: true, at: store.now() });
       if (!rec) return;
       const c = m.cycle;
-      c.plannerUsage = [...(c.plannerUsage || []), { call, ...rec }].slice(-100);
-      store.saveSoon(); bus.emit('usage', usageEvent('planner', { missionId: m.id, cycleId: c.id ?? null, call }, rec));
+      c.plannerUsage = [...(c.plannerUsage || []), { call, ...rec, ...(route ? { route } : {}) }].slice(-100); // route: aditivo (só com o roteamento ligado)
+      store.saveSoon(); bus.emit('usage', usageEvent('planner', { missionId: m.id, cycleId: c.id ?? null, call, ...(route ? { route } : {}) }, rec));
     } catch { /* acessório */ }
   };
 
@@ -260,8 +260,13 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       c.plannerCalls++;
       const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing: listFiles(ws.path), cycle: c, feedback });
       const call = c.plannerCalls;
-      const res = await planner.decide({ prompt, cwd: ws.path, onUsage: (snap) => plannerUsageLive(m, call, snap) });
-      recordPlannerUsage(m, call, res.usage?.metrics); // o consumo existiu mesmo se a chamada foi cancelada ou falhou
+      // Roteamento (incremento A): só REGISTRA a rota; a escolha é fixa (camada padrão). Sem roteador, nada muda (nem a chamada a decide). Acessório: nunca interrompe o ciclo.
+      let pick = null;
+      try { pick = router?.pick({ mission: m, cycle: c, workspace: ws }) ?? null; } catch { /* acessório */ }
+      const described = pick ? planner.describeTier?.(pick.tier) : null;
+      const route = pick ? { tier: pick.tier, model: described?.model ?? null, effort: described?.effort ?? null, reason: pick.reason, signals: pick.signals ?? {} } : null;
+      const res = await planner.decide({ prompt, cwd: ws.path, onUsage: (snap) => plannerUsageLive(m, call, snap, route), ...(pick ? { tier: pick.tier } : {}) });
+      recordPlannerUsage(m, call, res.usage?.metrics, route); // o consumo existiu mesmo se a chamada foi cancelada ou falhou
       if (c.cancelRequested) return { cancelled: true };
       if (res.error) return { error: res.error };
       const v = validateDecision(res.text);

@@ -63,10 +63,14 @@ export function createExecutor({ command = 'claude', prefixArgs = [], args = CLA
 
   /**
    * Inicia a execução (síncrono: o lock é tomado aqui). Lança se já houver execução ativa.
+   * `args` (opcional, só o Planner passa: modelo/esforço por chamada) substitui os argumentos do runner SÓ nesta chamada; o lock, o timeout, o cancelamento
+   * e a recuperação de órfãos são os mesmos. Sem `args`, nada muda.
    * `usage` (aditivo) = métricas reportadas pela CLI: { final (evento result), live (mensagens distintas, provisório), rateLimit }; cada parte é null se a CLI não a emitiu.
    * @returns {{pid:number, done:Promise<{status:'completed'|'failed'|'interrupted', exitCode:number|null, error:string|null, result:object|null, usage:{final:object|null, live:object|null, rateLimit:object|null}, spawnFailed:boolean}>}}
    */
-  function start({ missionId, taskId, cwd, prompt, onLine, onUsage }) {
+  function start({ missionId, taskId, cwd, prompt, onLine, onUsage, args: callArgs }) {
+    // Validado ANTES do lock e de qualquer estado do runner: lista não vazia de textos sem byte nulo (um `\0` faria o spawn lançar depois de `active = run`).
+    if (callArgs !== undefined && (!Array.isArray(callArgs) || callArgs.length === 0 || !callArgs.every((a) => typeof a === 'string' && !a.includes('\0')))) throw new TypeError('args deve ser uma lista não vazia de textos sem byte nulo.');
     if (active || liveOrphans()) { const e = new Error('Outra execução está em andamento.'); e.code = 'BUSY'; throw e; }
     const run = { missionId, taskId, startedAt: new Date().toISOString(), stopping: false, timedOut: false, child: null, finished: null };
     active = run;
@@ -76,7 +80,7 @@ export function createExecutor({ command = 'claude', prefixArgs = [], args = CLA
     const done = new Promise((r) => { resolveDone = r; });
     run.finished = done;
 
-    const child = spawn(command, [...prefixArgs, ...args], { cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
+    const child = spawn(command, [...prefixArgs, ...(callArgs ?? args)], { cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: process.env });
     run.child = child;
     const timer = setTimeout(() => { run.timedOut = true; killTree(child); }, timeoutMs);
 
