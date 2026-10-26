@@ -3,8 +3,8 @@ import { useStore } from '../store.jsx';
 import { Status, DemoTag } from './ui.jsx';
 
 const NAV = [
-  ['cockpit', 'Neural Core'], ['missions', 'Missions'], ['agents', 'Agents'],
-  ['workspaces', 'Workspaces'], ['activity', 'Activity'], ['settings', 'Settings'],
+  ['cockpit', 'Cockpit'], ['missions', 'Missões'], ['agents', 'Agentes'],
+  ['workspaces', 'Espaços de trabalho'], ['activity', 'Atividade'], ['settings', 'Configurações'],
 ];
 
 export default function Sidebar({ page }) {
@@ -13,12 +13,12 @@ export default function Sidebar({ page }) {
     <aside className="sidebar">
       <div className="brand">
         <span className="logo">▍&gt;_</span>
-        <div><b>AI Dev</b><br /><b>Orchestrator</b><small>v0.1 · local</small></div>
+        <div><b>AI Dev</b> <b>Orchestrator</b><small>v0.1 · local</small></div>
       </div>
       <nav>
         {NAV.map(([id, label]) => (
-          <a key={id} href={`#/${id}`} className={page === id ? 'active' : ''}>
-            <span className="idx">{NAV.findIndex((n) => n[0] === id) + 1}</span>{label}
+          <a key={id} href={`#/${id}`} className={page === id ? 'active' : ''} aria-current={page === id ? 'page' : undefined}>
+            <span className="idx" aria-hidden="true" />{label}
           </a>
         ))}
       </nav>

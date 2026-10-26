@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { Progress, DemoTag, Empty, Btn, fmtTime } from '../components/ui.jsx';
+import { Progress, DemoTag, Empty, Btn, fmtTime, statusLabel, typeLabel } from '../components/ui.jsx';
 import { AgentCard, TaskQueue, Terminal, ReviewPanel } from '../components/Widgets.jsx';
 import NeuralCore, { reactionFor, usePrefersReduced } from '../components/NeuralCore.jsx';
 import CyclePanel from '../components/CyclePanel.jsx';
@@ -15,7 +15,7 @@ const LINKS = [
   ['core', 'planner'], ['core', 'executor'], ['core', 'gate'], ['core', 'workspace'], ['core', 'queue'],
   ['planner', 'gate'], ['gate', 'executor'], ['executor', 'workspace'],
 ];
-const LABEL = { planner: 'Planner', executor: 'Executor', gate: 'Aprovação humana', queue: 'Fila de tarefas', workspace: 'Workspace' };
+const LABEL = { planner: 'Planner', executor: 'Executor', gate: 'Aprovação humana', queue: 'Fila de tarefas', workspace: 'Espaço de trabalho' };
 const KIND = { planner: 'agent', executor: 'agent', gate: 'gate', queue: 'res', workspace: 'res' };
 const STATE_LABEL = {
   active: 'ativo', idle: 'ocioso', live: 'disponível', awaiting: 'aguardando aprovação',
@@ -66,7 +66,7 @@ function Events({ items, empty }) {
   return (
     <ul className="events">
       {items.map((a) => (
-        <li key={a.id}><span className="dim">{fmtTime(a.at).split(' ')[1]}</span> <span className={`type t-${a.type}`}>{a.type}</span> {a.message}</li>
+        <li key={a.id}><span className="dim">{fmtTime(a.at).split(' ')[1]}</span> <span className={`type t-${a.type}`}>{typeLabel(a.type)}</span> {a.message}</li>
       ))}
     </ul>
   );
@@ -147,7 +147,7 @@ export default function Cockpit() {
   const lines = {
     planner: planner?.detail, executor: execBusy ? `executando: ${runningTask?.title ?? '…'}` : executor?.available ? `Claude Code ${executor.version?.split(' ')[0] ?? ''}` : 'CLI não detectada',
     gate: awaiting > 0 ? `${awaiting} pendente${awaiting > 1 ? 's' : ''}` : 'sem pendências',
-    queue: `${state?.counts.pending ?? 0} pendentes`, workspace: ws ? ws.name : 'nenhum ativo',
+    queue: `${state?.counts.pending ?? 0} ${state?.counts.pending === 1 ? 'pendente' : 'pendentes'}`, workspace: ws ? ws.name : 'nenhum ativo',
   };
 
   // Tokens desta missão por agente (/api/state.usage, já deduplicado pelo servidor); só os nós dos agentes mostram.
@@ -184,7 +184,7 @@ export default function Cockpit() {
 
   const closing = !sel && panel;
   const shifted = !!panel && panel !== 'queue' && !closing;
-  const closeBtn = <button type="button" className="btn" onClick={close} aria-label="Fechar painel">Esc ✕</button>;
+  const closeBtn = <button type="button" className="btn" onClick={close} aria-label="Esc: fechar painel">Esc ✕</button>;
 
   return (
     <div className={`stage${shifted ? ' panel-open' : ''}`}>
@@ -193,7 +193,7 @@ export default function Cockpit() {
       <div className="hud tl">
         <div className="k">missão {mission?.demo && <DemoTag />}</div>
         <div className="v">{mission ? mission.title : <>nenhuma — <a href="#/missions?new">criar</a></>}</div>
-        {mission?.cycle && <><div className="k">ciclo</div><div className="v">{mission.cycle.status} · rodada {mission.cycle.rounds.length}/{mission.cycle.maxIterations}</div></>}
+        {mission?.cycle && <><div className="k">ciclo</div><div className="v">{statusLabel(mission.cycle.status, true)} · rodada {mission.cycle.rounds.length}/{mission.cycle.maxIterations}</div></>}
         <div className="k">tarefa</div>
         <div className="v">{current ? current.title : '—'}</div>
         {mission && mission.tasks.length > 0 && <div className="mini"><Progress done={done} total={mission.tasks.length} /><span className="dim small">{done}/{mission.tasks.length}</span></div>}
@@ -201,7 +201,7 @@ export default function Cockpit() {
       <div className="hud tr">
         {prefersReduced && <button type="button" className="btn motion" onClick={toggleForce} aria-pressed={force}>{force ? 'Animação forçada · voltar à preferência do sistema' : 'Movimento reduzido pelo sistema · animar mesmo assim'}</button>}
         {awaiting > 0
-          ? <button className="alert" onClick={() => choose('gate')}>● {awaiting} aprovação pendente — revisar</button>
+          ? <button className="alert" onClick={() => choose('gate')}>● {awaiting} {awaiting === 1 ? 'aprovação pendente' : 'aprovações pendentes'} — revisar</button>
           : <span className="dim small">nenhuma aprovação pendente</span>}
       </div>
       <div className="hud bl">
@@ -228,8 +228,8 @@ export default function Cockpit() {
             <p>{planner.role}</p>
             <Row k="disponibilidade">{planner.availability === 'connected' ? 'conectado (Claude Code, sem ferramentas)' : 'indisponível'}</Row>
             <Row k="planejando agora">{planner.status === 'running' ? 'sim' : 'não'}</Row>
-            <Row k="ciclo desta missão">{mission?.cycle ? `${mission.cycle.status} · rodada ${mission.cycle.rounds.length}/${mission.cycle.maxIterations}` : 'nenhum'}</Row>
-            <p className="dim small">O Planner só devolve uma decisão (continue, complete ou blocked), validada pelo servidor. Não executa nada nem altera permissões.</p>
+            <Row k="ciclo desta missão">{mission?.cycle ? `${statusLabel(mission.cycle.status, true)} · rodada ${mission.cycle.rounds.length}/${mission.cycle.maxIterations}` : 'nenhum'}</Row>
+            <p className="dim small">O Planner só devolve uma decisão (<span className="mono">continue</span>, <span className="mono">complete</span> ou <span className="mono">blocked</span>), validada pelo servidor. Não executa nada nem altera permissões.</p>
             {mission && !mission.demo && <CyclePanel mission={mission} />}
             {mission?.demo && <p className="dim small">Missão demonstrativa: o ciclo real está desabilitado.</p>}
           </>}
@@ -237,7 +237,7 @@ export default function Cockpit() {
           {panel === 'executor' && executor && <>
             <p>{executor.role}</p>
             <Row k="CLI Claude Code">{executor.available ? `detectada (${executor.version})` : 'não detectada no PATH'}</Row>
-            <Row k="integração">{executor.available ? 'conectada: executa só tarefas autorizadas por humano' : 'indisponível'}</Row>
+            <Row k="integração">{executor.available ? 'conectada: executa uma tarefa por vez, autorizada por um humano (manualmente ou ao iniciar o ciclo autônomo)' : 'indisponível'}</Row>
             <Row k="execução ativa">{execBusy ? 'sim' : 'não'}</Row>
             {execBusy && <Row k="tarefa em execução">{runningTask?.title ?? '…'}</Row>}
             <Row k="permissões">leitura e edição de arquivos; sem shell nem rede; pedidos extras são negados</Row>
@@ -247,11 +247,11 @@ export default function Cockpit() {
           </>}
 
           {panel === 'gate' && <>
-            <p className="dim small">Portão que exige decisão humana antes de cada tarefa. Não é um agente.</p>
+            <p className="dim small">Portão de decisão humana das tarefas manuais: autorizar a execução e revisar o resultado. Tarefas do ciclo autônomo não passam por ele (o humano inicia o ciclo). Não é um agente.</p>
             {mission && mission.tasks.length > 1 && (
               <label className="small dim">Tarefa
                 <select value={taskId ?? ''} onChange={(e) => setTaskId(e.target.value)}>
-                  {mission.tasks.map((t, i) => <option key={t.id} value={t.id}>{String(i + 1).padStart(2, '0')} · {t.title} ({t.status})</option>)}
+                  {mission.tasks.map((t, i) => <option key={t.id} value={t.id}>{String(i + 1).padStart(2, '0')} · {t.title} ({statusLabel(t.status)})</option>)}
                 </select>
               </label>
             )}
@@ -262,10 +262,10 @@ export default function Cockpit() {
             {ws ? <>
               <Row k="nome">{ws.name}</Row>
               <div className="mono small path">{ws.path}</div>
-              <Row k="Git">{!git ? 'consultando…' : git.error ? <span className="s-failed">{git.error}</span> : !git.isRepo ? 'não é repositório Git' : `${git.branch} · ${git.dirty ? `${git.changeCount} alterações` : 'limpo'}`}</Row>
+              <Row k="Git">{!git ? 'consultando…' : git.error ? <span className="s-failed">{git.error}</span> : !git.isRepo ? 'não é repositório Git' : `${git.branch} · ${git.dirty ? `${git.changeCount} ${git.changeCount === 1 ? 'alteração' : 'alterações'}` : 'limpo'}`}</Row>
               <Row k="package.json">{ws.hasPackageJson ? 'sim' : 'não'}</Row>
-            </> : <p className="dim">Nenhum workspace ativo.</p>}
-            <p><a href="#/workspaces">Gerenciar workspaces →</a></p>
+            </> : <p className="dim">Nenhum espaço de trabalho ativo.</p>}
+            <p><a href="#/workspaces">Gerenciar espaços de trabalho →</a></p>
           </>}
 
           <div className="k sec">atividades</div>

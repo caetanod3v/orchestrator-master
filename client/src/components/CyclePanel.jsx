@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { Btn, Status } from './ui.jsx';
+import { Btn, Status, statusLabel, VERIFICATION_LABEL, DECISION_LABEL } from './ui.jsx';
 
 const CODE = {
   planner_blocked: 'O Planner pediu intervenção humana', planner_invalid: 'Resposta do Planner inválida', planner_error: 'Falha do Planner',
@@ -25,14 +25,14 @@ function Round({ r }) {
         <p className="dim">{r.plan.instructions}</p>
         <ul className="plain">{r.plan.acceptance.map((a) => <li key={a}>{a}</li>)}</ul>
         {rep ? <>
-          <div className="k">relatório do Executor ({rep.status})</div>
+          <div className="k">relatório do Executor ({rep.status === 'success' ? 'sucesso' : statusLabel(rep.status, true)})</div>
           <p>{rep.summary || <span className="dim">sem resumo</span>}</p>
           <div className="dim">arquivos: {rep.filesKnown ? (rep.filesChanged.map((f) => f.path).join(', ') || 'nenhum') : 'desconhecido (sem Git)'}</div>
           {rep.verifications?.length > 0 && <>
             <div className="k">verificações reais (executadas pelo orquestrador)</div>
             {rep.verifications.map((v) => (
               <div key={v.id} className={v.status === 'pass' ? 's-completed' : 's-failed'}>
-                {v.command}: <b>{v.status}</b>{v.exitCode != null && ` · código ${v.exitCode}`} · {(v.durationMs / 1000).toFixed(1)} s{v.required && ' · obrigatória'}{v.reason && ` · ${v.reason}`}
+                {v.command}: <b>{VERIFICATION_LABEL[v.status] || v.status}</b>{v.exitCode != null && ` · código ${v.exitCode}`} · {(v.durationMs / 1000).toFixed(1)} s{v.required && ' · obrigatória'}{v.reason && ` · ${v.reason}`}
                 {v.status !== 'pass' && v.outputTail && <pre className="vout">{v.outputTail.slice(-600)}</pre>}
               </div>
             ))}
@@ -43,7 +43,7 @@ function Round({ r }) {
           {rep.errors.map((e, i) => <div key={i} className="s-failed">{e}</div>)}
           {rep.blockers.map((e, i) => <div key={i} className="s-blocked">⚠ {e}</div>)}
         </> : <div className="dim">sem relatório ainda</div>}
-        {r.decision && <><div className="k">decisão seguinte</div><p><b>{r.decision.decision}</b>: {r.decision.rationale}</p></>}
+        {r.decision && <><div className="k">decisão seguinte</div><p><b>{DECISION_LABEL[r.decision.decision] || r.decision.decision}</b>: {r.decision.rationale}</p></>}
       </div>
     </details>
   );
@@ -59,7 +59,7 @@ export default function CyclePanel({ mission }) {
   const active = !!c && ['planning', 'running'].includes(c.status);
   const blocked = c?.status === 'blocked';
   const why = mission.demo ? 'Missão demonstrativa: ciclo real desabilitado.'
-    : !mission.workspaceId ? 'A missão não tem workspace.'
+    : !mission.workspaceId ? 'A missão não tem espaço de trabalho.'
     : state?.executor.available === false ? 'Claude Code não encontrado.'
     : state?.executor.busy ? 'Há uma execução em andamento.' : null;
 
@@ -70,7 +70,7 @@ export default function CyclePanel({ mission }) {
 
   return (
     <div className="cycle">
-      <div className="row"><b className="mono">Ciclo autônomo</b>{c && <Status value={c.status} />}</div>
+      <div className="row"><b className="sub">Ciclo autônomo</b>{c && <Status value={c.status} masc />}</div>
       {c && <div className="dim small">rodada {c.rounds.length} de no máximo {c.maxIterations} · consultas ao Planner: {c.plannerCalls}</div>}
       {blocked && <p className="s-blocked small">⚠ {CODE[c.blockedCode] || c.blockedCode}: {c.blockedReason}</p>}
       {c?.status === 'completed' && <div className="small"><p><b className="s-completed">Concluído</b> <span className="dim">({c.assurance === 'verified' ? 'com verificações reais obrigatórias aprovadas' : 'sem verificações reais obrigatórias: apenas evidências autodeclaradas'})</span>. {c.finalSummary}</p><ul className="plain">{(c.evidence || []).map((e) => <li key={e}>{e}</li>)}</ul></div>}
@@ -79,7 +79,7 @@ export default function CyclePanel({ mission }) {
 
       {(!c || ['completed', 'cancelled', 'limit_reached'].includes(c.status)) && (
         <div className="form">
-          <p className="dim small">O Planner decide as tarefas e o Executor as realiza sem aprovação individual. Só lê e edita arquivos no workspace; qualquer permissão extra é negada e pausa o ciclo.</p>
+          <p className="dim small">O Planner decide as tarefas e o Executor as realiza sem aprovação individual. Só lê e edita arquivos no espaço de trabalho; qualquer permissão extra é negada e pausa o ciclo.</p>
           <label>Limite de rodadas (1 a {hard})
             <input type="number" min="1" max={hard} value={max} onChange={(e) => setMax(Number(e.target.value))} />
           </label>

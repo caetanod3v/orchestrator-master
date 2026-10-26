@@ -5,7 +5,7 @@ export function AgentCard({ agent, compact }) {
   return (
     <div className="agent">
       <div className="row wrap">
-        <b className="mono">{agent.name}</b>
+        <b className="agent-name">{agent.name}</b>
         <Status value={agent.status} />
       </div>
       {!compact && <p className="dim">{agent.role}</p>}
@@ -16,7 +16,7 @@ export function AgentCard({ agent, compact }) {
 
 export function TaskQueue({ mission, selectedId, onSelect }) {
   const tasks = mission.tasks;
-  if (!tasks.length) return <Empty>Sem tarefas. O planejador ainda não existe; adicione tarefas manualmente em Missions.</Empty>;
+  if (!tasks.length) return <Empty>Sem tarefas. Adicione tarefas manualmente em Missões ou inicie um ciclo autônomo, em que o Planner decide as tarefas.</Empty>;
   return (
     <ol className="queue">
       {tasks.map((t, i) => {
@@ -25,7 +25,9 @@ export function TaskQueue({ mission, selectedId, onSelect }) {
           <li key={t.id} className={selectedId === t.id ? 'sel' : ''} onClick={() => onSelect?.(t.id)}>
             <span className="n">{String(i + 1).padStart(2, '0')}</span>
             <div className="grow">
-              <div className="t">{t.title}</div>
+              <div className="t">{onSelect
+                ? <button type="button" className="rowlink" aria-current={selectedId === t.id ? 'true' : undefined}>{t.title}</button> /* o clique sobe até o <li> */
+                : t.title}</div>
               {(t.dependsOn.length > 0 || t.authorized) && (
                 <div className="dim small">
                   {t.dependsOn.length > 0 && <>depende de: {t.dependsOn.map((d) => String(tasks.findIndex((x) => x.id === d) + 1).padStart(2, '0')).join(', ')}{blocked && ' · bloqueada'}</>}
@@ -49,7 +51,7 @@ export function Terminal({ mission, task }) {
   return (
     <div className="terminal">
       <div className="term-head">
-        <span className="mono">{task ? `task: ${task.title}` : 'sem tarefa selecionada'}</span>
+        <span className="mono">{task ? `tarefa: ${task.title}` : 'sem tarefa selecionada'}</span>
         {mission.demo && <DemoTag title="Logs fictícios de demonstração" />}
         {task?.status === 'running' && <span className="s-running small">● ao vivo</span>}
       </div>
@@ -62,7 +64,7 @@ export function Terminal({ mission, task }) {
   );
 }
 
-const usageText = (u) => [u.costUsd != null && `US$ ${u.costUsd.toFixed(4)}`, u.turns != null && `${u.turns} turnos`, u.durationMs != null && `${(u.durationMs / 1000).toFixed(1)} s`].filter(Boolean).join(' · ');
+const usageText = (u) => [u.costUsd != null && `US$ ${u.costUsd.toFixed(4)}`, u.turns != null && `${u.turns} ${u.turns === 1 ? 'turno' : 'turnos'}`, u.durationMs != null && `${(u.durationMs / 1000).toFixed(1)} s`].filter(Boolean).join(' · ');
 
 /**
  * Revisão e controle da tarefa. As ações exibidas dependem do estado real da tarefa;
@@ -82,7 +84,7 @@ export function ReviewPanel({ mission, task, actions, busy }) {
       <p>{task.report || <span className="dim">Sem relatório (a tarefa não foi executada).</span>}</p>
       {task.usage && <p className="dim small">uso real desta execução: {usageText(task.usage)}</p>}
       <div className="mono small dim">alterações</div>
-      {task.files.length === 0 ? <p className="dim">{task.gitRepo === false ? 'Workspace sem Git: alterações não verificáveis.' : 'Nenhuma alteração registrada.'}</p> : (
+      {task.files.length === 0 ? <p className="dim">{task.gitRepo === false ? 'Espaço de trabalho sem Git: alterações não verificáveis.' : 'Nenhuma alteração registrada.'}</p> : (
         <ul className="files">
           {task.files.map((f) => (
             <li key={f.path}>

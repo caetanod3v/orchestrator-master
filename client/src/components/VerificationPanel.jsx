@@ -26,9 +26,9 @@ export default function VerificationPanel({ workspace }) {
   if (!info) return <div className="dim small">Lendo package.json…</div>;
   return (
     <div className="cycle" data-testid="verification-panel">
-      <div className="row"><b className="mono">Verificações reais</b><span className="dim small">{workspace.name}</span></div>
+      <div className="row"><b className="sub">Verificações reais</b><span className="dim small">{workspace.name}</span></div>
       <p className="dim small">
-        O orquestrador roda <span className="mono">npm run &lt;script&gt;</span> neste workspace depois de cada rodada do ciclo e registra comando, código de saída e duração.
+        O orquestrador roda <span className="mono">npm run &lt;script&gt;</span> neste espaço de trabalho depois de cada rodada bem-sucedida do ciclo e registra comando, código de saída e duração.
         ⚠ Isso executa código do projeto, inclusive arquivos que o Executor editou; aprove somente scripts em que você confia.
         O texto do script fica fixado: se o <span className="mono">package.json</span> mudar, a verificação não roda até você aprovar de novo.
       </p>

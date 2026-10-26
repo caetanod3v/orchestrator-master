@@ -11,8 +11,9 @@ export default function Agents() {
         {agents.map((a) => <AgentCard key={a.id} agent={a} />)}
       </Panel>
       <Panel title="Arquitetura">
-        <p className="mono small">usuário → missão → <b>planner</b> → tarefas → aprovação humana → <b>executor</b> → relatório → planner → …</p>
-        <p className="dim">Planejador e executor são responsabilidades separadas. A camada de execução (<span className="mono">server/executor</span>) define o contrato e já detecta o Claude Code, mas não executa nada nesta fase. Nenhum agente está ativo.</p>
+        <p className="mono small flow">manual: usuário → missão → tarefa → autorização humana → <b>Executor</b> → revisão humana</p>
+        <p className="mono small flow">ciclo autônomo: usuário inicia o ciclo → <b>Planner</b> → <b>Executor</b> → verificações reais (se aprovadas) → relatório → Planner → …</p>
+        <p className="dim">Planner e Executor são responsabilidades separadas e usam o Claude Code instalado: o Planner sem ferramentas (só texto, validado pelo servidor) e o Executor com leitura e edição de arquivos no espaço de trabalho. O estado de cada agente vem do servidor.</p>
       </Panel>
     </div>
   );
