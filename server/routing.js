@@ -24,6 +24,21 @@
 // 2) ESCALONAMENTO POR REJEIÇÃO: se uma resposta do Planner for rejeitada pelas validações existentes e a chamada usou `lite`, a tentativa seguinte
 //    (a que já existe em askPlanner; nenhuma chamada extra) usa `standard`. No máximo uma vez por ciclo; depois, `standard` até o fim do ciclo.
 //    Se a rota já era `standard`, nada muda. O estado fica em cycle.routing (persistido: sobrevive a bloqueio, retomada e reinício).
+//
+// ---- Incremento C ----------------------------------------------------------------------------------------------------------------------------
+// 3) ESCALONAMENTO POR SINAL OBSERVÁVEL (escalationSignal, pura; só dados que o ciclo já persiste; nenhuma chamada extra). Vale só para `lite` ainda
+//    não escalonado, na 1ª tentativa de uma consulta (a rejeição segue a regra 2). Mesmo estado, mesmo teto (um escalonamento por ciclo, sem downgrade).
+//    Sinais usados:
+//      sem_progresso   o ciclo foi bloqueado por `no_progress` (2 rodadas seguidas sem progresso, critério do próprio backend) e as 2 últimas rodadas
+//                      TERMINARAM com sucesso (não foram falhas do Executor). Os contadores zeram na retomada; o bloqueio persistido é a evidência.
+//      limite_rodadas  perto do limite (>= ESCALATION.minRounds rodadas e resta no máximo ESCALATION.roundsLeft) E a última rodada terminou com sucesso mas SEM progresso
+//                      (cycle.consecutiveNoProgress >= 1: o contador que o ciclo já mantém). Só o tamanho do ciclo não basta: com progresso consistente fica em lite.
+//    Sinais DELIBERADAMENTE fora:
+//      falhas do Executor  (executor_failures, falha isolada): o código não distingue falha transitória (CLI, rede, permissão) de plano ruim; escalonar o
+//                          Planner por isso seria especulação. Falha isolada não muda a rota.
+//      repetição de tarefa já é rejeitada por semanticProblem e, portanto, escalona pela regra 2 (não há sinal novo a criar).
+//      bloqueio pedido pelo Planner (`planner_blocked`) ou verificação reprovada: decisões/resultados corretos, não evidência de insuficiência.
+//      orçamento de consultas (plannerCalls): cada consulta repetida já é uma rejeição, tratada pela regra 2.
 
 export const TIERS = Object.freeze({ lite: Object.freeze({ model: 'claude-haiku-5-5', effort: 'low' }) });
 export const TIER_NAMES = Object.freeze(['lite', 'standard']);
@@ -116,6 +131,25 @@ export function pickInitialTier(ctx) {
 
 const clip = (s, n) => String(s ?? '').slice(0, n);
 
+/** Limites do sinal `limite_rodadas` (incluídos). */
+export const ESCALATION = Object.freeze({ minRounds: 2, roundsLeft: 1 });
+
+/**
+ * Sinal observável de que a camada `lite` não está conduzindo o ciclo (puro; lê só o ciclo recebido). null = nenhum sinal.
+ * @returns {{code:'sem_progresso'|'limite_rodadas', why:string}|null}
+ */
+export function escalationSignal(cycle) {
+  const rounds = Array.isArray(cycle?.rounds) ? cycle.rounds : [], last = Array.isArray(cycle?.blocks) ? cycle.blocks.at(-1) : null;
+  if (last?.code === 'no_progress' && rounds.length >= 2 && rounds.slice(-2).every((r) => r?.report?.status === 'success')) {
+    return { code: 'sem_progresso', why: 'as 2 últimas rodadas foram bem-sucedidas, mas sem progresso (o ciclo foi bloqueado por falta de progresso)' };
+  }
+  const max = cycle?.maxIterations;
+  if (Number.isInteger(max) && rounds.length >= ESCALATION.minRounds && rounds.length >= max - ESCALATION.roundsLeft && cycle?.consecutiveNoProgress >= 1 && rounds.at(-1)?.report?.status === 'success') {
+    return { code: 'limite_rodadas', why: `${rounds.length} rodadas sem concluir, a última sem progresso, e o limite é ${max}` };
+  }
+  return null;
+}
+
 /**
  * Roteador: seleção inicial (1ª chamada do ciclo) e escalonamento por rejeição. Puro: devolve o novo estado em `state` e quem chama o guarda
  * em cycle.routing (a máquina de estados lê só o `cycle.routing` recebido).
@@ -136,6 +170,16 @@ export function createRouter() {
           signals: { from: 'lite', trigger: 'rejeição', rejection: clip(rejection, 160) },
           state: { ...st, tier: 'standard', escalated: true, escalatedAtCall: call },
         };
+      }
+      if (st.tier === 'lite' && !st.escalated) {
+        const sig = escalationSignal(cycle);
+        if (sig) {
+          return {
+            tier: 'standard', reason: `escalonado de lite para standard: ${sig.why}`,
+            signals: { from: 'lite', trigger: sig.code },
+            state: { ...st, tier: 'standard', escalated: true, escalatedAtCall: call, trigger: sig.code },
+          };
+        }
       }
       const why = st.escalated ? 'já escalonado neste ciclo (no máximo um escalonamento)' : st.tier === 'standard' && retryAfterRejection ? 'já era a camada inicial (não há para onde escalonar)' : 'nenhuma rejeição a tratar';
       return { tier: st.tier, reason: `mantido ${st.tier}: ${why}`, signals: {}, state: st };

@@ -271,7 +271,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
           const before = c.routing; c.routing = pick.state;
           try {
             if (!before) note(m, 'cycle', `Planner: camada inicial ${pick.tier} (${clip(pick.reason, 220)})`, 'planner');
-            else if (pick.state.escalated && !before.escalated) note(m, 'cycle', `Planner escalonado de lite para standard: resposta anterior rejeitada (${clip(problem, 160)})`, 'planner');
+            else if (pick.state.escalated && !before.escalated) note(m, 'cycle', `Planner escalonado de lite para standard: ${pick.state.trigger ? clip(pick.reason.replace(/^escalonado de lite para standard: /, ''), 220) : `resposta anterior rejeitada (${clip(problem, 160)})`}`, 'planner');
           } catch { /* o registro na atividade é só informativo */ }
         }
       } catch { pick = null; }
