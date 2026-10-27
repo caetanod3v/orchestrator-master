@@ -258,14 +258,33 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (c.plannerCalls >= (c.maxIterations + 1) * 3) return { overBudget: true };
       if (c.cancelRequested) return { cancelled: true };
       c.plannerCalls++;
-      const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing: listFiles(ws.path), cycle: c, feedback });
+      const listing = listFiles(ws.path);
+      const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback });
       const call = c.plannerCalls;
-      // Roteamento (incremento A): só REGISTRA a rota; a escolha é fixa (camada padrão). Sem roteador, nada muda (nem a chamada a decide). Acessório: nunca interrompe o ciclo.
+      // Roteamento (incrementos A e B): escolhe a camada desta chamada (seleção inicial na 1ª chamada do ciclo; escalonamento na tentativa que segue uma
+      // rejeição) e REGISTRA a rota efetivamente aplicada. Só decide QUEM responde: o número de tentativas e todas as validações abaixo são as de sempre.
+      // Sem roteador, nada muda (nem os argumentos de decide). Acessório: uma falha aqui nunca interrompe o ciclo (a chamada segue sem camada).
       let pick = null;
-      try { pick = router?.pick({ mission: m, cycle: c, workspace: ws }) ?? null; } catch { /* acessório */ }
-      const described = pick ? planner.describeTier?.(pick.tier) : null;
-      const route = pick ? { tier: pick.tier, model: described?.model ?? null, effort: described?.effort ?? null, reason: pick.reason, signals: pick.signals ?? {} } : null;
-      const res = await planner.decide({ prompt, cwd: ws.path, onUsage: (snap) => plannerUsageLive(m, call, snap, route), ...(pick ? { tier: pick.tier } : {}) });
+      try {
+        pick = router?.pick({ mission: m, cycle: c, workspace: ws, listing, retryAfterRejection: attempt > 0, rejection: problem, call }) ?? null;
+        if (pick?.state) {
+          const before = c.routing; c.routing = pick.state;
+          try {
+            if (!before) note(m, 'cycle', `Planner: camada inicial ${pick.tier} (${clip(pick.reason, 220)})`, 'planner');
+            else if (pick.state.escalated && !before.escalated) note(m, 'cycle', `Planner escalonado de lite para standard: resposta anterior rejeitada (${clip(problem, 160)})`, 'planner');
+          } catch { /* o registro na atividade é só informativo */ }
+        }
+      } catch { pick = null; }
+      // Rota aplicada: a que o próprio Planner informa (derivada dos argumentos que ele entrega à CLI); sem essa confirmação, registra-se só o pedido.
+      const mkRoute = (applied) => (pick ? {
+        tier: applied?.tier ?? null, model: applied?.model ?? null, effort: applied?.effort ?? null, ...(applied ? {} : { applied: false }),
+        ...(!applied || applied.tier !== pick.tier ? { requestedTier: pick.tier } : {}), reason: pick.reason, signals: pick.signals ?? {},
+      } : null);
+      let preRoute = null;
+      try { preRoute = mkRoute(pick ? planner.describeTier?.(pick.tier) : null); } catch { preRoute = null; }
+      const res = await planner.decide({ prompt, cwd: ws.path, onUsage: (snap) => plannerUsageLive(m, call, snap, preRoute), ...(pick ? { tier: pick.tier } : {}) });
+      let route = preRoute;
+      try { if (pick && res.route) route = mkRoute(res.route); } catch { route = preRoute; }
       recordPlannerUsage(m, call, res.usage?.metrics, route); // o consumo existiu mesmo se a chamada foi cancelada ou falhou
       if (c.cancelRequested) return { cancelled: true };
       if (res.error) return { error: res.error };

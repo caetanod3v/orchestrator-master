@@ -30,11 +30,12 @@ test('as definições das camadas são imutáveis e geram argumentos válidos da
   assert.deepEqual(plannerArgs(tierSettings('standard', {})), PLANNER_ARGS, 'standard sem configuração = argumentos de sempre');
 });
 
-test('o roteador do incremento A só devolve a camada padrão, com motivo e sinais (nenhuma seleção dinâmica)', () => {
+test('o roteador sem dados suficientes (contexto vazio ou absurdo) cai em standard, com motivo e sinais, sem lançar erro', () => {
   const r = createRouter();
   for (const ctx of [undefined, {}, { mission: { objective: 'x'.repeat(5000) }, cycle: { consecutiveNoProgress: 5, rejections: [1, 2, 3] } }]) {
     const p = r.pick(ctx);
-    assert.equal(p.tier, 'standard'); assert.match(p.reason, /incremento A/); assert.deepEqual(p.signals, {});
+    assert.equal(p.tier, 'standard'); assert.match(p.reason, /^standard: /); assert.ok(Array.isArray(p.signals.failed) && p.signals.failed.length > 0);
+    assert.deepEqual(p.state, { tier: 'standard', escalated: false, initial: { tier: 'standard', reason: p.reason, signals: p.signals } });
   }
 });
 

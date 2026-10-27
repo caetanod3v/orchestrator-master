@@ -58,7 +58,7 @@ test('roteamento DESLIGADO (sem roteador): decide() não recebe `tier` e os regi
   assert.ok(events.length >= 2 && events.every((e) => !('route' in e)), 'eventos SSE sem route');
 });
 
-test('roteamento LIGADO: só é acrescentado `route` (camada, modelo e esforço solicitados, motivo, sinais) a cada chamada', async () => {
+test('roteamento LIGADO: só é acrescentado `route` (camada, modelo e esforço aplicados, motivo, sinais) a cada chamada', async () => {
   const { c, planner, events } = await runCycle([cont('Criar'), done()], { router: createRouter() });
   assert.equal(c.status, 'completed'); assert.equal(c.plannerUsage.length, 2);
   for (const a of planner.calls) assert.equal(a.tier, 'standard');
@@ -66,7 +66,7 @@ test('roteamento LIGADO: só é acrescentado `route` (camada, modelo e esforço 
     assert.deepEqual(Object.keys(e).sort(), [...KEYS, 'route'].sort());
     assert.deepEqual(Object.keys(e.route).sort(), ['effort', 'model', 'reason', 'signals', 'tier']);
     assert.equal(e.route.tier, 'standard'); assert.equal(e.route.model, 'modelo-pedido'); assert.equal(e.route.effort, 'esforco-pedido');
-    assert.match(e.route.reason, /incremento A/); assert.deepEqual(e.route.signals, {});
+    if (e.call === 1) { assert.match(e.route.reason, /^standard: /); assert.ok(e.route.signals.failed.includes('sem_verificacao_obrigatoria'), 'sem verificação obrigatória, a seleção inicial é standard'); } else assert.match(e.route.reason, /^mantido standard/);
   }
   assert.ok(events.some((e) => e.route?.tier === 'standard' && e.ended === true), 'o evento final também leva a rota');
   assert.ok(events.every((e) => e.route?.tier === 'standard'));
@@ -106,10 +106,11 @@ test('registros ANTIGOS (sem `route`) e novos convivem: resumo, validação do b
   assert.equal(JSON.parse(JSON.stringify(m)).cycle.plannerUsage[1].route.tier, 'standard', 'sobrevive à serialização (persistência)');
 });
 
-test('Planner sem describeTier (ou roteador que falha): o ciclo funciona; modelo/esforço ficam null e, se o roteador lança, não há rota nem `tier`', async () => {
+test('Planner sem describeTier (ou roteador que falha): o ciclo funciona; a rota aplicada fica null (applied:false) e, se o roteador lança, não há rota nem `tier`', async () => {
   const semDescribe = await runCycle([cont('Criar'), done()], { router: createRouter(), planner: scripted([cont('Criar'), done()], { tiers: false }) });
   assert.equal(semDescribe.c.status, 'completed');
-  assert.deepEqual(semDescribe.c.plannerUsage.map((e) => [e.route.tier, e.route.model, e.route.effort]), [['standard', null, null], ['standard', null, null]]);
+  assert.deepEqual(semDescribe.c.plannerUsage.map((e) => [e.route.tier, e.route.model, e.route.effort]), [[null, null, null], [null, null, null]]);
+  assert.ok(semDescribe.c.plannerUsage.every((e) => e.route.applied === false && e.route.requestedTier === 'standard'), 'sem confirmação do Planner, registra-se só o pedido (applied:false)');
   const quebrado = await runCycle([cont('Criar'), done()], { router: { pick: () => { throw new Error('falha do roteador'); } } });
   assert.equal(quebrado.c.status, 'completed');
   for (const a of quebrado.planner.calls) assert.ok(!('tier' in a));

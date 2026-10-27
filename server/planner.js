@@ -36,23 +36,32 @@ export function createClaudePlanner({ model, effort, routing = 'off', runner, ru
   runner ??= createExecutor({ args, timeoutMs: 3 * 60 * 1000, ...runnerOptions });
   // Camadas (só com routing 'on'): UM runner, argumentos por chamada. Assim o lock, o cancelamento, o timeout e a recuperação de processos são os de sempre.
   // Com routing 'off', `tier` é ignorado e a chamada é idêntica à de antes.
-  const argsFor = (tier) => { const s = tierSettings(tier, { model, effort }); return s ? plannerArgs(s) : null; };
+  // Resolução ÚNICA: os argumentos entregues ao runner e a rota registrada saem do mesmo objeto (o que se registra é o que foi aplicado).
+  const resolve = (tier) => {
+    if (routing !== 'on') return null;
+    const name = tier === undefined ? 'standard' : tier; // sem camada (undefined) = os argumentos de sempre, que são os da camada padrão; null/outros = camada inválida
+    const s = tierSettings(name, { model, effort });
+    return s ? { tier: name, model: s.model ?? null, effort: s.effort ?? null, args: plannerArgs(s) } : null;
+  };
+  const publicRoute = (r) => (r ? { tier: r.tier, model: r.model, effort: r.effort } : undefined);
   return {
     id: 'claude-planner',
     args,
     routing,
-    /** Modelo/esforço SOLICITADOS pela camada (null = padrão da CLI); null se o roteamento está desligado ou a camada não existe. */
-    describeTier: (tier) => { const s = routing === 'on' ? tierSettings(tier, { model, effort }) : null; return s ? { tier, model: s.model ?? null, effort: s.effort ?? null } : null; },
+    /** Camada, modelo e esforço que SERÃO aplicados (null = padrão da CLI); null se o roteamento está desligado ou a camada não existe. */
+    describeTier: (tier) => publicRoute(resolve(tier)) ?? null,
     busy: () => runner.isBusy(),
     async decide({ prompt, cwd, onUsage, tier }) {
       let callArgs; // undefined = argumentos do runner (comportamento de sempre)
-      if (routing === 'on' && tier !== undefined) { callArgs = argsFor(tier); if (!callArgs) return { error: `Camada do Planner desconhecida: ${String(tier).slice(0, 40)}` }; }
+      const applied = resolve(tier);
+      if (routing === 'on' && tier !== undefined) { if (!applied) return { error: `Camada do Planner desconhecida: ${String(tier).slice(0, 40)}` }; callArgs = applied.args; }
+      const route = publicRoute(applied); // aditivo: só com o roteamento ligado
       let handle;
-      try { handle = runner.start({ missionId: 'planner', taskId: 'planner', cwd, prompt, onLine: () => {}, onUsage, ...(callArgs ? { args: callArgs } : {}) }); } catch (e) { return { error: e.message }; }
+      try { handle = runner.start({ missionId: 'planner', taskId: 'planner', cwd, prompt, onLine: () => {}, onUsage, ...(callArgs ? { args: callArgs } : {}) }); } catch (e) { return { error: e.message, ...(route ? { route } : {}) }; }
       const r = await handle.done;
       // `metrics` (aditivo): tokens/modelos/limite reportados pela CLI (ver executor/stream.js); também nas falhas, que consomem tokens.
-      if (r.status === 'completed' && r.result?.text) return { text: r.result.text, usage: { costUsd: r.result.costUsd, turns: r.result.turns, metrics: r.usage } };
-      return { error: r.error || `Planner terminou com status ${r.status}`, interrupted: r.status === 'interrupted', usage: { metrics: r.usage } };
+      if (r.status === 'completed' && r.result?.text) return { text: r.result.text, usage: { costUsd: r.result.costUsd, turns: r.result.turns, metrics: r.usage }, ...(route ? { route } : {}) };
+      return { error: r.error || `Planner terminou com status ${r.status}`, interrupted: r.status === 'interrupted', usage: { metrics: r.usage }, ...(route ? { route } : {}) };
     },
     cancel: () => runner.stop(),
   };
