@@ -37,7 +37,7 @@ function add(t, e) {
  * `final` SUBSTITUI o `live` da mesma execução (o live nunca é somado junto). Do final usa-se a soma de modelUsage (inclui subagentes)
  * e, campo a campo, `tokens` (agente principal) quando o modelUsage não reportou aquele campo. Sem final, o live entra como provisório (sem custo).
  */
-function entryOf(rec) {
+export function entryOf(rec) {
   if (!isObj(rec)) return null;
   if (isObj(rec.final)) {
     const all = rec.final.tokensAllModels, main = rec.final.tokens, pick = (f) => num(all?.[f]) ?? num(main?.[f]);

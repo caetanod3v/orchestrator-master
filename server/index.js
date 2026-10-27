@@ -12,6 +12,7 @@ import { missionStatus } from './mission-status.js';
 import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle.js';
 import { createClaudePlanner, plannerConfigFromEnv } from './planner.js';
 import { routingFromEnv, createRouter } from './routing.js';
+import { cycleLimitsFromEnv } from './limits.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
 import { acquireInstanceLock } from './instance-lock.js';
@@ -22,6 +23,7 @@ const testDeps = globalThis.__ORCH_TEST_DEPS__ ?? {};
 const claudeCodeExecutor = testDeps.executor ?? realExecutor;
 const routingMode = routingFromEnv(); // ORCH_PLANNER_ROUTING=off|on (padrão off); valor inválido impede o boot, antes de qualquer acesso a dados
 const router = routingMode === 'on' ? createRouter() : null;
+const cycleLimits = cycleLimitsFromEnv(); // ORCH_CYCLE_MAX_PLANNER_CALLS / ORCH_CYCLE_MAX_ESTIMATED_COST_USD (padrão: desativados); valor inválido impede o boot
 const planner = testDeps.planner ?? createClaudePlanner({ ...plannerConfigFromEnv(), routing: routingMode }); // ORCH_PLANNER_MODEL / ORCH_PLANNER_EFFORT (opcionais); valor inválido impede o boot
 const verifier = testDeps.verifier ?? createVerifier();
 const planning = () => planner.busy();
@@ -239,7 +241,7 @@ if (fs.existsSync(dist)) {
 const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor, verifier });
 setupVerification(app, { db, verifier });
 setupWorkspaceRemoval(app, { db });
-setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router });
+setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits });
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));
 app.use((err, req, res, next) => bad(res, err.type === 'entity.parse.failed' ? 'JSON inválido.' : 'Erro interno.', err.status || 500));

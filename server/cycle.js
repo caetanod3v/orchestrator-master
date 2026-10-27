@@ -18,6 +18,7 @@ import { validateDecision, fingerprint, parseExecutorReport } from './cycle-sche
 import { listWorkspace } from './planner.js';
 import { asyncRoute } from './async-route.js';
 import { usageRecord, usageEvent } from './usage.js';
+import { limitProblem } from './limits.js';
 
 export const DEFAULT_MAX_ITERATIONS = 5;
 export const HARD_MAX_ITERATIONS = 10;
@@ -193,7 +194,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
   ].filter((x) => x !== '').join('\n');
 }
 
-export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null }) {
+export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null }) { // limits: incremento D (limites.js); null = sem limites (como antes)
   const loops = new Map();
   let starting = null; // reserva síncrona (missionId) enquanto start() aguarda o probe
   const mission = (id) => find(db.missions, id);
@@ -257,6 +258,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     for (let attempt = 0; attempt < 2; attempt++) {
       if (c.plannerCalls >= (c.maxIterations + 1) * 3) return { overBudget: true };
       if (c.cancelRequested) return { cancelled: true };
+      const lim = limitProblem(limits, m, 'planner'); if (lim) return { limit: lim }; // ANTES de contar a chamada e de iniciar a CLI
       c.plannerCalls++;
       const listing = listFiles(ws.path);
       const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback });
@@ -343,6 +345,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   async function runRound(m, d) {
     const c = m.cycle;
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a rodada.');
+    const lim = limitProblem(limits, m, 'executor'); if (lim) return stop(m, lim.code, lim.reason); // ANTES de criar a rodada e de iniciar o Executor
     const n = c.rounds.length + 1;
     const task = {
       id: store.uid('task'), title: clip(`[Rodada ${n}] ${d.task.title}`, 200), status: 'queued', authorized: true, authorizedBy: 'cycle', auto: true,
@@ -402,6 +405,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       c.status = 'planning'; emit(m);
       const plan = await askPlanner(m);
       if (plan.cancelled || c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
+      if (plan.limit) return stop(m, plan.limit.code, plan.limit.reason);
       if (plan.overBudget) return stop(m, 'planner_calls_limit', 'Limite de consultas ao Planner atingido neste ciclo.');
       if (plan.error) return stop(m, 'planner_error', `O Planner falhou: ${plan.error}`);
       if (plan.invalid) return stop(m, 'planner_invalid', `O Planner não produziu uma decisão válida após nova tentativa: ${plan.invalid}`);
@@ -522,6 +526,8 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     // Orçamento de consultas esgotado: retomar sem ampliar o limite só bloquearia de novo na hora (sem consultar o Planner). Recusa ANTES de
     // qualquer mutação, nota, bloco ou atividade; plannerCalls segue cumulativo (não é zerado).
     if (c.blockedCode === 'planner_calls_limit' && c.plannerCalls >= ((maxIterations ?? c.maxIterations) + 1) * 3) return fail(409, 'O limite de consultas ao Planner deste ciclo foi atingido; aumente o limite de rodadas (maxIterations) para continuar.');
+    // Limites do incremento D: retomar não contorna o controle. Recusa ANTES de qualquer mutação enquanto o próximo passo (consultar o Planner) seria bloqueado de novo.
+    const lim = limitProblem(limits, m, 'planner'); if (lim) return fail(409, `${lim.reason} Aumente o limite (reinicie o servidor com um valor maior) para continuar.`);
     const prev = { ...c, humanNotes: c.humanNotes.length }; // só campos escalares mudam; humanNotes só ganha 1 item no fim
     if (maxIterations !== undefined) c.maxIterations = maxIterations;
     if (text?.trim()) c.humanNotes.push({ at: store.now(), text: text.trim() });
