@@ -19,6 +19,7 @@ import { listWorkspace } from './planner.js';
 import { asyncRoute } from './async-route.js';
 import { usageRecord, usageEvent } from './usage.js';
 import { limitProblem } from './limits.js';
+import { DEFAULT_AGENT } from './agents.js';
 
 export const DEFAULT_MAX_ITERATIONS = 5;
 export const HARD_MAX_ITERATIONS = 10;
@@ -349,9 +350,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const n = c.rounds.length + 1;
     const task = {
       id: store.uid('task'), title: clip(`[Rodada ${n}] ${d.task.title}`, 200), status: 'queued', authorized: true, authorizedBy: 'cycle', auto: true,
-      instructions: d.task.instructions, acceptance: d.task.acceptance, dependsOn: [], report: '', files: [], log: [],
+      instructions: d.task.instructions, acceptance: d.task.acceptance, dependsOn: [], report: '', files: [], log: [], agent: d.task.agent ?? DEFAULT_AGENT,
     };
-    const round = { n, status: 'running', taskId: task.id, fingerprint: fingerprint(d.task), plan: { rationale: d.rationale, ...d.task }, startedAt: store.now(), finishedAt: null, report: null, decision: null };
+    const round = { n, status: 'running', taskId: task.id, fingerprint: fingerprint(d.task), agent: task.agent, plan: { rationale: d.rationale, ...d.task }, startedAt: store.now(), finishedAt: null, report: null, decision: null };
     m.tasks.push(task); c.rounds.push(round); c.status = 'running';
     note(m, 'cycle', `Rodada ${n} planejada: ${d.task.title}`, 'planner'); emit(m);
 

@@ -2,9 +2,11 @@
 // O Planner só pode escolher entre `continue`, `complete` e `blocked`; qualquer chave desconhecida
 // (permissions, command, cwd, authorized, allowTools…) invalida a resposta inteira.
 
+import { isAgent, AGENT_NAMES } from './agents.js';
+
 export const DECISIONS = ['continue', 'complete', 'blocked'];
 const TOP_KEYS = ['decision', 'rationale', 'task', 'evidence', 'blockedReason'];
-const TASK_KEYS = ['title', 'instructions', 'acceptance'];
+const TASK_KEYS = ['title', 'instructions', 'acceptance', 'agent']; // agent: opcional (perfil de agents.js); ausente = perfil padrão, resolvido por quem executa
 // eslint-disable-next-line no-control-regex
 const CTRL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
 
@@ -54,8 +56,9 @@ export function validateDecision(raw) {
     if (tx.length) return { ok: false, error: `chaves não permitidas em "task": ${tx.join(', ')}` };
     e = str(d.task.title, 'task.title', 1, 200) || str(d.task.instructions, 'task.instructions', 1, 4000) || list(d.task.acceptance, 'task.acceptance', 1, 8, 300);
     if (e) return { ok: false, error: e };
+    if (d.task.agent !== undefined && !isAgent(d.task.agent)) return { ok: false, error: `"task.agent" deve ser um perfil conhecido (${AGENT_NAMES.join(' | ')})` };
     if (d.evidence !== undefined || d.blockedReason !== undefined) return { ok: false, error: '"continue" não aceita "evidence" nem "blockedReason"' };
-    out.task = { title: d.task.title.trim(), instructions: d.task.instructions.trim(), acceptance: d.task.acceptance.map((x) => x.trim()) };
+    out.task = { title: d.task.title.trim(), instructions: d.task.instructions.trim(), acceptance: d.task.acceptance.map((x) => x.trim()), ...(d.task.agent !== undefined ? { agent: d.task.agent } : {}) };
   } else if (d.decision === 'complete') {
     if (d.task !== undefined || d.blockedReason !== undefined) return { ok: false, error: '"complete" não aceita "task" nem "blockedReason"' };
     e = list(d.evidence, 'evidence', 1, 10, 500);

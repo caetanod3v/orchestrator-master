@@ -23,7 +23,7 @@ before(() => { db = store.load(); db.missions = []; db.workspaces = [{ id: 'ws',
 after(async () => { await new Promise((r) => setTimeout(r, 600)); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 /** CLI inline: lê o prompt até o fim do stdin, executa `body` (que pode escrever no stdout) e sai com código 0. `--version` também sai com 0. */
-const cli = (body = '') => createExecutor({ command: process.execPath, prefixArgs: ['-e', `process.stdin.resume(); process.stdin.on('end', () => { ${body} process.exit(0); });`], args: [] });
+const cli = (body = '') => createExecutor({ command: process.execPath, prefixArgs: ['-e', `if (process.argv.includes('--version')) { console.log('0.0.0-fake'); process.exit(0); } process.stdin.resume(); process.stdin.on('end', () => { ${body} process.exit(0); });`, '--'], args: [] }); // '--': argumentos extras (perfil do agente) vão para process.argv, não para o node
 const RESULT = (text) => `console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: ${JSON.stringify(text)}, total_cost_usd: 0.001, num_turns: 1 }));`;
 const run = (ex, lines = []) => ex.start({ missionId: 'm', taskId: 't', cwd: wsDir, prompt: 'tarefa', onLine: (l) => lines.push(l) }).done;
 const NO_RESULT = /não emitiu o resultado final/;

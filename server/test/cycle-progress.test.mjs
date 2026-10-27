@@ -30,14 +30,14 @@ after(async () => { await new Promise((r) => setTimeout(r, 600)); fs.rmSync(tmp,
  * cria um arquivo NOVO no workspace (cwd). O resultado final é sempre emitido (execução bem-sucedida).
  */
 function cli({ declare = () => 0, write = false }) {
-  const code = `process.stdin.resume(); process.stdin.on('end', () => {
+  const code = `if (process.argv.includes('--version')) { console.log('0.0.0-fake'); process.exit(0); } process.stdin.resume(); process.stdin.on('end', () => {
     const fs = require('fs'), f = ${JSON.stringify(counter)};
     const n = (fs.existsSync(f) ? +fs.readFileSync(f, 'utf8') : 0) + 1; fs.writeFileSync(f, String(n));
     ${write ? "fs.writeFileSync('novo-' + n + '.txt', 'x');" : ''}
     const k = (${declare.toString()})(n), checks = Array.from({ length: k }, (_, i) => ({ name: 'conferi ' + i, result: 'pass', detail: 'ok' }));
     console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'feito\\n\`\`\`json\\n' + JSON.stringify({ summary: 'ok', checks }) + '\\n\`\`\`', total_cost_usd: 0.001, num_turns: 1 }));
     process.exit(0); });`;
-  return createExecutor({ command: process.execPath, prefixArgs: ['-e', code], args: [] });
+  return createExecutor({ command: process.execPath, prefixArgs: ['-e', code, '--'], args: [] }); // '--': os argumentos do perfil do agente (enviados pelo ciclo) vão para process.argv, não para o node
 }
 const cont = (t) => JSON.stringify({ decision: 'continue', rationale: 'r', task: { title: t, instructions: `fazer ${t}`, acceptance: ['a'] } });
 const done = JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['checks do executor'] });

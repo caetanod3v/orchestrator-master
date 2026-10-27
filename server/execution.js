@@ -9,6 +9,7 @@ import { reclaimOrphans } from './orphans.js';
 import { asyncRoute } from './async-route.js';
 import { pidAlive } from './instance-lock.js';
 import { usageRecord, usageEvent } from './usage.js';
+import { agentArgs } from './agents.js';
 
 const MAX_LOG = 600;
 const find = (arr, id) => arr.find((x) => x.id === id);
@@ -106,6 +107,9 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
    * `finished` só resolve depois de persistir o estado final da tarefa.
    */
   async function startTaskRun(mission, task, { autoAccept = false, shouldAbort = null } = {}) {
+    // Perfil de agente (tarefas do ciclo trazem `agent`; as manuais não: nada muda para elas). Perfil desconhecido NUNCA inicia a CLI.
+    let profileArgs;
+    if (task?.agent !== undefined) { try { profileArgs = agentArgs(task.agent); } catch (e) { return { ok: false, reason: e.message }; } }
     // Cancelamento pedido durante a preparação: nada é iniciado (e não é falha). Cada checagem vem logo após um await; a última fica
     // colada em executor.start() SEM await no meio, então não há corrida entre "ainda não cancelado" e "processo iniciado".
     const aborted = () => (shouldAbort?.() ? { ok: false, cancelled: true, reason: 'Cancelado antes de iniciar a execução.' } : null);
@@ -127,7 +131,7 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
     let handle;
     try {
       handle = executor.start({
-        missionId: mission.id, taskId: task.id, cwd: workspace.path, prompt: buildPrompt(mission, task),
+        missionId: mission.id, taskId: task.id, cwd: workspace.path, prompt: buildPrompt(mission, task), ...(profileArgs ? { args: profileArgs } : {}),
         onLine: (line) => {
           task.logTotal = (task.logTotal || 0) + 1;
           task.log.push(line.slice(0, 2000));
