@@ -5,6 +5,7 @@ import { Progress, DemoTag, Empty, Btn, fmtTime, statusLabel, typeLabel } from '
 import { AgentCard, TaskQueue, Terminal, ReviewPanel } from '../components/Widgets.jsx';
 import NeuralCore, { reactionFor, usePrefersReduced } from '../components/NeuralCore.jsx';
 import CyclePanel from '../components/CyclePanel.jsx';
+import ChatDock from '../components/ChatDock.jsx';
 import { agentTokens } from '../usage-view.js';
 
 // Posição de cada nó (fração da área) e conexões justificadas pela arquitetura:
@@ -187,6 +188,7 @@ export default function Cockpit() {
   const closeBtn = <button type="button" className="btn" onClick={close} aria-label="Esc: fechar painel">Esc ✕</button>;
 
   return (
+    <div className="cockpit-shell">
     <div className={`stage${shifted ? ' panel-open' : ''}`}>
       <NeuralCore running={running} awaiting={awaiting} nodes={nodes} links={LINKS} fresh={fresh} selected={sel} forceMotion={force} layout={shifted ? 'shifted' : 'full'} />
 
@@ -292,6 +294,8 @@ export default function Cockpit() {
           ) : <div className="dim">Nenhuma missão.</div>}
         </section>
       )}
+    </div>
+    <ChatDock />
     </div>
   );
 }

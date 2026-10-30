@@ -76,7 +76,9 @@ function Proposal({ p, chat, stale, rounds, setRounds, busy, onApprove, onDiscar
   );
 }
 
-export default function Chat() {
+/** Toda a conversa (estado, envio, esclarecimentos, planos, aprovação). Usada pela página Conversa e embutida no Cockpit (`embedded`); a lógica e as chamadas ao backend existem só aqui.
+ *  `visible`: falso enquanto o painel do Cockpit está recolhido (o estado continua montado e carregado). `onPhase`: informa o estado da conversa ao painel. */
+export function ChatView({ embedded = false, visible = true, onPhase = null }) {
   const { notify, selectMission, refresh, state } = useStore();
   const [chat, setChat] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -86,11 +88,13 @@ export default function Chat() {
   const scroller = useRef(null), box = useRef(null), picker = useRef(null);
   const [files, setFiles] = useState([]); // só seleção LOCAL (nome e tamanho): nada é lido nem enviado ao Planner
 
+  const status0 = PHASE[chat?.phase];
+  useEffect(() => { onPhase?.(status0 ? { label: status0[1], tone: status0[0] } : null); }, [chat?.phase]);
   const load = async () => { try { setChat(await api.get('/api/chat')); setLoadError(null); } catch (e) { setLoadError(e.message); } };
   useEffect(() => { load(); }, []);
-  useEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight; }, [chat?.messages.length, chat?.proposal?.id, working]);
+  useEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight; }, [chat?.messages.length, chat?.proposal?.id, working, visible]);
   // o campo cresce moderadamente com o texto (até MAX_COMPOSER_PX) e volta a uma linha ao esvaziar
-  useLayoutEffect(() => { const el = box.current; if (!el) return; el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_PX)}px`; }, [text, chat === null]);
+  useLayoutEffect(() => { const el = box.current; if (!el || !visible) return; el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_PX)}px`; }, [text, chat === null, visible]);
 
   const run = async (kind, fn) => {
     setWorking(kind);
@@ -132,10 +136,10 @@ export default function Chat() {
   const empty = chat.messages.length === 0 && !p;
   const status = PHASE[chat.phase];
   return (
-    <div className="chat-page">
-      <h1 className="sr">Conversa</h1>
+    <div className={`chat-page${embedded ? ' embedded' : ''}`}>
+      {!embedded && <h1 className="sr">Conversa</h1>}
       <div className="chat-top">
-        {status ? <span className={`status s-${status[0]}`}><i />{status[1]}</span> : <span />}
+        {status && !embedded ? <span className={`status s-${status[0]}`}><i />{status[1]}</span> : <span />}
         <Btn onClick={reset} disabled={!!working || chat.messages.length === 0}>Nova conversa</Btn>
       </div>
       <div className="chat-scroll" ref={scroller} role="log" aria-live="polite" aria-label="Mensagens da conversa">
@@ -186,4 +190,8 @@ export default function Chat() {
       </form>
     </div>
   );
+}
+
+export default function Chat() {
+  return <ChatView />;
 }

@@ -188,7 +188,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
 
 /* Neural Core: tela cheia, sem card */
 .content.full { padding: 0; overflow: hidden; position: relative; }
-.stage { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 50%, #080a0d 0%, #050607 70%); overflow: hidden; }
+.cockpit-shell { position: absolute; inset: 0; display: flex; flex-direction: column; min-width: 0; }
+.stage { position: relative; flex: 1; min-height: 0; background: radial-gradient(ellipse at 50% 50%, #080a0d 0%, #050607 70%); overflow: hidden; }
 .core-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .hud { position: absolute; font-size: var(--fs-xs); max-width: 30%; pointer-events: none; z-index: 2; }
 .hud a, .hud button { pointer-events: auto; }
@@ -311,3 +312,18 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .chip-x { border: 0; background: transparent; color: var(--dim); cursor: pointer; display: grid; place-items: center; padding: 2px; border-radius: 50%; }
 .chip-x:hover { color: var(--strong); }
 @media (max-width: 800px) { .chat-top, .chat-scroll, .composer-wrap { padding-left: var(--s-4); padding-right: var(--s-4); } .msg.user { max-width: 92%; } }
+
+/* Cockpit: painel de conversa inferior e recolhível. O Neural Core (.stage) ocupa a altura que sobra, então o painel nunca cobre os agentes. */
+.chat-dock { flex: none; background: var(--bg); border-top: 1px solid var(--line2); min-width: 0; }
+.dock-bar { display: flex; align-items: center; gap: var(--s-4); width: 100%; padding: var(--s-3) var(--s-6); background: transparent; border: 0; color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: var(--t-color); }
+.dock-bar:hover { background: var(--panel); color: var(--strong); }
+.dock-bar:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.dock-bar .k { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+.dock-bar .status { min-width: 0; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; } .dock-bar > .small { flex: none; white-space: nowrap; }
+.dock-body { height: clamp(260px, 38vh, 420px); display: flex; flex-direction: column; min-height: 0; }
+.dock-body[hidden] { display: none; }
+.chat-page.embedded .chat-top { padding-top: 0; }
+.chat-page.embedded .chat-hello { padding: var(--s-3) 0; } .chat-page.embedded .chat-hello h2 { font-size: var(--fs-md); }
+/* Alturas pequenas: o Neural Core precisa de ~450px para os nós não se sobreporem, então o painel EXPANDIDO flutua sobre a base do Cockpit (e libera o stage inteiro); recolhido volta a ser só a barra. */
+@media (max-height: 860px) { .chat-dock.open { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; box-shadow: 0 -8px 24px rgba(0, 0, 0, .45); } .dock-body { height: clamp(240px, 46vh, 380px); } }
+@media (max-width: 800px) { .dock-body { height: clamp(240px, 42vh, 340px); } .dock-bar { padding-left: var(--s-4); padding-right: var(--s-4); } }
