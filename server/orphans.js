@@ -8,6 +8,15 @@ import { execFileSync } from 'node:child_process';
 import { pidAlive } from './instance-lock.js';
 
 export const START_TOLERANCE_MS = 15_000;
+
+/** Texto (pt-BR) de cada resultado de reclaimOrphans, para o log da tarefa e a atividade. */
+export const ORPHAN_NOTE = {
+  gone: 'o processo da execução anterior já não existia',
+  killed: 'o processo da execução anterior ainda estava vivo e foi ENCERRADO (com seus subprocessos)',
+  reused: 'o PID gravado pertence a outro processo (reaproveitado); nada foi encerrado',
+  unverified: 'o processo gravado está vivo, mas não foi possível confirmar que é a execução anterior; NÃO foi encerrado e novas execuções ficam bloqueadas até ele terminar',
+  kill_failed: 'o processo da execução anterior continua vivo e NÃO pôde ser encerrado; novas execuções ficam bloqueadas até ele terminar',
+};
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /** Hora de criação do processo (ms desde a época) ou null se não foi possível saber. */

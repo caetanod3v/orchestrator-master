@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createExecutor } from './executor/index.js';
 import { tierSettings } from './routing.js';
+import { waitGone } from './orphans.js';
 
 export const PLANNER_ARGS = [
   '-p', '--output-format', 'stream-json', '--verbose',
@@ -31,9 +32,11 @@ export function plannerArgs({ model, effort } = {}) {
 export const plannerConfigFromEnv = (env = process.env) => ({ model: env.ORCH_PLANNER_MODEL?.trim() || undefined, effort: env.ORCH_PLANNER_EFFORT?.trim() || undefined });
 
 /** @returns {{ id:string, busy:()=>boolean, decide:(a:{prompt:string,cwd:string})=>Promise<{text?:string,error?:string,interrupted?:boolean}>, cancel:()=>Promise<any> }} */
-export function createClaudePlanner({ model, effort, routing = 'off', runner, runnerOptions = {} } = {}) { // runnerOptions: só testes (CLI falsa)
+// track (opcional, child-registry.js): `(kind, pid) => { release }` grava o PID do filho no banco para o próximo boot poder reclamá-lo; sem ele nada é registrado.
+export function createClaudePlanner({ model, effort, routing = 'off', runner, runnerOptions = {}, track = null } = {}) { // runnerOptions: só testes (CLI falsa)
   const args = plannerArgs({ model, effort }); // valida sempre, mesmo com um runner injetado (testes)
   runner ??= createExecutor({ args, timeoutMs: 3 * 60 * 1000, ...runnerOptions });
+  let tracked = null; // registro do filho em curso (o runner só admite um por vez)
   // Camadas (só com routing 'on'): UM runner, argumentos por chamada. Assim o lock, o cancelamento, o timeout e a recuperação de processos são os de sempre.
   // Com routing 'off', `tier` é ignorado e a chamada é idêntica à de antes.
   // Resolução ÚNICA: os argumentos entregues ao runner e a rota registrada saem do mesmo objeto (o que se registra é o que foi aplicado).
@@ -58,12 +61,25 @@ export function createClaudePlanner({ model, effort, routing = 'off', runner, ru
       const route = publicRoute(applied); // aditivo: só com o roteamento ligado
       let handle;
       try { handle = runner.start({ missionId: 'planner', taskId: 'planner', cwd, prompt, onLine: () => {}, onUsage, ...(callArgs ? { args: callArgs } : {}) }); } catch (e) { return { error: e.message, ...(route ? { route } : {}) }; }
-      const r = await handle.done;
+      // Registro do PID logo após o spawn (sem await no meio). Se não for possível registrar, o filho não pode ficar rodando sem rastreio: encerra-se e
+      // a chamada falha. Se o encerramento não for confirmado, o runner continua ocupado (planner.busy()) até o processo terminar: nada se sobrepõe.
+      try { tracked = track?.('planner', handle.pid) ?? null; } catch (e) {
+        try { await runner.stop(); } catch { /* o runner segue ocupado enquanto o processo viver */ }
+        return { error: `Falha ao registrar o processo do Planner (${e.code || e.message}); a chamada foi encerrada.`, ...(route ? { route } : {}) };
+      }
+      let r;
+      try { r = await handle.done; } finally { const t = tracked; tracked = null; t?.release(); } // `done` só resolve com o processo terminado
       // `metrics` (aditivo): tokens/modelos/limite reportados pela CLI (ver executor/stream.js); também nas falhas, que consomem tokens.
       if (r.status === 'completed' && r.result?.text) return { text: r.result.text, usage: { costUsd: r.result.costUsd, turns: r.result.turns, metrics: r.usage }, ...(route ? { route } : {}) };
       return { error: r.error || `Planner terminou com status ${r.status}`, interrupted: r.status === 'interrupted', usage: { metrics: r.usage }, ...(route ? { route } : {}) };
     },
     cancel: () => runner.stop(),
+    /** Encerramento síncrono do filho em curso (saída do servidor). O registro só é apagado se o processo comprovadamente sumiu; senão fica para o próximo boot. */
+    killActiveSync: () => {
+      const t = tracked;
+      try { runner.killActiveSync?.(); } catch { /* quem chama segue com o encerramento */ }
+      if (t?.pid && waitGone(t.pid, 1500)) { tracked = null; t.release(); }
+    },
   };
 }
 

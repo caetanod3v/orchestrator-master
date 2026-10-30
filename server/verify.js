@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { validateDir } from './workspaces.js';
 import * as store from './store.js';
+import { killTreeSync, waitGone } from './orphans.js';
 
 export const ALLOWED_SCRIPTS = ['test', 'build', 'lint', 'typecheck'];
 export const MAX_ITEMS = 4;
@@ -62,8 +63,11 @@ function killTree(child) {
   });
 }
 
-/** `spawnSpec` só existe para os testes; o servidor usa sempre o npm real. */
-export function createVerifier({ timeoutMs = DEFAULT_TIMEOUT_MS, maxOutputBytes = 256 * 1024, spawnSpec = defaultSpec } = {}) {
+/**
+ * `spawnSpec` só existe para os testes; o servidor usa sempre o npm real.
+ * `track` (opcional, child-registry.js): `(kind, pid) => { release }` grava o PID do filho no banco para o próximo boot poder reclamá-lo; sem ele nada é registrado.
+ */
+export function createVerifier({ timeoutMs = DEFAULT_TIMEOUT_MS, maxOutputBytes = 256 * 1024, spawnSpec = defaultSpec, track = null } = {}) {
   let active = null;
 
   async function run(workspace, item) {
@@ -91,7 +95,16 @@ export function createVerifier({ timeoutMs = DEFAULT_TIMEOUT_MS, maxOutputBytes 
     try {
       child = spawn(spec.command, spec.args, { cwd: v.path, shell: false, windowsHide: true, env: cleanEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) { return stop('error', `Falha ao iniciar o processo: ${e.message}`); }
-    active = { child, state };
+    active = { child, state, tracked: null };
+
+    // Registro do PID logo após o spawn (sem await no meio). Se não for possível registrar, o filho não pode ficar rodando sem rastreio: é encerrado e a
+    // verificação vira "error" (o ciclo bloqueia em verification_blocked). Se o encerramento não for confirmado, o verificador segue ocupado até o processo morrer.
+    try { active.tracked = track?.('verifier', child.pid) ?? null; } catch (e) {
+      child.on('error', () => {});
+      killTreeSync(child.pid);
+      if (waitGone(child.pid, 2000)) active = null; else child.once('close', () => { if (active?.child === child) active = null; });
+      return stop('error', `Falha ao registrar o processo da verificação (${e.code || e.message}); ela foi encerrada e não conta como resultado.`);
+    }
 
     return new Promise((resolve) => {
       let done = false;
@@ -103,7 +116,8 @@ export function createVerifier({ timeoutMs = DEFAULT_TIMEOUT_MS, maxOutputBytes 
       };
       child.stdout.on('data', feed); child.stderr.on('data', feed);
       const finish = (exitCode, spawnError) => {
-        if (done) return; done = true; clearTimeout(timer); active = null;
+        if (done) return; done = true; clearTimeout(timer);
+        const t = active?.tracked; active = null; t?.release(); // o processo terminou (close/error): o registro persistido pode sair
         child.removeAllListeners(); child.stdout.removeAllListeners(); child.stderr.removeAllListeners(); child.on('error', () => {});
         const res = { ...base, exitCode, durationMs: Date.now() - t0, outputTail: state.tail.trim(), truncated: state.bytes > TAIL_CHARS, outputBytes: state.bytes };
         if (spawnError) return resolve({ ...res, status: 'error', reason: `Falha ao iniciar: ${spawnError.message}` });
@@ -125,7 +139,15 @@ export function createVerifier({ timeoutMs = DEFAULT_TIMEOUT_MS, maxOutputBytes 
     return active === a ? { stopped: false, detail: 'O processo não confirmou o encerramento.' } : { stopped: true, detail: 'Verificação interrompida.' };
   }
 
-  return { run, stop: stopActive, isBusy: () => !!active };
+  /** Encerramento síncrono do filho em curso (saída do servidor). O registro só é apagado se o processo comprovadamente sumiu; senão fica para o próximo boot. */
+  function killActiveSync() {
+    const a = active, pid = a?.child?.pid;
+    if (!pid) return;
+    killTreeSync(pid);
+    if (waitGone(pid, 1500) && a.tracked) { a.tracked.release(); a.tracked = null; }
+  }
+
+  return { run, stop: stopActive, killActiveSync, isBusy: () => !!active };
 }
 
 /** Rotas de aprovação humana das verificações de um workspace. O servidor lê o package.json; o cliente só escolhe nomes. */

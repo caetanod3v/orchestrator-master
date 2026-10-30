@@ -5,7 +5,7 @@ import { bus } from './executor/index.js';
 import { runBlockers, authorizeBlockers } from './executor/policy.js';
 import { validateDir } from './workspaces.js';
 import { gitChanges } from './git.js';
-import { reclaimOrphans } from './orphans.js';
+import { reclaimOrphans, ORPHAN_NOTE } from './orphans.js';
 import { asyncRoute } from './async-route.js';
 import { pidAlive } from './instance-lock.js';
 import { usageRecord, usageEvent } from './usage.js';
@@ -52,13 +52,7 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
 
   // Processos órfãos: se o servidor caiu no meio de uma execução, o estado real é "interrompida" e o processo filho (que sobrevive ao pai)
   // pode continuar editando o workspace. Os PIDs gravados são conferidos e a execução abandonada é encerrada (ver orphans.js).
-  const ORPHAN_NOTE = {
-    gone: 'o processo da execução anterior já não existia',
-    killed: 'o processo da execução anterior ainda estava vivo e foi ENCERRADO (com seus subprocessos)',
-    reused: 'o PID gravado pertence a outro processo (reaproveitado); nada foi encerrado',
-    unverified: 'o processo gravado está vivo, mas não foi possível confirmar que é a execução anterior; NÃO foi encerrado e novas execuções ficam bloqueadas até ele terminar',
-    kill_failed: 'o processo da execução anterior continua vivo e NÃO pôde ser encerrado; novas execuções ficam bloqueadas até ele terminar',
-  };
+  // (os textos de ORPHAN_NOTE vivem em orphans.js, compartilhados com o registro de processos do Planner e do verificador)
   // Candidatos: toda tarefa que ainda guarda um PID (a que estava "running" e também a que ficou "interrupted" com processo não resolvido).
   const withPid = [];
   for (const m of db.missions) for (const t of m.tasks) {

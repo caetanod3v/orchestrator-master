@@ -16,6 +16,7 @@ import { cycleLimitsFromEnv } from './limits.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
 import { acquireInstanceLock } from './instance-lock.js';
+import { createChildRegistry } from './child-registry.js';
 import { installShutdown } from './shutdown.js';
 
 // Costura de teste: só código em processo (nunca env, rede ou requisição) pode injetar executor/planner simulados.
@@ -24,8 +25,9 @@ const claudeCodeExecutor = testDeps.executor ?? realExecutor;
 const routingMode = routingFromEnv(); // ORCH_PLANNER_ROUTING=off|on (padrão off); valor inválido impede o boot, antes de qualquer acesso a dados
 const router = routingMode === 'on' ? createRouter() : null;
 const cycleLimits = cycleLimitsFromEnv(); // ORCH_CYCLE_MAX_PLANNER_CALLS / ORCH_CYCLE_MAX_ESTIMATED_COST_USD (padrão: desativados); valor inválido impede o boot
-const planner = testDeps.planner ?? createClaudePlanner({ ...plannerConfigFromEnv(), routing: routingMode }); // ORCH_PLANNER_MODEL / ORCH_PLANNER_EFFORT (opcionais); valor inválido impede o boot
-const verifier = testDeps.verifier ?? createVerifier();
+const childRegistry = createChildRegistry(); // PIDs do Planner e do verificador no banco (db.childProcesses), para o boot reclamar o que um servidor anterior deixou vivo
+const planner = testDeps.planner ?? createClaudePlanner({ ...plannerConfigFromEnv(), routing: routingMode, track: childRegistry.track }); // ORCH_PLANNER_MODEL / ORCH_PLANNER_EFFORT (opcionais); valor inválido impede o boot
+const verifier = testDeps.verifier ?? createVerifier({ track: childRegistry.track });
 const planning = () => planner.busy();
 
 const PORT = Number(process.env.PORT) || 4317;
@@ -33,7 +35,7 @@ const HOST = '127.0.0.1'; // somente local
 // Trava de instância ANTES de qualquer operação que possa tocar o banco (load, setupExecution, recover): uma 2ª instância sai sem alterar nada.
 const lock = acquireInstanceLock({ dir: store.dataDir, autoRelease: true });
 if (!lock.ok) { console.error(`[orchestrator] ${lock.message}`); process.exit(1); }
-installShutdown({ lock, executor: claudeCodeExecutor, store }); // ao sair: encerra o filho do executor, grava o que está pendente e libera a trava
+installShutdown({ lock, executor: claudeCodeExecutor, children: [planner, verifier], store }); // ao sair: encerra os filhos (executor, Planner, verificador), grava o que está pendente e libera a trava
 const db = store.load();
 const app = express();
 app.use(express.json({ limit: '100kb' }));
@@ -239,6 +241,7 @@ if (fs.existsSync(dist)) {
 }
 
 const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor, verifier });
+childRegistry.reclaim({ executor: claudeCodeExecutor }); // órfãos do Planner/verificador: depois dos do Executor, antes de qualquer ciclo (setupCycle) e de ouvir a porta
 setupVerification(app, { db, verifier });
 setupWorkspaceRemoval(app, { db });
 setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits });
