@@ -7,6 +7,9 @@
 // syncPlan() a cada emit() do ciclo, nunca uma segunda fonte de verdade. Por isso uma etapa concluída não se repete por causa de um reinício:
 // o que decide é a rodada gravada, e uma etapa só é elegível enquanto não tem rodada.
 //
+// `uncertain` (M7, derivado como o estado): a etapa interrompida não deixou relatório final (queda do servidor com a execução em curso), então o que ela
+// chegou a fazer no workspace é DESCONHECIDO. Não muda o estado (continua "interrupted", nunca refeita sozinha); só deixa o motivo visível.
+//
 // Estados (o vocabulário das tarefas, sem estados novos):
 //   queued      : sem rodada ainda (elegível só se todas as dependências estiverem completed)
 //   running     : rodada em andamento (execução ou verificação real ainda não terminou)
@@ -51,6 +54,7 @@ export function syncPlan(c, plan = c?.plan) {
     if (!s || typeof s !== 'object') continue;
     const r = roundsOf(c, s.id, plan.id).at(-1);
     s.status = stepStatusFromRound(r); s.round = r?.n ?? null; s.taskId = r?.taskId ?? null;
+    if (r?.report?.outcomeUncertain) s.uncertain = true; else delete s.uncertain; // M7: interrompida sem relatório final; os efeitos no workspace são desconhecidos
   }
 }
 
@@ -75,7 +79,7 @@ export function planProblem(c) {
   if (c?.plan === undefined || c.plan === null) return null;
   const p = c.plan;
   if (typeof p !== 'object' || Array.isArray(p) || typeof p.id !== 'string' || !Array.isArray(p.steps)) return 'o plano gravado não tem a estrutura esperada';
-  const v = validatePlanSteps(p.steps.map(({ status, round, taskId, ...def }) => def));
+  const v = validatePlanSteps(p.steps.map((s) => { if (!s || typeof s !== 'object' || Array.isArray(s)) return s; const { status, round, taskId, uncertain, ...def } = s; return def; })); // item que não é objeto: a validação o rejeita (não lança)
   if (!v.ok) return `o plano gravado é inválido: ${v.error}`;
   syncPlan(c);
   const byId = new Map(p.steps.map((s) => [s.id, s]));

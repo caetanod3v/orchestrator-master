@@ -73,7 +73,8 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
       executor.adoptOrphan?.(r.pid, r.processStart ?? r.expectedStart ?? null); // vivo e possivelmente ativo: o executor fica ocupado; o PID é mantido para reavaliar no próximo boot
     } else delete t.pid;
   });
-  store.save();
+  // M7: o boot não pode cair por uma falha de gravação (a recuperação acima já está em memória e o próximo save() a regrava; store.persistenceStatus() mostra a falha).
+  try { store.save(); } catch (e) { console.error('[execution] recuperação de processos: o banco não pôde ser gravado no boot:', e.code || e.message); }
 
   app.post('/api/missions/:id/tasks/:tid/authorize', (req, res) => {
     const mission = find(db.missions, req.params.id), task = mission && find(mission.tasks, req.params.tid);

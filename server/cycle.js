@@ -171,7 +171,7 @@ function planSection(c) {
   if (!Array.isArray(steps) || !steps.length) return '';
   const pr = planProgress(c);
   return [`\nPLANO ATUAL (gravado pelo orquestrador; ${pr.completed} de ${pr.total} etapas concluídas; execução sequencial, uma etapa por vez):`,
-    ...steps.map((st) => `  [${st.id}] ${clip(st.title, 120)} | estado: ${st.status}${st.round ? ` (rodada ${st.round})` : ''} | depende de: ${(st.dependsOn || []).join(', ') || 'nada'}`),
+    ...steps.map((st) => `  [${st.id}] ${clip(st.title, 120)} | estado: ${st.status}${st.round ? ` (rodada ${st.round})` : ''}${st.uncertain ? ' [RESULTADO INCERTO: o servidor caiu durante a execução; o workspace pode ter sido alterado]' : ''} | depende de: ${(st.dependsOn || []).join(', ') || 'nada'}`),
     'Etapas "failed" ou "interrupted" não são refeitas sozinhas: decida se propõe um novo plano, executa uma tarefa avulsa ("continue") ou pede ajuda ("blocked").'].join('\n');
 }
 
@@ -182,7 +182,9 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, mult
     return [
       `[rodada ${r.n}] tarefa: ${r.plan.title}`,
       `  execução: ${rep ? rep.status : r.status}${rep?.errors?.length ? ` | erros: ${rep.errors.slice(0, 2).join(' / ')}` : ''}${rep?.blockers?.length ? ` | BLOQUEIO: ${rep.blockers.join(' ')}` : ''}`,
-      rep ? `  arquivos alterados: ${rep.filesKnown ? (rep.filesChanged.map((f) => f.path).join(', ') || 'nenhum') : 'desconhecido (workspace sem Git)'}` : '',
+      rep ? `  arquivos alterados: ${rep.filesKnown ? (rep.filesChanged.map((f) => f.path).join(', ') || 'nenhum') : `desconhecido (${rep.outcomeUncertain ? 'execução interrompida sem relatório final' : 'workspace sem Git'})`}` : '',
+      // M7: a execução foi cortada por uma queda do servidor. Ausência de relatório NÃO é "nada foi feito": o Planner precisa conferir o workspace antes de decidir.
+      rep?.outcomeUncertain ? `  RESULTADO INCERTO: ${rep.outcomeUncertain} Confira o estado real do workspace antes de decidir: não presuma que a tarefa foi feita, nem que não foi.` : '',
       rep?.verifications?.length ? `  verificações REAIS (executadas pelo orquestrador): ${rep.verifications.map((v) => `${v.script}=${v.status}${v.exitCode != null ? `(código ${v.exitCode})` : ''}`).join('; ')}${rep.verifications.some((v) => v.status !== 'pass') ? ` | saída da primeira que não passou: ${clip(rep.verifications.find((v) => v.status !== 'pass').outputTail || rep.verifications.find((v) => v.status !== 'pass').reason || '', 400)}` : ''}` : rep?.verificationsSkipped ? `  verificações reais NÃO executadas: ${rep.verificationsSkipped}` : '',
       // Verificações refeitas depois de uma retomada humana: o relatório mistura DOIS momentos (fim da rodada x re-verificação).
       // Deixamos os horários explícitos e damos ao Planner a prova (datada) do bloqueio anterior, sem apresentá-la como atual.
@@ -329,6 +331,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (c.cancelRequested) return { cancelled: true };
       const lim = limitProblem(limits, m, 'planner'); if (lim) return { limit: lim }; // ANTES de contar a chamada e de iniciar a CLI
       c.plannerCalls++;
+      // M7: a chamada só começa com a contagem NO DISCO. Se o servidor cair no meio dela (a CLI pode ter sido cobrada), a retomada não subconta o limite; sem gravação
+      // confirmada a chamada não é feita (o ciclo bloqueia por persistência, com a contagem de volta ao valor anterior).
+      try { store.saveOrThrow(); } catch (e) { c.plannerCalls--; throw e; }
       const listing = listFiles(ws.path);
       const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback, multiStep });
       const call = c.plannerCalls;
@@ -469,6 +474,8 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     return 'next';
   }
 
+  const planInvalidReason = (broken) => `Plano inconsistente: ${broken}. Nada foi executado a partir dele; cancele o ciclo (o histórico fica registrado).`;
+
   /** A etapa vira a mesma "decisão continue" que o Planner daria: runRound, verificação, limites e cancelamento são os de sempre. */
   const stepDecision = (st) => ({ decision: 'continue', rationale: `Etapa "${st.id}" do plano gravado.`, task: { title: st.title, instructions: st.instructions, acceptance: st.acceptance, ...(st.agent !== undefined ? { agent: st.agent } : {}) } });
 
@@ -480,7 +487,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
       if (c.reverifyPending) { c.reverifyPending = false; if ((await reverifyLast(m)) === 'stop') return undefined; }
       const broken = planProblem(c); // plano gravado inconsistente: nunca executa a partir dele
-      if (broken) return stop(m, 'plan_invalid', `Plano inconsistente: ${broken}. Nada foi executado a partir dele; cancele o ciclo (o histórico fica registrado).`);
+      if (broken) return stop(m, 'plan_invalid', planInvalidReason(broken));
       const step = nextStep(c); // M4: etapa elegível do plano gravado = não consulta o Planner (uma etapa por vez)
       if (step) {
         if (c.rounds.length >= c.maxIterations) return end(m, 'limit_reached', `Limite de ${c.maxIterations} rodadas atingido; o plano ainda tem etapas pendentes.`);
@@ -566,6 +573,14 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     return fail(503, `O banco não está sendo gravado em disco (${store.persistenceStatus().error || 'erro'}); corrija o armazenamento e tente de novo. Nada foi iniciado nem retomado.`);
   }
 
+  /** Por que há "outra execução": um processo de uma execução ANTERIOR (órfão, M1) que ainda pode estar vivo é dito com o PID, para a pessoa saber que nada novo vai se sobrepor a ele. */
+  function busyReason() {
+    const pids = executor.orphanPids?.() ?? [];
+    return pids.length
+      ? `Outra execução está em andamento: um processo de uma execução anterior (PID ${pids.join(', ')}) ainda pode estar ativo e alterando o workspace. Nada novo é iniciado nem retomado enquanto ele existir; aguarde o término ou use "Interromper" (que confere a identidade do processo antes de encerrá-lo).`
+      : 'Outra execução ou ciclo está em andamento.';
+  }
+
   /** Condições para iniciar um ciclo NESTA missão agora. Chamada antes da reserva e DE NOVO depois do probe (o estado pode ter mudado). */
   function startBlocker(m) {
     if (mission(m.id) !== m) return fail(404, 'Missão não encontrada.');
@@ -574,7 +589,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (!ws) return fail(409, 'A missão não tem workspace cadastrado.');
     const v = validateDir(ws.path);
     if (!v.ok) return fail(409, `Workspace inválido: ${v.error}`);
-    if (executor.isBusy() || planner.busy?.() || loops.size) return fail(409, 'Outra execução ou ciclo está em andamento.');
+    if (executor.isBusy() || planner.busy?.() || loops.size) return fail(409, busyReason());
     if (m.tasks.some((t) => t.status === 'running')) return fail(409, 'Há uma tarefa em execução nesta missão.');
     return null;
   }
@@ -656,9 +671,12 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (atRoundLimit && (!Number.isInteger(maxIterations) || maxIterations <= c.rounds.length)) {
       return fail(409, `O ciclo parou no limite de ${c.maxIterations} rodadas (${c.rounds.length} feitas). Para retomar, informe um novo limite de rodadas (maxIterations) maior que ${c.rounds.length} e até ${HARD_MAX_ITERATIONS}; o histórico e as rodadas concluídas são mantidos e não se repetem.`);
     }
-    if (starting || executor.isBusy() || loops.size) return fail(409, 'Outra execução ou ciclo está em andamento.');
+    if (starting || executor.isBusy() || loops.size) return fail(409, busyReason());
     const ws = wsOf(m);
     if (!ws || !validateDir(ws.path).ok) return fail(409, 'Workspace inválido ou removido.');
+    // M7: um plano gravado inconsistente (banco adulterado ou corrompido) não é retomado: recusa explícita ANTES de qualquer mudança. O ciclo continua bloqueado e pode ser cancelado.
+    const broken = planProblem(c);
+    if (broken) return fail(409, `${planInvalidReason(broken)} A retomada foi recusada e nada foi alterado.`);
     // Orçamento de consultas esgotado: retomar sem ampliar o limite só bloquearia de novo na hora (sem consultar o Planner). Recusa ANTES de
     // qualquer mutação, nota, bloco ou atividade; plannerCalls segue cumulativo (não é zerado).
     if ((c.blockedCode === 'planner_calls_limit' || atRoundLimit) && c.plannerCalls >= ((maxIterations ?? c.maxIterations) + 1) * 3) return fail(409, 'O limite de consultas ao Planner deste ciclo foi atingido; aumente o limite de rodadas (maxIterations) para continuar.');
@@ -701,26 +719,71 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     return true;
   }
 
+  // M7: o que a recuperação afirma sobre uma execução interrompida precisa ser verdadeiro. Sem o relatório final da CLI (ela pode ter alterado o workspace antes de a queda
+  // ser registrada) nada se conclui sobre os arquivos; isso fica gravado na rodada e na etapa e a execução nunca é repetida sozinha.
+  const UNCERTAIN = 'O servidor caiu durante a execução: o resultado, os efeitos e os arquivos alterados são desconhecidos (a CLI pode ter alterado o workspace antes de a queda ser registrada). Esta etapa não é refeita sozinha.';
+
+  /**
+   * Fecha a rodada que ficou "running" sem laço (o servidor caiu). O que vale é o que está GRAVADO na tarefa:
+   *   concluída/falha gravada  : o resultado da EXECUÇÃO é conhecido (o servidor só caiu antes de a rodada ser atualizada): a rodada o reflete e NÃO é refeita; as verificações
+   *                              reais, que dependem do estado atual do workspace, são refeitas na retomada pelo mecanismo existente (reverifyPending);
+   *   qualquer outro caso      : interrompida; se o processo chegou a iniciar, resultado INCERTO (filesKnown=false + outcomeUncertain).
+   */
+  function settleCrashedRound(m, round) {
+    const t = find(m.tasks, round.taskId), configured = (find(db.workspaces, m.workspaceId)?.verifications || []).length;
+    if (t && t.status === 'running') t.status = 'interrupted';
+    const rep = t ? buildReport(t) : null;
+    round.report = rep; round.finishedAt = (t?.status === 'completed' || t?.status === 'failed') && t.finishedAt ? t.finishedAt : store.now(); round.phase = 'done';
+    if (rep && (t.status === 'completed' || t.status === 'failed') && t.finishedAt) {
+      round.status = rep.status === 'success' ? 'succeeded' : rep.status;
+      if (rep.status !== 'success' && configured) rep.verificationsSkipped = 'a execução não foi bem-sucedida';
+      if (rep.status === 'success' && configured) { rep.verificationsInterrupted = 'o servidor foi reiniciado antes das verificações reais desta rodada'; round.verification = 'skipped'; } else round.verification = verificationOutcome(rep, configured);
+      return;
+    }
+    round.status = 'interrupted';
+    if (rep && t.startedAt) { rep.filesKnown = false; rep.outcomeUncertain = UNCERTAIN; }
+  }
+
+  /** Uma linha com o que a recuperação encontrou no plano (mesma fonte do estado derivado das rodadas): ajuda a decidir o que fazer ao retomar. */
+  function planRecoverySummary(c) {
+    syncPlan(c);
+    const all = (Array.isArray(c.plan?.steps) ? c.plan.steps : []).filter((s) => s && typeof s === 'object');
+    if (!all.length) return '';
+    const ids = (f) => all.filter(f).map((s) => s.id).join(', ');
+    const parts = [
+      ids((s) => s.status === 'completed') && `concluídas: ${ids((s) => s.status === 'completed')}`,
+      ids((s) => s.uncertain) && `interrompida(s) com resultado incerto: ${ids((s) => s.uncertain)}`,
+      ids((s) => ['failed', 'interrupted'].includes(s.status) && !s.uncertain) && `não concluídas: ${ids((s) => ['failed', 'interrupted'].includes(s.status) && !s.uncertain)}`,
+      ids((s) => s.status === 'queued') && `na fila: ${ids((s) => s.status === 'queued')}`,
+    ].filter(Boolean);
+    return parts.length ? ` Plano: ${parts.join('; ')}.` : '';
+  }
+
   function recover() {
+    // Falha de gravação NO BOOT (disco cheio/ilegível) não pode impedir o servidor de subir nem apagar o que a recuperação concluiu: o estado recuperado fica em memória, a falha
+    // fica registrada (store.persistenceStatus) e a retomada exige uma gravação confirmada antes de qualquer avanço (storageProblem). O disco segue com o estado anterior,
+    // então outra queda antes disso recupera de novo, sem perda.
+    const safely = (what, fn) => { try { return fn(); } catch (e) { console.error(`[cycle] recuperação: ${what}:`, e.code || e.message); return undefined; } };
     // Resíduos de autorização em QUALQUER ciclo (inclui bancos gravados antes desta correção). Roda antes da recuperação das rodadas para o
     // relatório da rodada interrompida já refletir a tarefa normalizada. Idempotente: a tarefa normalizada não casa mais com o critério.
     let normalized = false;
     for (const m of db.missions) for (const t of m.tasks || []) if (normalizeResidualTask(m, t)) normalized = true;
-    if (normalized) store.save();
+    if (normalized) safely('gravar tarefas normalizadas', () => store.save());
     for (const m of db.missions) {
       const c = m.cycle;
       if (!c || !ACTIVE.includes(c.status)) continue;
-      const round = c.rounds.at(-1);
-      if (round?.status === 'running') {
-        const t = find(m.tasks, round.taskId);
-        if (t && t.status === 'running') t.status = 'interrupted';
-        round.report = t ? buildReport(t) : null; round.status = 'interrupted'; round.phase = 'done'; round.finishedAt = store.now();
-      }
-      // Rodada que terminou, mas cuja verificação real não chegou ao fim: resultado parcial/ausente NÃO é sucesso.
-      if (round?.status === 'succeeded' && round.phase !== 'done' && round.report && !round.report.verificationsSkipped && (find(db.workspaces, m.workspaceId)?.verifications || []).length) {
-        round.phase = 'done'; round.report.verificationsInterrupted = 'o servidor foi reiniciado durante a verificação';
-      }
-      stop(m, 'restarted', 'O servidor foi reiniciado durante o ciclo. Retome para o Planner reavaliar ou cancele.');
+      safely(`ciclo da missão ${m.id}`, () => {
+        const round = c.rounds.at(-1);
+        if (round?.status === 'running') settleCrashedRound(m, round);
+        // Rodada que terminou, mas cuja verificação real não chegou ao fim: resultado parcial/ausente NÃO é sucesso.
+        if (round?.status === 'succeeded' && round.phase !== 'done' && round.report && !round.report.verificationsSkipped && (find(db.workspaces, m.workspaceId)?.verifications || []).length) {
+          round.phase = 'done'; round.report.verificationsInterrupted = 'o servidor foi reiniciado durante a verificação';
+        }
+        if (c.cancelRequested) { end(m, 'cancelled', 'Ciclo cancelado: o pedido de cancelamento foi feito antes de o servidor reiniciar e continua valendo.'); return; } // o cancelamento pedido não se desfaz por uma queda
+        const broken = planProblem(c); // também sincroniza o estado das etapas com as rodadas recém-fechadas
+        if (broken) { stop(m, 'plan_invalid', planInvalidReason(broken)); return; }
+        stop(m, 'restarted', `O servidor foi reiniciado durante o ciclo. Retome para o Planner reavaliar ou cancele.${planRecoverySummary(c)}`);
+      });
     }
   }
 

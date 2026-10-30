@@ -199,7 +199,7 @@ test('recuperação após queda no meio de uma etapa: a etapa fica "interrupted"
   assert.match(planner.calls[0], /\[a\] Etapa a \| estado: interrupted/);
 });
 
-test('plano gravado inconsistente (dependência fora de ordem, ciclo, rodada de etapa inexistente): o ciclo bloqueia como plan_invalid, sem executar nem consultar o Planner', async () => {
+test('plano gravado inconsistente (dependência fora de ordem, ciclo, rodada de etapa inexistente): a retomada é recusada (409) sem mudar nada, sem executar nem consultar o Planner', async () => {
   const mkBroken = (steps, rounds) => {
     const m = { id: `p${++seq}`, demo: false, title: 'Inconsistente', objective: 'o', workspaceId: 'ws', createdAt: 'T0', tasks: [] }; db.missions.push(m);
     m.cycle = { id: `cyc${seq}`, status: 'blocked', maxIterations: 5, plannerCalls: 1, consecutiveFailures: 0, consecutiveNoProgress: 0, humanNotes: [], rejections: [], blocks: [{ code: 'restarted', reason: 'x', at: 'T0' }], blockedCode: 'restarted', blockedReason: 'x', finalSummary: null, evidence: null, cancelRequested: false, startedAt: 'T0', finishedAt: null,
@@ -214,8 +214,10 @@ test('plano gravado inconsistente (dependência fora de ordem, ciclo, rodada de 
     ['etapa executada duas vezes', mkBroken([step('a')], [rd(1, 'a'), rd(2, 'a')]), /mais de uma rodada/],
   ]) {
     const planner = scripted([done()]), cy = mk(planner), starts = execStarts;
-    assert.match(planProblem(m.cycle), re, label); assert.equal((await cy.resume(m.id)).status, 202); await cy.idle();
-    assert.equal(m.cycle.status, 'blocked', label); assert.equal(m.cycle.blockedCode, 'plan_invalid', label); assert.match(m.cycle.blockedReason, re);
+    // M7: a retomada de um plano inconsistente é RECUSADA (409) antes de mudar qualquer coisa: o ciclo segue bloqueado, sem executar nem consultar o Planner (ver cycle-recovery.test.mjs)
+    assert.match(planProblem(m.cycle), re, label); const before = JSON.stringify(m.cycle);
+    const refused = await cy.resume(m.id); assert.equal(refused.status, 409, label); assert.match(refused.error, /Plano inconsistente/, label); assert.match(refused.error, re, label); await cy.idle();
+    assert.equal(JSON.stringify(m.cycle), before, label); assert.equal(m.cycle.status, 'blocked', label);
     assert.equal(execStarts, starts, label); assert.equal(planner.calls.length, 0, label); assert.notEqual(m.cycle.status, 'completed');
   }
 });
