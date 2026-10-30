@@ -39,9 +39,16 @@ export const backupStatus = () => ({ ...backup });
 let persistence = { ok: true, error: null, failedAt: null, consecutiveFailures: 0, lastOkAt: null };
 let lastWriteError = null;
 export const persistenceStatus = () => ({ ...persistence });
+// Histórico do ÚLTIMO incidente (M2): persistenceStatus() volta a ok na primeira gravação que dá certo, e o save() grava o estado INTEIRO (então essa gravação
+// de fato reconcilia o disco com a memória); este registro guarda que houve falha, quando começou, quantas vezes e quando foi reconciliada, para a recuperação
+// não apagar o rastro. null = nunca houve falha neste processo.
+let incident = null;
+export const persistenceIncident = () => (incident ? { ...incident } : null);
 function markFailed(e) {
   const first = persistence.ok;
   persistence = { ok: false, error: e?.code || 'ERRO', failedAt: now(), consecutiveFailures: persistence.consecutiveFailures + 1, lastOkAt: persistence.lastOkAt };
+  if (first) incident = { error: persistence.error, failedAt: persistence.failedAt, failures: 1, recoveredAt: null };
+  else if (incident) { incident.failures++; incident.error = persistence.error; }
   if (!first) return; // só a TRANSIÇÃO é anunciada: falha persistente não inunda o console nem a atividade
   console.error(`[store] FALHA DE PERSISTÊNCIA (${persistence.error}): o banco não está sendo gravado em disco; o estado segue em memória`);
   try { log('system', `Falha ao gravar o banco em disco (${persistence.error}). O estado continua em memória; cada nova gravação tenta de novo.`, { persistence: 'failed' }); } catch { /* sem banco carregado */ }
@@ -49,6 +56,7 @@ function markFailed(e) {
 function markOk() {
   if (persistence.ok) { persistence.lastOkAt = now(); return; }
   const n = persistence.consecutiveFailures;
+  if (incident) incident.recoveredAt = now();
   persistence = { ok: true, error: null, failedAt: null, consecutiveFailures: 0, lastOkAt: now() };
   console.error(`[store] persistência restabelecida depois de ${n} falha(s) consecutiva(s)`);
   try { log('system', `Gravação do banco restabelecida depois de ${n} falha(s) consecutiva(s).`, { persistence: 'restored' }); } catch { /* sem banco carregado */ }
@@ -172,6 +180,21 @@ export function save() {
   try { ok = writeMain(json); } catch (e) { markFailed(e); throw e; } // o contrato não muda: erro real continua sendo lançado
   if (ok) { markOk(); cancelPending(); afterMainSaved(json); } else markFailed(lastWriteError); // o save() grava o estado INTEIRO: o saveSoon pendente fica redundante (se a gravação falhar, ele continua agendado)
   return ok;
+}
+
+/**
+ * Gravação CONFIRMADA: devolve true só com o db.json gravado. Falha de gravação (save() devolveu false) lança PersistenceError; erro real de E/S (que o
+ * save() já lança) segue lançado, com a propriedade `persistence = true`. Para os pontos em que seguir adiante sem o estado em disco seria inseguro
+ * (início de execução, conclusão de ciclo, registro de PID de processo filho). O save() comum continua com o contrato de sempre.
+ */
+export class PersistenceError extends Error {
+  constructor(message) { super(message); this.name = 'PersistenceError'; this.persistence = true; this.code = persistence.error || 'PERSISTENCE'; }
+}
+export function saveOrThrow() {
+  let ok;
+  try { ok = save(); } catch (e) { if (e && typeof e === 'object') e.persistence = true; throw e; }
+  if (ok === false) throw new PersistenceError(`o banco não pôde ser gravado em disco (${persistence.error || 'erro'})`);
+  return true;
 }
 
 /** Depois que o db.json novo está gravado: o estado válido ANTERIOR vira o .bak (se mudou) e o novo passa a ser o "último válido". */

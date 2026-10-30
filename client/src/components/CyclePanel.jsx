@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { Btn, Status, statusLabel, VERIFICATION_LABEL, DECISION_LABEL } from './ui.jsx';
+import { Btn, Status, statusLabel, PersistenceNote, VERIFICATION_LABEL, DECISION_LABEL } from './ui.jsx';
 
 const CODE = {
   planner_blocked: 'O Planner pediu intervenção humana', planner_invalid: 'Resposta do Planner inválida', planner_error: 'Falha do Planner',
   executor_failures: 'Execuções falharam em sequência', no_progress: 'Sem progresso', needs_approval: 'Permissão necessária',
   interrupted: 'Execução interrompida', verification_blocked: 'Verificação não pôde rodar', cannot_start: 'Não foi possível iniciar', restarted: 'Servidor reiniciado',
-  planner_calls_limit: 'Limite de consultas ao Planner', internal_error: 'Erro interno',
+  planner_calls_limit: 'Limite de consultas ao Planner', internal_error: 'Erro interno', persistence_failed: 'Gravação em disco falhou',
 };
 
 function Round({ r }) {
@@ -73,6 +73,12 @@ export default function CyclePanel({ mission }) {
       <div className="row"><b className="sub">Ciclo autônomo</b>{c && <Status value={c.status} masc />}</div>
       {c && <div className="dim small">rodada {c.rounds.length} de no máximo {c.maxIterations} · consultas ao Planner: {c.plannerCalls}</div>}
       {blocked && <p className="s-blocked small">⚠ {CODE[c.blockedCode] || c.blockedCode}: {c.blockedReason}</p>}
+      {blocked && c.blockedCode === 'persistence_failed' && (
+        <div className="small">
+          <p className="dim">Causas comuns: disco cheio, falta de permissão, antivírus ou arquivo em uso. Nada foi iniciado nem declarado como concluído sem estar gravado; ao corrigir o armazenamento, Retomar confirma a gravação antes de continuar.</p>
+          {state?.persistenceIncident && <p className="dim"><PersistenceNote incident={state.persistenceIncident} /></p>}
+        </div>
+      )}
       {c?.status === 'completed' && <div className="small"><p><b className="s-completed">Concluído</b> <span className="dim">({c.assurance === 'verified' ? 'com verificações reais obrigatórias aprovadas' : 'sem verificações reais obrigatórias: apenas evidências autodeclaradas'})</span>. {c.finalSummary}</p><ul className="plain">{(c.evidence || []).map((e) => <li key={e}>{e}</li>)}</ul></div>}
       {c?.status === 'limit_reached' && <p className="s-blocked small">Limite de rodadas atingido sem conclusão.</p>}
       {c?.status === 'cancelled' && <p className="dim small">Ciclo cancelado.</p>}

@@ -154,7 +154,7 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
       });
       if (task.dirtyBefore) { task.log.push('[aviso] o workspace já tinha alterações não commitadas antes desta execução'); task.logTotal = 1; }
       store.log('execution', `Execução iniciada: ${task.title}`, { missionId: mission.id, taskId: task.id, agent: 'executor' });
-      store.save(); emitTask(mission, task); bus.emit('state', {});
+      store.saveOrThrow(); emitTask(mission, task); bus.emit('state', {}); // CONFIRMADA: o PID gravado é o que a recuperação de órfãos (P4/M1) usa; save()==false deixaria o filho sem rastro
     } catch (e) {
       let stopped = false;
       try { stopped = (await executor.stop()).stopped === true; } catch { try { executor.killActiveSync?.(); } catch { /* sem mais o que fazer */ } }

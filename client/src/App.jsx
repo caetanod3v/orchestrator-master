@@ -8,6 +8,7 @@ import Workspaces from './pages/Workspaces.jsx';
 import Activity from './pages/Activity.jsx';
 import Settings from './pages/Settings.jsx';
 import { useStore } from './store.jsx';
+import { PersistenceNote } from './components/ui.jsx';
 
 const PAGES = { cockpit: Cockpit, missions: Missions, agents: Agents, workspaces: Workspaces, activity: Activity, settings: Settings };
 // Título e frase de apoio de cada página interna (o Cockpit é tela cheia e não tem cabeçalho). Mantenha os títulos iguais aos rótulos da navegação.
@@ -22,7 +23,7 @@ const current = () => { const p = location.hash.replace('#/', '').split('?')[0];
 
 export default function App() {
   const [page, setPage] = useState(current());
-  const { error, toast } = useStore();
+  const { error, toast, state } = useStore();
   useEffect(() => {
     const on = () => setPage(current());
     window.addEventListener('hashchange', on);
@@ -35,6 +36,11 @@ export default function App() {
       <div className="main">
         <Topbar />
         {error && <div className="banner err" role="alert">{error}</div>}
+        {state?.persistence && !state.persistence.ok && (
+          <div className="banner err" role="alert">
+            O banco não está sendo gravado em disco (erro {state.persistence.error}): o estado só existe em memória. Novos ciclos, retomadas e execuções são recusados ou bloqueados até a gravação voltar. <PersistenceNote incident={state.persistenceIncident} />
+          </div>
+        )}
         {toast && <div className={`toast ${toast.kind}`} role="status">{toast.text}</div>}
         {page === 'cockpit'
           ? <div className="content full"><Page /></div>

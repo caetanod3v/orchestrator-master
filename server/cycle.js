@@ -21,6 +21,10 @@ import { usageRecord, usageEvent } from './usage.js';
 import { limitProblem } from './limits.js';
 import { DEFAULT_AGENT } from './agents.js';
 
+// Política de persistência (M2): antes de AVANÇAR (consultar o Planner, iniciar uma rodada) o ciclo exige que o banco esteja gravando. Se a última gravação
+// falhou, tenta de novo com estas esperas (ms) para absorver uma falha TRANSITÓRIA (antivírus, indexador); esgotadas, ou diante de um erro real de E/S
+// (EIO, ENOSPC, EISDIR…), o ciclo é BLOQUEADO com `persistence_failed` e só retoma depois de uma gravação confirmada.
+export const PERSIST_RETRY_MS = [250, 750, 1500];
 export const DEFAULT_MAX_ITERATIONS = 5;
 export const HARD_MAX_ITERATIONS = 10;
 const ACTIVE = ['planning', 'running'];
@@ -195,22 +199,48 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
   ].filter((x) => x !== '').join('\n');
 }
 
-export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null }) { // limits: incremento D (limites.js); null = sem limites (como antes)
+export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null, persistRetryMs = PERSIST_RETRY_MS }) { // limits: incremento D (limites.js); null = sem limites (como antes); persistRetryMs: só testes
   const loops = new Map();
   let starting = null; // reserva síncrona (missionId) enquanto start() aguarda o probe
   const mission = (id) => find(db.missions, id);
   const wsOf = (m) => find(db.workspaces, m.workspaceId);
 
-  const emit = (m) => { store.save(); bus.emit('cycle', { missionId: m.id, status: m.cycle.status, iteration: m.cycle.rounds.length }); };
+  // `strict`: a gravação precisa ser CONFIRMADA (store.saveOrThrow); sem ele o contrato é o de sempre (um save() que devolve false não interrompe: o próximo
+  // portão de persistência, antes de avançar, cuida disso). Erro real de E/S sai marcado como falha de persistência (ver launch()).
+  // save() que LANÇA (erro real de E/S) sai marcado como falha de persistência: launch() o transforma em `persistence_failed`, nunca em `internal_error`.
+  const saveTagged = () => { try { return store.save(); } catch (e) { if (e && typeof e === 'object') e.persistence = true; throw e; } };
+  const emit = (m, strict = false) => {
+    if (strict) store.saveOrThrow(); else saveTagged();
+    bus.emit('cycle', { missionId: m.id, status: m.cycle.status, iteration: m.cycle.rounds.length });
+  };
   const note = (m, type, msg, agent) => store.log(type, msg, { missionId: m.id, ...(agent ? { agent } : {}) });
+
+  /**
+   * Portão de persistência: só deixa o ciclo AVANÇAR se o banco estiver gravando. Caminho saudável: nenhuma E/S extra. Com falha registrada, regrava o estado
+   * INTEIRO (o que reconcilia o disco com a memória) com as esperas de persistRetryMs; erro real de E/S bloqueia na hora (não é transitório).
+   * Se o ciclo for cancelado durante as esperas, devolve o controle sem gastar as tentativas restantes: quem chamou encerra como "cancelled".
+   */
+  async function persistGate(c) {
+    if (store.persistenceStatus().ok) return;
+    for (let i = 0; ; i++) {
+      if (c?.cancelRequested) return; // o cancelamento não vira bloqueio por persistência
+      const ok = saveTagged(); // erro real de E/S: não é transitório, bloqueia já
+      if (ok !== false) return;
+      if (i >= persistRetryMs.length) throw new store.PersistenceError(`o banco não pôde ser gravado em disco (${store.persistenceStatus().error || 'erro'}) depois de ${i + 1} tentativas`);
+      await new Promise((r) => setTimeout(r, persistRetryMs[i]));
+    }
+  }
   const stop = (m, code, reason) => {
     const c = m.cycle;
     c.status = 'blocked'; c.blockedCode = code; c.blockedReason = reason; c.blocks.push({ code, reason, at: store.now() });
     note(m, 'cycle', `Ciclo bloqueado (${code}): ${reason}`); emit(m); return 'stop';
   };
-  const end = (m, status, msg) => {
-    const c = m.cycle;
+  // `confirm`: o estado final só vale se for gravado (conclusão do ciclo). Se a gravação falhar, volta ao estado anterior e a exceção segue: nunca se anuncia
+  // "concluído" (nem em memória nem na atividade) sem o disco ter registrado.
+  const end = (m, status, msg, confirm = false) => {
+    const c = m.cycle, prev = { status: c.status, finishedAt: c.finishedAt };
     c.status = status; c.finishedAt = store.now();
+    if (confirm) { try { store.saveOrThrow(); } catch (e) { Object.assign(c, prev); throw e; } }
     note(m, 'cycle', msg, status === 'completed' ? 'planner' : undefined); emit(m); return 'stop';
   };
 
@@ -257,6 +287,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const c = m.cycle, ws = wsOf(m);
     let feedback = null, problem = null;
     for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await persistGate(c); // a nova tentativa é OUTRA chamada ao Planner: só com a rejeição gravada (senão o ciclo bloqueia por persistência)
       if (c.plannerCalls >= (c.maxIterations + 1) * 3) return { overBudget: true };
       if (c.cancelRequested) return { cancelled: true };
       const lim = limitProblem(limits, m, 'planner'); if (lim) return { limit: lim }; // ANTES de contar a chamada e de iniciar a CLI
@@ -297,7 +328,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       c.rejections.push({ at: store.now(), problem: clip(problem, 300), excerpt: clip(res.text, 200) });
       note(m, 'cycle', `Resposta do Planner rejeitada: ${problem}`, 'planner');
       feedback = `Sua resposta anterior foi REJEITADA pelo backend: ${problem}. Corrija e responda apenas com o JSON válido.`;
-      store.save();
+      saveTagged();
     }
     return { invalid: problem };
   }
@@ -345,6 +376,8 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
 
   async function runRound(m, d) {
     const c = m.cycle;
+    if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a rodada.');
+    await persistGate(c); // iniciar o Executor é irreversível: o estado até aqui precisa estar no disco
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a rodada.');
     const lim = limitProblem(limits, m, 'executor'); if (lim) return stop(m, lim.code, lim.reason); // ANTES de criar a rodada e de iniciar o Executor
     const n = c.rounds.length + 1;
@@ -402,6 +435,8 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const c = m.cycle;
     for (;;) {
       if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
+      await persistGate(c); // não avança (re-verificação, Planner) com o banco sem gravar
+      if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
       if (c.reverifyPending) { c.reverifyPending = false; if ((await reverifyLast(m)) === 'stop') return undefined; }
       c.status = 'planning'; emit(m);
       const plan = await askPlanner(m);
@@ -410,9 +445,15 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (plan.overBudget) return stop(m, 'planner_calls_limit', 'Limite de consultas ao Planner atingido neste ciclo.');
       if (plan.error) return stop(m, 'planner_error', `O Planner falhou: ${plan.error}`);
       if (plan.invalid) return stop(m, 'planner_invalid', `O Planner não produziu uma decisão válida após nova tentativa: ${plan.invalid}`);
-      const d = plan.decision, last = c.rounds.at(-1);
+      const d = plan.decision, last = c.rounds.at(-1), prevDecision = last?.decision;
       if (last) last.decision = { decision: d.decision, rationale: d.rationale, at: store.now() };
-      if (d.decision === 'complete') { c.finalSummary = d.rationale; c.evidence = d.evidence; c.assurance = (wsOf(m)?.verifications || []).some((v) => v.required) ? 'verified' : 'self-declared'; return end(m, 'completed', `Planner declarou a missão concluída: ${clip(d.rationale, 200)}`); }
+      if (d.decision === 'complete') {
+        const keep = { finalSummary: c.finalSummary, evidence: c.evidence, assurance: c.assurance, decision: prevDecision };
+        c.finalSummary = d.rationale; c.evidence = d.evidence; c.assurance = (wsOf(m)?.verifications || []).some((v) => v.required) ? 'verified' : 'self-declared';
+        try { return end(m, 'completed', `Planner declarou a missão concluída: ${clip(d.rationale, 200)}`, true); } catch (e) { // conclusão NÃO gravada: nada de "concluído"; o ciclo bloqueia (launch)
+          const { decision, ...fields } = keep; Object.assign(c, fields); if (last) { if (decision === undefined) delete last.decision; else last.decision = decision; } throw e;
+        }
+      }
       if (d.decision === 'blocked') { note(m, 'cycle', `Planner pediu intervenção humana: ${clip(d.blockedReason, 200)}`, 'planner'); return stop(m, 'planner_blocked', d.blockedReason); }
       if (c.rounds.length >= c.maxIterations) return end(m, 'limit_reached', `Limite de ${c.maxIterations} rodadas atingido; o Planner ainda queria continuar.`);
       if ((await runRound(m, d)) === 'stop') return undefined;
@@ -438,13 +479,29 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const p = drive(m).catch((err) => {
       console.error('[cycle] erro interno', err);
       try { settleAfterError(m, err); } catch (e) { console.error('[cycle] falha ao normalizar o estado', e); }
-      try { stop(m, 'internal_error', `Erro interno do ciclo: ${err.message}`); } catch (e) {
+      // Falha ao gravar o estado (err.persistence, ver store.saveOrThrow/emit) tem código próprio: o bloqueio é explícito e a retomada exige o banco gravando de novo.
+      const persistence = err?.persistence === true;
+      const code = persistence ? 'persistence_failed' : 'internal_error';
+      const reason = persistence
+        ? `Falha de persistência: o estado do ciclo não pôde ser gravado em disco (${err.message}). O ciclo foi bloqueado para não avançar sem estado persistido; corrija o armazenamento e retome (a retomada só é aceita depois de uma gravação confirmada).`
+        : `Erro interno do ciclo: ${err.message}`;
+      try { stop(m, code, reason); } catch (e) {
         // segunda exceção (persistência/evento): o estado em memória precisa ficar coerente mesmo assim
         console.error('[cycle] falha ao registrar o bloqueio', e);
-        const c = m.cycle; c.status = 'blocked'; c.blockedCode = 'internal_error'; c.blockedReason = `Erro interno do ciclo: ${err.message}`;
+        const c = m.cycle; c.status = 'blocked'; c.blockedCode = code; c.blockedReason = reason;
       }
     }).finally(() => { if (loops.get(m.id) === p) loops.delete(m.id); });
     loops.set(m.id, p);
+  }
+
+  /**
+   * O banco está gravando? Com falha registrada (ou `force`), tenta gravar o estado inteiro AGORA: se der certo, o disco foi reconciliado com a memória e
+   * segue; senão devolve o 503 (nada é alterado). Saudável e sem `force`: nenhuma E/S extra.
+   */
+  function storageProblem({ force = false } = {}) {
+    if (!force && store.persistenceStatus().ok) return null;
+    try { if (store.save() !== false) return null; } catch { /* erro real: cai no 503 abaixo */ }
+    return fail(503, `O banco não está sendo gravado em disco (${store.persistenceStatus().error || 'erro'}); corrija o armazenamento e tente de novo. Nada foi iniciado nem retomado.`);
   }
 
   /** Condições para iniciar um ciclo NESTA missão agora. Chamada antes da reserva e DE NOVO depois do probe (o estado pode ter mudado). */
@@ -469,6 +526,8 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (starting) return fail(409, 'Outra execução ou ciclo está em andamento.');
     const blocked = startBlocker(m);
     if (blocked) return blocked;
+    const storage = storageProblem();
+    if (storage) return storage;
     starting = m.id; // reserva SÍNCRONA: nenhum await entre a checagem acima e esta linha
     try {
       const probe = await executor.probe();
@@ -495,7 +554,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
    * síncrona), chama `restore` para voltar ao estado anterior: nunca fica ciclo "planning" sem laço. Devolve null em sucesso ou o erro 500.
    */
   function launchOrRollback(m, message, what, restore) {
-    try { note(m, 'cycle', message); emit(m); launch(m); return null; } catch (err) {
+    try { note(m, 'cycle', message); emit(m, true); launch(m); return null; } catch (err) { // emit estrito: sem gravação confirmada o ciclo NÃO nasce/retoma (rollback abaixo)
       restore();
       console.error(`[cycle] falha ao ${what}`, err);
       try { note(m, 'cycle', `Falha ao ${what} (revertido): ${err.message}`); } catch { /* o registro é só informativo */ }
@@ -529,6 +588,12 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (c.blockedCode === 'planner_calls_limit' && c.plannerCalls >= ((maxIterations ?? c.maxIterations) + 1) * 3) return fail(409, 'O limite de consultas ao Planner deste ciclo foi atingido; aumente o limite de rodadas (maxIterations) para continuar.');
     // Limites do incremento D: retomar não contorna o controle. Recusa ANTES de qualquer mutação enquanto o próximo passo (consultar o Planner) seria bloqueado de novo.
     const lim = limitProblem(limits, m, 'planner'); if (lim) return fail(409, `${lim.reason} Aumente o limite (reinicie o servidor com um valor maior) para continuar.`);
+    // Persistência (M2): um ciclo parado por falha de gravação só retoma depois de o estado (inclusive este bloqueio) ser GRAVADO de fato; com qualquer outra falha
+    // recente do banco também se exige uma gravação confirmada antes. Recusa ANTES de qualquer mutação.
+    const reconcile = c.blockedCode === 'persistence_failed';
+    const storage = storageProblem({ force: reconcile });
+    if (storage) return storage;
+    if (reconcile) note(m, 'cycle', 'Persistência reconciliada: o estado do ciclo foi gravado em disco antes de retomar');
     const prev = { ...c, humanNotes: c.humanNotes.length }; // só campos escalares mudam; humanNotes só ganha 1 item no fim
     if (maxIterations !== undefined) c.maxIterations = maxIterations;
     if (text?.trim()) c.humanNotes.push({ at: store.now(), text: text.trim() });

@@ -77,7 +77,7 @@ test('rota /run: 500 estruturado (P7), servidor vivo e nenhum filho sem acompanh
   mock.restoreAll();
 });
 
-test('ciclo: a falha no início da rodada bloqueia o ciclo (erro interno), a rodada e a tarefa ficam "failed" e o filho é encerrado', async () => {
+test('ciclo: a falha no início da rodada bloqueia o ciclo (falha de persistência, M2), a rodada e a tarefa ficam "failed" e o filho é encerrado', async () => {
   quiet();
   const { executor, started } = rig(), { startTaskRun } = setupExecution(express(), { db, executor });
   const calls = [];
@@ -87,7 +87,7 @@ test('ciclo: a falha no início da rodada bloqueia o ciclo (erro interno), a rod
   const m = mkMission();
   try { assert.equal((await cy.start(m.id, 3)).status, 202); await settle(cy.idle()); } finally { mock.restoreAll(); }
   const c = m.cycle, t = m.tasks[0];
-  assert.equal(c.status, 'blocked'); assert.equal(c.blockedCode, 'internal_error'); assert.equal(c.rounds[0].status, 'failed'); assert.equal(t.status, 'failed'); assert.equal('pid' in t, false);
+  assert.equal(c.status, 'blocked'); assert.equal(c.blockedCode, 'persistence_failed'); assert.equal(c.rounds[0].status, 'failed'); assert.equal(t.status, 'failed'); assert.equal('pid' in t, false); // M2: antes 'internal_error' (genérico)
   assert.equal(started.length, 1); assert.equal(pidAlive(started[0].pid), false, 'o filho não ficou rodando com o ciclo bloqueado'); assert.equal(executor.isBusy(), false);
   assert.equal(calls.length, 1, 'o Planner não foi consultado de novo'); assert.deepEqual(unhandled, []);
 });

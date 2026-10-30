@@ -74,6 +74,7 @@ app.get('/api/state', async (req, res) => {
       pending: tasks.filter((t) => ['queued', 'awaiting_approval'].includes(t.status)).length,
       awaitingApproval: tasks.filter((t) => t.status === 'awaiting_approval').length,
     },
+    persistenceIncident: store.persistenceIncident(), // aditivo (M2): último incidente de gravação (início, nº de falhas, quando foi reconciliado); null se nunca houve
     persistence: store.persistenceStatus(), // aditivo: ok, código do último erro, quando falhou e quantas falhas seguidas (sem caminhos)
     settings: { cycleMaxIterations: DEFAULT_MAX_ITERATIONS, ...db.settings, cycleHardMax: HARD_MAX_ITERATIONS },
     activeWorkspace: find(db.workspaces, db.settings.activeWorkspaceId) || null,

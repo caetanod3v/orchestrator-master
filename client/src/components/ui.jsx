@@ -47,6 +47,14 @@ export const Progress = ({ done, total }) => (
 
 export const fmtTime = (iso) => new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
 
+/** Último incidente de gravação do servidor (/api/state.persistenceIncident): só o código do erro, quando começou, quantas falhas e se a gravação já voltou. */
+export const PersistenceNote = ({ incident }) => (incident ? (
+  <span>
+    Incidente de gravação: erro <b>{incident.error}</b> desde {fmtTime(incident.failedAt)} · {incident.failures} {incident.failures === 1 ? 'falha' : 'falhas'} ·{' '}
+    {incident.recoveredAt ? `gravação restabelecida em ${fmtTime(incident.recoveredAt)}` : 'a gravação ainda não voltou'}
+  </span>
+) : null);
+
 export function taskBlocked(task, tasks) {
   return task.dependsOn.some((d) => tasks.find((t) => t.id === d)?.status !== 'completed');
 }
