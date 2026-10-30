@@ -11,6 +11,7 @@
 //             round.verification    none | passed | failed | blocked | skipped  (resultado das verificações REAIS da rodada; ver
 //                                   verificationOutcome/roundVerification; rodadas antigas sem o campo são derivadas do relatório, sem gravar)
 //   execução: task.status           (running, completed, failed, interrupted … – do executor existente)
+//   plano   : cycle.plan.steps[].status  queued | running | completed | failed | interrupted (M4, ver plan.js): DERIVADO das rodadas (round.planId/stepId); execução sequencial
 //
 // O Planner só pode escolher continue | complete | blocked, e o backend valida formato, decisão e
 // evidências. Ele não tem ferramentas e não consegue alterar políticas, permissões ou aprovações.
@@ -23,6 +24,8 @@ import { asyncRoute } from './async-route.js';
 import { usageRecord, usageEvent } from './usage.js';
 import { limitProblem } from './limits.js';
 import { DEFAULT_AGENT } from './agents.js';
+import { MAX_PLAN_STEPS } from './cycle-schema.js';
+import { syncPlan, nextStep, openSteps, planProblem, dependencyTaskIds, planProgress } from './plan.js';
 
 // O que precisa acontecer para um ciclo parado por limite poder retomar. Os limites vêm do ambiente do servidor; a retomada nunca os altera.
 const LIMIT_HINT = {
@@ -157,7 +160,22 @@ function pastCyclesSection(past) {
   return text.length > PAST_BUDGET ? text.slice(0, PAST_BUDGET - cut.length) + cut : text;
 }
 
-function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
+const PLAN_FORMAT = [
+  '{"decision":"plan","rationale":"...","steps":[{"id":"s1","title":"...","instructions":"...","acceptance":["critério verificável"],"dependsOn":[]},{"id":"s2","title":"...","instructions":"...","acceptance":["..."],"dependsOn":["s1"]}]}',
+  `("plan" propõe de 1 a ${MAX_PLAN_STEPS} etapas com ids únicos e dependências explícitas (sem ciclos; pelo menos uma etapa sem dependências; no máximo as rodadas restantes, pois cada etapa usa uma rodada). O orquestrador executa as etapas UMA POR VEZ, na ordem do plano e só quando as dependências estiverem concluídas, verifica cada uma com as verificações reais e só volta a consultar você quando não houver etapa elegível: ao fim do plano ou se uma etapa não for concluída. Um novo "plan" substitui o atual; "complete" só é aceito com todas as etapas do plano concluídas.)`,
+].join('\n');
+
+/** Estado do plano gravado, para o Planner (só dados do orquestrador; vazio se não há plano). */
+function planSection(c) {
+  const steps = c.plan?.steps;
+  if (!Array.isArray(steps) || !steps.length) return '';
+  const pr = planProgress(c);
+  return [`\nPLANO ATUAL (gravado pelo orquestrador; ${pr.completed} de ${pr.total} etapas concluídas; execução sequencial, uma etapa por vez):`,
+    ...steps.map((st) => `  [${st.id}] ${clip(st.title, 120)} | estado: ${st.status}${st.round ? ` (rodada ${st.round})` : ''} | depende de: ${(st.dependsOn || []).join(', ') || 'nada'}`),
+    'Etapas "failed" ou "interrupted" não são refeitas sozinhas: decida se propõe um novo plano, executa uma tarefa avulsa ("continue") ou pede ajuda ("blocked").'].join('\n');
+}
+
+function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, multiStep = false }) {
   const rounds = cycle.rounds;
   const hist = rounds.map((r) => {
     const rep = r.report;
@@ -197,6 +215,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
     '',
     rounds.length ? `HISTÓRICO:\n${hist}` : 'HISTÓRICO: nenhuma rodada executada ainda (planeje a primeira tarefa).',
     last?.report ? `\nÚLTIMO RELATÓRIO (JSON):\n${JSON.stringify(plannerReportView(last.report))}` : '',
+    planSection(cycle),
     cycle.humanNotes.length ? `\nORIENTAÇÕES HUMANAS (não alteram as políticas):\n${cycle.humanNotes.map((n) => `- ${n.text}`).join('\n')}` : '',
     feedback ? `\nATENÇÃO: ${feedback}` : '',
     '',
@@ -204,12 +223,13 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback }) {
     '{"decision":"continue","rationale":"...","task":{"title":"...","instructions":"...","acceptance":["critério verificável"]}}',
     '{"decision":"complete","rationale":"...","evidence":["evidência concreta tirada dos relatórios"]}',
     '{"decision":"blocked","rationale":"...","blockedReason":"o que precisa de intervenção humana"}',
+    ...(multiStep ? [PLAN_FORMAT] : []),
     'Como ler o HISTÓRICO: linhas "verificação anterior SUBSTITUÍDA" são histórico (resultados antigos trocados por uma re-verificação posterior); o resumo e as verificações autodeclaradas descrevem o FIM DA RODADA, não o estado atual do workspace. Para decidir sobre o estado atual, use a linha de verificações REAIS e a linha do tempo.',
     'Regras: se houver verificações obrigatórias, a decisão "complete" exige que todas tenham passado na última rodada (evidência real do orquestrador). Uma tarefa pequena e específica por vez; critérios objetivos; não repita tarefa idêntica; use "complete" apenas se a ÚLTIMA execução foi bem-sucedida e os relatórios trazem verificações aprovadas (pass) sem falhas — o backend rejeita "complete" sem isso; se faltar permissão ou algo fora do alcance do executor, use "blocked".',
   ].filter((x) => x !== '').join('\n');
 }
 
-export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null, persistRetryMs = PERSIST_RETRY_MS }) { // limits: incremento D (limites.js); null = sem limites (como antes); persistRetryMs: só testes
+export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null, multiStep = false, persistRetryMs = PERSIST_RETRY_MS }) { // multiStep (M4): o Planner pode propor um plano de várias etapas (ORCH_CYCLE_PLAN=on; plan.js); false = fluxo de sempre. // limits: incremento D (limites.js); null = sem limites (como antes); persistRetryMs: só testes
   const loops = new Map();
   let starting = null; // reserva síncrona (missionId) enquanto start() aguarda o probe
   const mission = (id) => find(db.missions, id);
@@ -220,6 +240,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   // save() que LANÇA (erro real de E/S) sai marcado como falha de persistência: launch() o transforma em `persistence_failed`, nunca em `internal_error`.
   const saveTagged = () => { try { return store.save(); } catch (e) { if (e && typeof e === 'object') e.persistence = true; throw e; } };
   const emit = (m, strict = false) => {
+    syncPlan(m.cycle); // o estado das etapas do plano acompanha as rodadas ANTES de cada gravação
     if (strict) store.saveOrThrow(); else saveTagged();
     bus.emit('cycle', { missionId: m.id, status: m.cycle.status, iteration: m.cycle.rounds.length });
   };
@@ -269,6 +290,12 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (missing.length) return `"complete" rejeitado: verificação obrigatória não executada nesta rodada: ${missing.map((v) => v.script).join(', ')}`;
       if (failCount(last.report) > 0) return '"complete" rejeitado: o último relatório tem verificações com falha';
       if (!required.length && passCount(last.report) < 1) return '"complete" rejeitado: o último relatório não traz nenhuma verificação aprovada (pass)';
+      const open = openSteps(c); // M4: um plano com etapas não concluídas nunca vira "concluído"
+      if (open.length) return `"complete" rejeitado: o plano ainda tem etapas não concluídas (${open.map((st) => `${st.id}=${st.status}`).join(', ')}); conclua-as, proponha um novo plano ou declare "blocked"`;
+    }
+    if (d.decision === 'plan') {
+      const left = c.maxIterations - c.rounds.length;
+      if (d.steps.length > left) return `o plano tem ${d.steps.length} etapa(s), mas restam ${left} rodada(s) (cada etapa usa uma rodada)`;
     }
     if (d.decision === 'continue') {
       const fp = fingerprint(d.task);
@@ -303,7 +330,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       const lim = limitProblem(limits, m, 'planner'); if (lim) return { limit: lim }; // ANTES de contar a chamada e de iniciar a CLI
       c.plannerCalls++;
       const listing = listFiles(ws.path);
-      const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback });
+      const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback, multiStep });
       const call = c.plannerCalls;
       // Roteamento (incrementos A e B): escolhe a camada desta chamada (seleção inicial na 1ª chamada do ciclo; escalonamento na tentativa que segue uma
       // rejeição) e REGISTRA a rota efetivamente aplicada. Só decide QUEM responde: o número de tentativas e todas as validações abaixo são as de sempre.
@@ -332,7 +359,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       recordPlannerUsage(m, call, res.usage?.metrics, route); // o consumo existiu mesmo se a chamada foi cancelada ou falhou
       if (c.cancelRequested) return { cancelled: true };
       if (res.error) return { error: res.error };
-      const v = validateDecision(res.text);
+      const v = validateDecision(res.text, { plan: multiStep });
       problem = v.ok ? semanticProblem(m, v.value) : `formato inválido: ${v.error}`;
       if (!problem) return { decision: v.value };
       c.rejections.push({ at: store.now(), problem: clip(problem, 300), excerpt: clip(res.text, 200) });
@@ -384,7 +411,8 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     return 'next';
   }
 
-  async function runRound(m, d) {
+  /** `step`: etapa do plano (M4) que esta rodada executa; sem ela é a rodada avulsa de sempre. */
+  async function runRound(m, d, step = null) {
     const c = m.cycle;
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a rodada.');
     await persistGate(c); // iniciar o Executor é irreversível: o estado até aqui precisa estar no disco
@@ -393,9 +421,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const n = c.rounds.length + 1;
     const task = {
       id: store.uid('task'), title: clip(`[Rodada ${n}] ${d.task.title}`, 200), status: 'queued', authorized: true, authorizedBy: 'cycle', auto: true,
-      instructions: d.task.instructions, acceptance: d.task.acceptance, dependsOn: [], report: '', files: [], log: [], agent: d.task.agent ?? DEFAULT_AGENT,
+      instructions: d.task.instructions, acceptance: d.task.acceptance, dependsOn: step ? dependencyTaskIds(c, step) : [], report: '', files: [], log: [], agent: d.task.agent ?? DEFAULT_AGENT,
     };
-    const round = { n, status: 'running', taskId: task.id, fingerprint: fingerprint(d.task), agent: task.agent, plan: { rationale: d.rationale, ...d.task }, startedAt: store.now(), finishedAt: null, report: null, decision: null };
+    const round = { n, status: 'running', taskId: task.id, fingerprint: fingerprint(d.task), agent: task.agent, plan: { rationale: d.rationale, ...d.task }, ...(step ? { planId: c.plan.id, stepId: step.id } : {}), startedAt: store.now(), finishedAt: null, report: null, decision: null };
     m.tasks.push(task); c.rounds.push(round); c.status = 'running';
     note(m, 'cycle', `Rodada ${n} planejada: ${d.task.title}`, 'planner'); emit(m);
 
@@ -441,6 +469,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     return 'next';
   }
 
+  /** A etapa vira a mesma "decisão continue" que o Planner daria: runRound, verificação, limites e cancelamento são os de sempre. */
+  const stepDecision = (st) => ({ decision: 'continue', rationale: `Etapa "${st.id}" do plano gravado.`, task: { title: st.title, instructions: st.instructions, acceptance: st.acceptance, ...(st.agent !== undefined ? { agent: st.agent } : {}) } });
+
   async function drive(m) {
     const c = m.cycle;
     for (;;) {
@@ -448,6 +479,14 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       await persistGate(c); // não avança (re-verificação, Planner) com o banco sem gravar
       if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
       if (c.reverifyPending) { c.reverifyPending = false; if ((await reverifyLast(m)) === 'stop') return undefined; }
+      const broken = planProblem(c); // plano gravado inconsistente: nunca executa a partir dele
+      if (broken) return stop(m, 'plan_invalid', `Plano inconsistente: ${broken}. Nada foi executado a partir dele; cancele o ciclo (o histórico fica registrado).`);
+      const step = nextStep(c); // M4: etapa elegível do plano gravado = não consulta o Planner (uma etapa por vez)
+      if (step) {
+        if (c.rounds.length >= c.maxIterations) return end(m, 'limit_reached', `Limite de ${c.maxIterations} rodadas atingido; o plano ainda tem etapas pendentes.`);
+        if ((await runRound(m, stepDecision(step), step)) === 'stop') return undefined;
+        continue;
+      }
       c.status = 'planning'; emit(m);
       const plan = await askPlanner(m);
       if (plan.cancelled || c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
@@ -457,6 +496,19 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (plan.invalid) return stop(m, 'planner_invalid', `O Planner não produziu uma decisão válida após nova tentativa: ${plan.invalid}`);
       const d = plan.decision, last = c.rounds.at(-1), prevDecision = last?.decision;
       if (last) last.decision = { decision: d.decision, rationale: d.rationale, at: store.now() };
+      if (d.decision === 'plan') {
+        const old = c.plan, oldHistory = c.planHistory;
+        syncPlan(c); c.plan = { id: store.uid('plan'), createdAt: store.now(), rationale: d.rationale, steps: d.steps.map((st) => ({ ...st, status: 'queued', round: null, taskId: null })) };
+        if (old) c.planHistory = [old, ...(c.planHistory || [])].slice(0, 5);
+        try { store.saveOrThrow(); } catch (e) { // o plano só vale depois de gravado: senão volta ao anterior e o ciclo bloqueia por persistência (launch)
+          if (old) c.plan = old; else delete c.plan;
+          if (oldHistory === undefined) delete c.planHistory; else c.planHistory = oldHistory;
+          if (last) { if (prevDecision === undefined) delete last.decision; else last.decision = prevDecision; }
+          throw e;
+        }
+        note(m, 'cycle', `Plano de ${d.steps.length} etapa(s) gravado${old ? ' (substitui o anterior)' : ''}: ${clip(d.rationale, 200)}`, 'planner'); emit(m);
+        continue;
+      }
       if (d.decision === 'complete') {
         const keep = { finalSummary: c.finalSummary, evidence: c.evidence, assurance: c.assurance, decision: prevDecision };
         c.finalSummary = d.rationale; c.evidence = d.evidence; c.assurance = (wsOf(m)?.verifications || []).some((v) => v.required) ? 'verified' : 'self-declared';
@@ -602,7 +654,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     // qualquer mutação, nota, bloco ou atividade; plannerCalls segue cumulativo (não é zerado).
     if ((c.blockedCode === 'planner_calls_limit' || atRoundLimit) && c.plannerCalls >= ((maxIterations ?? c.maxIterations) + 1) * 3) return fail(409, 'O limite de consultas ao Planner deste ciclo foi atingido; aumente o limite de rodadas (maxIterations) para continuar.');
     // Limites do incremento D: retomar não contorna o controle. Recusa ANTES de qualquer mutação enquanto o próximo passo (consultar o Planner) seria bloqueado de novo.
-    const lim = limitProblem(limits, m, 'planner'); if (lim) return fail(409, `${lim.reason} ${LIMIT_HINT[lim.code]}`);
+    const lim = limitProblem(limits, m, nextStep(c) ? 'executor' : 'planner'); if (lim) return fail(409, `${lim.reason} ${LIMIT_HINT[lim.code]}`); // M4: com etapa elegível o próximo passo é o Executor, não o Planner
     // Persistência (M2): um ciclo parado por falha de gravação só retoma depois de o estado (inclusive este bloqueio) ser GRAVADO de fato; com qualquer outra falha
     // recente do banco também se exige uma gravação confirmada antes. Recusa ANTES de qualquer mutação.
     const reconcile = c.blockedCode === 'persistence_failed';

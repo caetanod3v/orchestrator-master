@@ -20,7 +20,7 @@ export const typeLabel = (type) => TYPE_LABEL[type] || type;
 export const VERIFICATION_LABEL = {
   pass: 'passou', fail: 'falhou', error: 'erro', cancelled: 'cancelada', timeout: 'tempo esgotado', output_limit: 'saída acima do limite',
 };
-export const DECISION_LABEL = { continue: 'continuar', complete: 'concluir', blocked: 'bloquear' };
+export const DECISION_LABEL = { continue: 'continuar', complete: 'concluir', blocked: 'bloquear', plan: 'planejar etapas' };
 
 export const Status = ({ value, masc }) => (
   <span className={`status s-${value}`}><i />{statusLabel(value, masc)}</span>

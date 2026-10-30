@@ -7,11 +7,33 @@ const CODE = {
   planner_blocked: 'O Planner pediu intervenção humana', planner_invalid: 'Resposta do Planner inválida', planner_error: 'Falha do Planner',
   executor_failures: 'Execuções falharam em sequência', no_progress: 'Sem progresso', needs_approval: 'Permissão necessária',
   interrupted: 'Execução interrompida', verification_blocked: 'Verificação não pôde rodar', cannot_start: 'Não foi possível iniciar', restarted: 'Servidor reiniciado',
-  planner_calls_limit: 'Limite de consultas ao Planner', internal_error: 'Erro interno', persistence_failed: 'Gravação em disco falhou',
+  planner_calls_limit: 'Limite de consultas ao Planner', internal_error: 'Erro interno', persistence_failed: 'Gravação em disco falhou', plan_invalid: 'Plano inconsistente',
   planner_call_cap: 'Limite de chamadas ao Planner atingido', cost_budget_reached: 'Orçamento de custo estimado atingido', cost_budget_unknown: 'Orçamento de custo não verificável',
 };
 // Limites configurados no servidor (ORCH_CYCLE_*): o ciclo está PAUSADO (não concluído) e só retoma depois que o limite deixar de bloquear.
 const LIMIT_CODES = ['planner_call_cap', 'cost_budget_reached', 'cost_budget_unknown'];
+
+/** Plano de etapas gravado no ciclo (M4): estado e dependências de cada etapa, etapa atual e progresso. Só leitura; quem executa e verifica é o servidor. */
+function Plan({ plan }) {
+  const steps = plan.steps || [];
+  const done = steps.filter((s) => s.status === 'completed').length;
+  const stuck = steps.some((s) => ['failed', 'interrupted'].includes(s.status));
+  return (
+    <div className="small">
+      <div className="k">plano · {done} de {steps.length} etapas concluídas</div>
+      <ul className="plain">
+        {steps.map((s) => (
+          <li key={s.id}>
+            <span className="n">{s.id}</span> {s.status === 'running' && '▶ '}<span className="grow">{s.title}</span> <Status value={s.status} />
+            {s.dependsOn?.length > 0 && <span className="dim"> · depende de: {s.dependsOn.join(', ')}</span>}
+            {s.round && <span className="dim"> · rodada {s.round}</span>}
+          </li>
+        ))}
+      </ul>
+      {stuck && <p className="dim">Uma etapa não foi concluída: as demais não rodam sozinhas. O Planner decide o próximo passo (novo plano, tarefa avulsa ou pedido de ajuda) ao retomar o ciclo.</p>}
+    </div>
+  );
+}
 
 function Round({ r }) {
   const rep = r.report;
@@ -122,6 +144,7 @@ export default function CyclePanel({ mission }) {
           </div>
         </div>
       )}
+      {c?.plan?.steps?.length > 0 && <Plan plan={c.plan} />}
       {c?.rounds.length > 0 && <div className="rounds">{c.rounds.map((r) => <Round key={r.n} r={r} />)}</div>}
     </div>
   );
