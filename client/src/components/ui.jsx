@@ -2,7 +2,7 @@ import React from 'react';
 
 // Só a apresentação: as chaves são os valores internos/da API e não mudam (também viram a classe CSS `s-<valor>`).
 export const STATUS = {
-  running: 'em execução', completed: 'concluída', failed: 'falhou', queued: 'na fila',
+  running: 'em execução', completed: 'concluída', failed: 'falhou', unverified: 'não comprovada', verified: 'comprovada', inconclusive: 'inconclusiva', queued: 'na fila',
   awaiting_approval: 'aguardando aprovação', interrupted: 'interrompida', planning: 'planejando', blocked: 'bloqueada', cancelled: 'cancelada', limit_reached: 'limite atingido', succeeded: 'bem-sucedida', not_connected: 'não conectado', idle: 'ocioso', degraded: 'degradado',
 };
 // Concordância: o padrão acima é feminino (missão, tarefa, rodada); o ciclo é masculino (`masc`).
@@ -20,6 +20,8 @@ export const typeLabel = (type) => TYPE_LABEL[type] || type;
 export const VERIFICATION_LABEL = {
   pass: 'passou', fail: 'falhou', error: 'erro', cancelled: 'cancelada', timeout: 'tempo esgotado', output_limit: 'saída acima do limite',
 };
+// Evidência do sistema (M8): o relato do Executor nunca conclui; só a evidência independente conclui uma etapa.
+export const EVIDENCE_BASIS = { real_verification: 'verificação real', expected_files: 'arquivos esperados conferidos', 'real_verification+expected_files': 'verificação real e arquivos esperados', executor_claim_only: 'só o relato do Executor' };
 export const DECISION_LABEL = { continue: 'continuar', complete: 'concluir', blocked: 'bloquear', plan: 'planejar etapas' };
 
 export const Status = ({ value, masc }) => (

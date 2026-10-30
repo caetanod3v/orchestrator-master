@@ -35,7 +35,7 @@ before(() => {
 after(async () => { fs.rmSync(BLOCK_TMP, { recursive: true, force: true }); await sleep(800); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 const reset = () => { db.missions = []; db.activity = []; delete db.chat; db.settings.activeWorkspaceId = 'ws'; execStarts = 0; };
-const step = (id, deps = [], mode = 'check') => ({ id, title: `Etapa ${id}`, instructions: `MODE:${mode} ${id}`, acceptance: ['conferir'], dependsOn: deps });
+const step = (id, deps = [], mode = 'check') => ({ id, title: `Etapa ${id}`, instructions: `MODE:${mode} ${id}`, acceptance: ['out.txt existe com o conteúdo conferido'], dependsOn: deps });
 const J = (o) => JSON.stringify(o);
 const reply = (message = 'Olá! Em que posso ajudar?') => J({ kind: 'reply', message });
 const ctx = (over = {}) => ({ goal: 'Landing page para a barbearia', confirmed: ['É uma barbearia'], assumptions: ['Visual escuro'], open: [], ...over });
@@ -394,4 +394,17 @@ test('modo legado (ORCH_CYCLE_PLAN desligado): o contexto e os esclarecimentos f
   const v2 = await sent(w.chat, 'Navalha'); assert.equal(v2.proposal.kind, 'ready'); assert.equal(v2.proposal.steps, undefined); assert.deepEqual(v2.proposal.context.confirmed, ['Nome: Navalha']); assert.equal(v2.phase, 'proposal');
   const r = await w.chat.approve({ proposalId: v2.proposal.id }); assert.equal(r.status, 202, r.error); await w.cy.idle();
   const m = db.missions[0]; assert.equal(m.cycle.status, 'completed', m.cycle.blockedReason); assert.equal(m.cycle.plan, undefined); assert.deepEqual(m.brief.assumptions, ['Tema escuro']);
+});
+
+// ---------- M8: critérios de aceitação e evidência no plano do chat ----------
+test('M8: o plano do chat só vira proposta com critérios verificáveis e com um caminho de evidência independente (verificações reais do workspace ou expectedFiles)', () => {
+  const okw = { verifications: [{ script: 'test' }] }, bare = { verifications: [] };
+  const withAcc = (acceptance, extra = {}) => planReply([{ ...step('s1'), acceptance, ...extra }], 'Plano');
+  assert.equal(validateChatReply(withAcc(['index.html existe']), { plan: true, workspace: okw }).ok, true);
+  for (const weak of [['tudo ok'], ['funciona'], ['Tarefa concluída'], ['']]) { const r = validateChatReply(withAcc(weak), { plan: true, workspace: okw }); assert.equal(r.ok, false, JSON.stringify(weak)); assert.match(r.error, /acceptance/); }
+  const noPath = validateChatReply(withAcc(['index.html existe']), { plan: true, workspace: bare });
+  assert.equal(noPath.ok, false); assert.match(noPath.error, /não tem verificações reais configuradas/); assert.match(noPath.error, /clarify\/blocked|expectedFiles/);
+  assert.equal(validateChatReply(withAcc(['index.html existe'], { expectedFiles: ['index.html'] }), { plan: true, workspace: bare }).ok, true, 'arquivos esperados bastam quando não há verificações reais');
+  assert.equal(validateChatReply(withAcc(['index.html existe'], { expectedFiles: ['../fora.txt'] }), { plan: true, workspace: bare }).ok, false, 'caminho fora do workspace é inválido');
+  assert.equal(validateChatReply(ready('t')).ok, true, 'modo legado (ready, sem etapas): contrato de sempre');
 });

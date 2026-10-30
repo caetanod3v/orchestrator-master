@@ -125,7 +125,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .s-running, .s-planning { color: var(--running); }
 .s-completed, .s-idle, .s-succeeded { color: var(--completed); }
 .s-failed { color: var(--failed); }
-.s-awaiting_approval, .s-degraded, .s-blocked, .s-limit_reached { color: var(--awaiting); }
+.s-awaiting_approval, .s-degraded, .s-blocked, .s-limit_reached, .s-unverified, .s-inconclusive { color: var(--awaiting); } /* unverified/inconclusive (M8): executada, mas sem comprovação independente */
 .s-interrupted { color: var(--interrupted); }
 .s-queued, .s-not_connected, .s-cancelled { color: var(--queued); }
 .s-running i, .node.st-active .st i { animation: pulse 1.6s ease-in-out infinite; } /* agente ou tarefa realmente em execução */

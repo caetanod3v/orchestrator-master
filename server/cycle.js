@@ -25,6 +25,7 @@ import { usageRecord, usageEvent } from './usage.js';
 import { limitProblem } from './limits.js';
 import { DEFAULT_AGENT } from './agents.js';
 import { MAX_PLAN_STEPS, validatePlanSteps } from './cycle-schema.js';
+import { snapshotWorkspace, hashesOf, diffHashes, checkExpected, buildEvidence, evidencePathProblem, CATEGORY_LABEL } from './evidence.js';
 import { syncPlan, nextStep, openSteps, planProblem, dependencyTaskIds, planProgress, newPlan } from './plan.js';
 
 // O que precisa acontecer para um ciclo parado por limite poder retomar. Os limites vêm do ambiente do servidor; a retomada nunca os altera.
@@ -161,9 +162,13 @@ function pastCyclesSection(past) {
 }
 
 const PLAN_FORMAT = [
-  '{"decision":"plan","rationale":"...","steps":[{"id":"s1","title":"...","instructions":"...","acceptance":["critério verificável"],"dependsOn":[]},{"id":"s2","title":"...","instructions":"...","acceptance":["..."],"dependsOn":["s1"]}]}',
+  '{"decision":"plan","rationale":"...","steps":[{"id":"s1","title":"...","instructions":"...","acceptance":["critério concreto e verificável"],"expectedFiles":["caminho/relativo.ext"],"dependsOn":[]},{"id":"s2","title":"...","instructions":"...","acceptance":["..."],"dependsOn":["s1"]}]}',
+  '"acceptance": critérios concretos e verificáveis (o que deve existir ou mudar: arquivo, conteúdo, comportamento observável); "funciona" ou "tarefa concluída" são rejeitados. "expectedFiles" (opcional, 1 a 8): arquivos que a etapa deve CRIAR ou ALTERAR; o orquestrador os confere no disco. O relato do Executor NÃO conclui uma etapa: só evidência do orquestrador conclui (verificações reais do workspace e/ou expectedFiles); se o workspace não tem verificações reais, TODA etapa precisa de expectedFiles. Se faltar informação essencial para definir critérios confiáveis, use "blocked" pedindo o esclarecimento em vez de inventar requisitos.',
   `("plan" propõe de 1 a ${MAX_PLAN_STEPS} etapas com ids únicos e dependências explícitas (sem ciclos; pelo menos uma etapa sem dependências; no máximo as rodadas restantes, pois cada etapa usa uma rodada). O orquestrador executa as etapas UMA POR VEZ, na ordem do plano e só quando as dependências estiverem concluídas, verifica cada uma com as verificações reais e só volta a consultar você quando não houver etapa elegível: ao fim do plano ou se uma etapa não for concluída. Um novo "plan" substitui o atual; "complete" só é aceito com todas as etapas do plano concluídas.)`,
 ].join('\n');
+
+/** Motivo objetivo (M8) de uma etapa não concluída, tirado da evidência gravada da rodada dela. */
+const evidenceNote = (c, st) => { const ev = c.rounds.find((r) => r.n === st.round)?.report?.evidence; return ev?.reasons?.length ? ` [motivo: ${clip(ev.reasons.join('; '), 300)}]` : ''; };
 
 /** Estado do plano gravado, para o Planner (só dados do orquestrador; vazio se não há plano). */
 function planSection(c) {
@@ -171,8 +176,8 @@ function planSection(c) {
   if (!Array.isArray(steps) || !steps.length) return '';
   const pr = planProgress(c);
   return [`\nPLANO ATUAL (gravado pelo orquestrador; ${pr.completed} de ${pr.total} etapas concluídas; execução sequencial, uma etapa por vez):`,
-    ...steps.map((st) => `  [${st.id}] ${clip(st.title, 120)} | estado: ${st.status}${st.round ? ` (rodada ${st.round})` : ''}${st.uncertain ? ' [RESULTADO INCERTO: o servidor caiu durante a execução; o workspace pode ter sido alterado]' : ''} | depende de: ${(st.dependsOn || []).join(', ') || 'nada'}`),
-    'Etapas "failed" ou "interrupted" não são refeitas sozinhas: decida se propõe um novo plano, executa uma tarefa avulsa ("continue") ou pede ajuda ("blocked").'].join('\n');
+    ...steps.map((st) => `  [${st.id}] ${clip(st.title, 120)} | estado: ${st.status}${st.round ? ` (rodada ${st.round})` : ''}${st.uncertain ? ' [RESULTADO INCERTO: o servidor caiu durante a execução; o workspace pode ter sido alterado]' : ''}${st.status === 'unverified' || st.status === 'failed' ? evidenceNote(c, st) : ''} | depende de: ${(st.dependsOn || []).join(', ') || 'nada'}`),
+    'Etapas "failed", "unverified" (executada, mas sem comprovação independente) ou "interrupted" não são refeitas sozinhas: decida se propõe um novo plano, executa uma tarefa avulsa ("continue") ou pede ajuda ("blocked").'].join('\n');
 }
 
 function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, multiStep = false }) {
@@ -184,6 +189,8 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, mult
       `  execução: ${rep ? rep.status : r.status}${rep?.errors?.length ? ` | erros: ${rep.errors.slice(0, 2).join(' / ')}` : ''}${rep?.blockers?.length ? ` | BLOQUEIO: ${rep.blockers.join(' ')}` : ''}`,
       rep ? `  arquivos alterados: ${rep.filesKnown ? (rep.filesChanged.map((f) => f.path).join(', ') || 'nenhum') : `desconhecido (${rep.outcomeUncertain ? 'execução interrompida sem relatório final' : 'workspace sem Git'})`}` : '',
       // M7: a execução foi cortada por uma queda do servidor. Ausência de relatório NÃO é "nada foi feito": o Planner precisa conferir o workspace antes de decidir.
+      // M8: o que o Executor DISSE x o que o sistema COMPROVOU, com motivos objetivos (o relato do Executor nunca conclui sozinho).
+      rep?.evidence ? `  EVIDÊNCIA (nível: ${rep.evidence.level}; base: ${rep.evidence.basis}): relato do Executor = ${rep.evidence.executorClaim.status} (declarado, NÃO é prova); verificado pelo sistema: verificações reais = ${rep.evidence.system.verification}${rep.evidence.system.expectedFiles ? `; arquivos esperados = ${rep.evidence.system.expectedFiles.map((x) => `${x.path}:${x.ok ? 'ok' : 'FALHOU'}`).join(', ')}` : ''}; integridade dos testes = ${rep.evidence.system.integrity}${rep.evidence.reasons.length ? ` | motivos: ${clip(rep.evidence.reasons.join('; '), 500)}` : ''}` : '',
       rep?.outcomeUncertain ? `  RESULTADO INCERTO: ${rep.outcomeUncertain} Confira o estado real do workspace antes de decidir: não presuma que a tarefa foi feita, nem que não foi.` : '',
       rep?.verifications?.length ? `  verificações REAIS (executadas pelo orquestrador): ${rep.verifications.map((v) => `${v.script}=${v.status}${v.exitCode != null ? `(código ${v.exitCode})` : ''}`).join('; ')}${rep.verifications.some((v) => v.status !== 'pass') ? ` | saída da primeira que não passou: ${clip(rep.verifications.find((v) => v.status !== 'pass').outputTail || rep.verifications.find((v) => v.status !== 'pass').reason || '', 400)}` : ''}` : rep?.verificationsSkipped ? `  verificações reais NÃO executadas: ${rep.verificationsSkipped}` : '',
       // Verificações refeitas depois de uma retomada humana: o relatório mistura DOIS momentos (fim da rodada x re-verificação).
@@ -292,12 +299,16 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (missing.length) return `"complete" rejeitado: verificação obrigatória não executada nesta rodada: ${missing.map((v) => v.script).join(', ')}`;
       if (failCount(last.report) > 0) return '"complete" rejeitado: o último relatório tem verificações com falha';
       if (!required.length && passCount(last.report) < 1) return '"complete" rejeitado: o último relatório não traz nenhuma verificação aprovada (pass)';
+      const pend = c.integrity?.pending ?? []; // M8: testes/configuração alterados e não revisados: uma verificação que passa sobre eles não prova a conclusão
+      if (pend.length) return `"complete" rejeitado: arquivos de teste ou de configuração de validação foram alterados e não foram revisados por uma pessoa (${pend.slice(0, 5).map((x) => x.path).join(', ')}); a verificação real sobre testes alterados não prova a conclusão`;
+      if (last.report.evidence?.level === 'failed') return `"complete" rejeitado: a evidência da última rodada falhou (${clip(last.report.evidence.reasons.join('; '), 250)})`;
       const open = openSteps(c); // M4: um plano com etapas não concluídas nunca vira "concluído"
       if (open.length) return `"complete" rejeitado: o plano ainda tem etapas não concluídas (${open.map((st) => `${st.id}=${st.status}`).join(', ')}); conclua-as, proponha um novo plano ou declare "blocked"`;
     }
     if (d.decision === 'plan') {
       const left = c.maxIterations - c.rounds.length;
       if (d.steps.length > left) return `o plano tem ${d.steps.length} etapa(s), mas restam ${left} rodada(s) (cada etapa usa uma rodada)`;
+      const noEvidence = evidencePathProblem(d.steps, wsOf(m)); if (noEvidence) return noEvidence; // M8: etapa sem como ser comprovada não vira plano
     }
     if (d.decision === 'continue') {
       const fp = fingerprint(d.task);
@@ -398,6 +409,61 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   const staleVerification = (round) => !!round?.report && round.report.status === 'success'
     && (!!round.report.verificationsInterrupted || (round.report.verifications || []).some((v) => ENV_STATUS.includes(v.status)));
 
+  // ---------- M8: evidência independente (evidence.js) ----------
+  // Instantâneo dos arquivos que VALIDAM o trabalho (testes, configuração, o que o script aprovado referencia) e dos arquivos esperados da etapa. Qualquer falha ao
+  // ler vira null: a integridade fica "não verificável" (inconclusiva), nunca "limpa".
+  const snapOf = (m, expected = []) => {
+    try { const ws = wsOf(m); return ws ? snapshotWorkspace(ws.path, { commands: (ws.verifications || []).map((v) => v.command), expected }) : null; } catch { return null; }
+  };
+  const CHANGE_LABEL = { created: 'criado', modified: 'modificado', deleted: 'apagado' };
+  const describeChanges = (list) => list.slice(0, 8).map((x) => `${x.path} (${CHANGE_LABEL[x.change]}; ${CATEGORY_LABEL[x.category] ?? 'arquivo vigiado'})`).join('; ') + (list.length > 8 ? `; … (+${list.length - 8})` : '');
+
+  /** Recalcula o parecer a partir de dados JÁ gravados (relatório, verificações reais, arquivos esperados e integridade da rodada): serve à revisão humana e à re-verificação. */
+  function reevaluate(m, round) {
+    const c = m.cycle, rep = round.report; if (!rep) return;
+    const st = round.integrity?.status ?? 'unknown';
+    rep.evidence = buildEvidence({ report: rep, verification: roundVerification(round), configured: (wsOf(m)?.verifications || []).length, expectedResults: rep.evidence?.system?.expectedFiles ?? null,
+      integrity: { status: st, reason: round.integrity?.reason, pending: st === 'flagged' ? (c.integrity?.pending ?? []) : [] } });
+    rep.evidence.at = store.now();
+  }
+
+  /**
+   * Fim de uma rodada (ou re-verificação): confere o que o SISTEMA consegue comprovar, separado do que o Executor relatou.
+   *  - arquivos esperados: existem, não vazios e foram criados/alterados pela rodada (hash antes x depois);
+   *  - integridade: testes/configuração comparados por CONTEÚDO com o estado de referência do ciclo (c.integrity.baseline); o que difere fica PENDENTE até revisão humana.
+   * `before`: instantâneo de antes da execução (null na re-verificação, quando só se reavalia o estado atual).
+   */
+  function assessRound(m, round, before) {
+    const c = m.cycle, expected = round.plan?.expectedFiles ?? [], after = snapOf(m, expected);
+    let integrity;
+    if (!after) integrity = { status: 'unknown', reason: 'não foi possível ler o workspace', changes: [] };
+    else if (!after.complete) integrity = { status: 'unknown', reason: 'o workspace tem arquivos demais (ou ilegíveis) para vigiar os testes com segurança', changes: [] };
+    else if (!c.integrity?.baseline) integrity = { status: 'unknown', reason: 'não há estado de referência dos testes para este ciclo', changes: [] };
+    else {
+      const old = c.integrity.pending ?? [];
+      // Mudanças FORA de uma execução do Executor (entre rodadas, enquanto o ciclo estava bloqueado: quem mexeu foi uma pessoa ou outro processo, nunca o Executor) entram no estado
+      // de referência. O que o Executor alterou continua pendente: arquivo já pendente nunca é "absorvido" por uma edição posterior.
+      // Re-verificação (sem `before`): só se a rodada JÁ tinha sido avaliada (então `last` é posterior à execução dela); uma rodada que caiu antes da avaliação pode ter mudanças do Executor desde `last`.
+      const reference = before?.complete ? before.files : round.integrity ? after.files : null;
+      if (c.integrity.last && reference) {
+        const pendingPaths = new Set(old.map((p) => p.path));
+        const outside = diffHashes(c.integrity.last, reference).filter((p) => !pendingPaths.has(p.path));
+        if (outside.length) {
+          for (const p of outside) { if (p.change === 'deleted') delete c.integrity.baseline[p.path]; else c.integrity.baseline[p.path] = p.hash; }
+          c.integrity.external = [...(c.integrity.external ?? []), { at: store.now(), round: round.n, files: outside.slice(0, 20).map(({ path, change }) => ({ path, change })) }].slice(-20);
+        }
+      }
+      const changed = new Set((before?.complete ? diffHashes(before.files, after.files) : []).map((x) => x.path));
+      const pending = diffHashes(c.integrity.baseline, after.files).map((p) => ({ ...p, round: old.find((x) => x.path === p.path && x.change === p.change)?.round ?? (changed.has(p.path) ? round.n : null) }));
+      c.integrity.pending = pending; c.integrity.last = hashesOf(after);
+      integrity = { status: pending.length ? 'flagged' : 'clean', changes: pending.filter((p) => changed.has(p.path)), pending: pending.map((p) => p.path).slice(0, 20) };
+    }
+    round.integrity = integrity;
+    const prior = round.report?.evidence?.system?.expectedFiles ?? [];
+    const results = expected.length && after ? checkExpected(expected, before, after, prior) : expected.length ? expected.map((p) => ({ path: p, ok: false, exists: false, changed: false, reason: 'o estado do arquivo não pôde ser lido' })) : null;
+    round.report.evidence = { ...buildEvidence({ report: round.report, verification: roundVerification(round), configured: (wsOf(m)?.verifications || []).length, expectedResults: results, integrity: { ...integrity, pending: integrity.status === 'flagged' ? c.integrity.pending : [] } }), at: store.now() };
+  }
+
   /** Depois de um humano resolver o ambiente (ex.: restaurar/reaprovar o script), refaz as verificações da última rodada. */
   async function reverifyLast(m) {
     const c = m.cycle, round = c.rounds.at(-1), task = find(m.tasks, round.taskId), report = round.report;
@@ -411,6 +477,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
     report.verificationsInterrupted = null; // a fila inteira rodou (o resultado, bom ou ruim, é real e atual)
     round.verification = verificationOutcome(report, (wsOf(m)?.verifications || []).length);
+    if (report.evidence || c.integrity?.baseline) { assessRound(m, round, null); emit(m); } // ciclos anteriores ao M8 (sem evidência nem estado de referência) mantêm a regra de quando foram feitos; no resto, a rodada que caiu antes da avaliação é avaliada agora
     const env = report.verifications.find((v) => ['blocked', 'error'].includes(v.status));
     if (env) return stop(m, 'verification_blocked', `A re-verificação continua impossível (${env.script}): ${env.reason} Um humano precisa resolver.`);
     return 'next';
@@ -423,6 +490,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     await persistGate(c); // iniciar o Executor é irreversível: o estado até aqui precisa estar no disco
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a rodada.');
     const lim = limitProblem(limits, m, 'executor'); if (lim) return stop(m, lim.code, lim.reason); // ANTES de criar a rodada e de iniciar o Executor
+    // M8: instantâneo ANTES da execução (síncrono: nada pode mudar entre ele e a criação da rodada). O primeiro do ciclo vira o estado de referência dos testes.
+    const before = snapOf(m, d.task.expectedFiles ?? []);
+    if (!c.integrity?.baseline && before?.complete) c.integrity = { baseline: hashesOf(before), last: hashesOf(before), at: store.now(), pending: [] };
     const n = c.rounds.length + 1;
     const task = {
       id: store.uid('task'), title: clip(`[Rodada ${n}] ${d.task.title}`, 200), status: 'queued', authorized: true, authorizedBy: 'cycle', auto: true,
@@ -458,6 +528,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     }
     round.verification = verificationOutcome(report, items.length);
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
+    assessRound(m, round, before); emit(m); // M8: parecer do SISTEMA (evidência, arquivos esperados, integridade dos testes), gravado antes de qualquer decisão; sem gravação o portão de persistência impede o avanço
 
     // Política explícita (o Planner é informado no próximo prompt, via histórico):
     if (task.permissionDenied) return stop(m, 'needs_approval', 'A execução precisou de uma permissão que não foi concedida (negada automaticamente). Um humano precisa decidir; ao retomar, o Planner verá este bloqueio.');
@@ -466,6 +537,11 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
 
     const envProblem = report.verifications.find((v) => ['blocked', 'error'].includes(v.status));
     if (envProblem) return stop(m, 'verification_blocked', `Não foi possível executar a verificação "${envProblem.script}": ${envProblem.reason} Um humano precisa resolver.`);
+
+    // M8: o Executor mexeu em testes/configuração de validação. Nenhuma verificação que passe sobre isso conclui a etapa; uma pessoa revisa (ou o Planner decide sem aprovar).
+    if (report.status === 'success' && round.integrity?.status === 'flagged' && round.integrity.changes.length) {
+      return stop(m, 'integrity_review', `O Executor alterou arquivos que validam o trabalho nesta rodada: ${describeChanges(round.integrity.changes)}. Mesmo que a verificação real passe, isso não comprova a conclusão (o Executor pode ter enfraquecido o que é verificado), e a etapa NÃO foi concluída. Revise as alterações: "Retomar aprovando as alterações" as aceita (a aprovação fica ligada ao conteúdo exato revisado); "Retomar" sem aprovar deixa o Planner decidir com a etapa ainda não comprovada; ou cancele.`);
+    }
 
     const prev = c.rounds.at(-2)?.report;
     const progress = report.status === 'success' && (report.filesChanged.some((f) => !f.preexisting) || realPassCount(report) > realPassCount(prev) || !report.filesKnown);
@@ -477,7 +553,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   const planInvalidReason = (broken) => `Plano inconsistente: ${broken}. Nada foi executado a partir dele; cancele o ciclo (o histórico fica registrado).`;
 
   /** A etapa vira a mesma "decisão continue" que o Planner daria: runRound, verificação, limites e cancelamento são os de sempre. */
-  const stepDecision = (st) => ({ decision: 'continue', rationale: `Etapa "${st.id}" do plano gravado.`, task: { title: st.title, instructions: st.instructions, acceptance: st.acceptance, ...(st.agent !== undefined ? { agent: st.agent } : {}) } });
+  const stepDecision = (st) => ({ decision: 'continue', rationale: `Etapa "${st.id}" do plano gravado.`, task: { title: st.title, instructions: st.instructions, acceptance: st.acceptance, ...(st.agent !== undefined ? { agent: st.agent } : {}), ...(st.expectedFiles?.length ? { expectedFiles: st.expectedFiles } : {}) } });
 
   async function drive(m) {
     const c = m.cycle;
@@ -606,6 +682,8 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       const v = validatePlanSteps(plan.steps);
       if (!v.ok) return fail(400, `Plano inválido: ${v.error}`);
       if (v.steps.length > max) return fail(400, `O plano tem ${v.steps.length} etapas e o limite de rodadas é ${max}: cada etapa usa uma rodada.`);
+      const noEvidence = wsOf(m) && evidencePathProblem(v.steps, wsOf(m)); // M8: etapa que nada poderia comprovar não é executada
+      if (noEvidence) return fail(400, `Plano sem como ser comprovado: ${noEvidence}`);
       seed = { rationale: String(plan.rationale ?? '').slice(0, 1500) || 'Plano aprovado pelo usuário.', steps: v.steps };
     }
     if (starting) return fail(409, 'Outra execução ou ciclo está em andamento.');
@@ -661,7 +739,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     return ok(c);
   }
 
-  async function resume(missionId, { note: text, maxIterations } = {}) {
+  async function resume(missionId, { note: text, maxIterations, approveIntegrity } = {}) {
     const m = mission(missionId), c = m?.cycle;
     // limit_reached (limite de RODADAS) só retoma por ação explícita: o novo limite vem no pedido (nunca é ampliado em silêncio) e precisa superar as rodadas já feitas.
     const atRoundLimit = c?.status === 'limit_reached';
@@ -677,6 +755,18 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     // M7: um plano gravado inconsistente (banco adulterado ou corrompido) não é retomado: recusa explícita ANTES de qualquer mudança. O ciclo continua bloqueado e pode ser cancelado.
     const broken = planProblem(c);
     if (broken) return fail(409, `${planInvalidReason(broken)} A retomada foi recusada e nada foi alterado.`);
+    // M8: revisão humana de alterações em testes/configuração. Só vale para o conteúdo EXATO que foi verificado; se algo mudou depois, nada é aprovado.
+    if (approveIntegrity !== undefined && approveIntegrity !== true) return fail(400, 'approveIntegrity deve ser true.');
+    let review = null, current = null;
+    if (approveIntegrity) {
+      const pend = c.integrity?.pending ?? [];
+      if (!pend.length) return fail(409, 'Não há alterações em testes ou em configuração de validação pendentes de revisão neste ciclo.');
+      current = snapOf(m);
+      if (!current?.complete) return fail(409, 'Não foi possível ler o workspace com segurança para conferir o que seria aprovado; nada foi aprovado.');
+      const drift = [...pend.filter((p) => (current.files[p.path]?.h ?? null) !== (p.hash ?? null)), ...diffHashes(c.integrity.baseline, current.files).filter((p) => !pend.some((x) => x.path === p.path))];
+      if (drift.length) return fail(409, `Os arquivos mudaram depois da última verificação (${describeChanges(drift)}); a aprovação só vale para o conteúdo que foi verificado. Retome sem aprovar para o ciclo verificar de novo, ou reverta as mudanças. Nada foi aprovado.`);
+      review = { at: store.now(), files: pend.map(({ path, change, category, hash, round }) => ({ path, change, category, hash, round })) };
+    }
     // Orçamento de consultas esgotado: retomar sem ampliar o limite só bloquearia de novo na hora (sem consultar o Planner). Recusa ANTES de
     // qualquer mutação, nota, bloco ou atividade; plannerCalls segue cumulativo (não é zerado).
     if ((c.blockedCode === 'planner_calls_limit' || atRoundLimit) && c.plannerCalls >= ((maxIterations ?? c.maxIterations) + 1) * 3) return fail(409, 'O limite de consultas ao Planner deste ciclo foi atingido; aumente o limite de rodadas (maxIterations) para continuar.');
@@ -689,6 +779,12 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (storage) return storage;
     if (reconcile) note(m, 'cycle', 'Persistência reconciliada: o estado do ciclo foi gravado em disco antes de retomar');
     const prev = { ...c, humanNotes: c.humanNotes.length }; // só campos escalares mudam; humanNotes só ganha 1 item no fim
+    const prevIntegrity = review ? JSON.stringify({ i: c.integrity, r: c.rounds.map((x) => [x.integrity, x.report?.evidence]) }) : null;
+    if (review) { // a aprovação grava o conteúdo revisado como novo estado de referência e REAVALIA as rodadas marcadas (o relato do Executor continua sem valer; a evidência é a mesma de antes)
+      c.integrity = { ...c.integrity, baseline: hashesOf(current), last: hashesOf(current), pending: [], reviews: [...(c.integrity.reviews ?? []), review].slice(-20) };
+      for (const x of c.rounds) if (x.integrity?.status === 'flagged') { x.integrity = { ...x.integrity, status: 'reviewed', reviewedAt: review.at }; reevaluate(m, x); }
+      note(m, 'cycle', `Alterações em testes/configuração de validação revisadas e aprovadas por uma pessoa: ${describeChanges(review.files)}`);
+    }
     if (maxIterations !== undefined) c.maxIterations = maxIterations;
     if (text?.trim()) c.humanNotes.push({ at: store.now(), text: text.trim() });
     c.consecutiveFailures = 0; c.consecutiveNoProgress = 0; c.cancelRequested = false;
@@ -697,6 +793,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     return launchOrRollback(m, 'Ciclo retomado por um humano', 'retomar o ciclo', () => {
       // volta a "blocked" com o mesmo motivo, sem a orientação humana nova e sem perder o histórico (rounds, blocks, notas anteriores)
       c.humanNotes.length = prev.humanNotes;
+      if (prevIntegrity) { const old = JSON.parse(prevIntegrity); if (old.i === undefined) delete c.integrity; else c.integrity = old.i; c.rounds.forEach((x, i) => { if (old.r[i]?.[0] === undefined) delete x.integrity; else x.integrity = old.r[i][0]; if (x.report) { if (old.r[i]?.[1] === undefined) delete x.report.evidence; else x.report.evidence = old.r[i][1]; } }); }
       for (const k of ['status', 'finishedAt', 'blockedCode', 'blockedReason', 'maxIterations', 'consecutiveFailures', 'consecutiveNoProgress', 'cancelRequested', 'reverifyPending']) {
         if (prev[k] === undefined) delete c[k]; else c[k] = prev[k];
       }
@@ -738,6 +835,8 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       round.status = rep.status === 'success' ? 'succeeded' : rep.status;
       if (rep.status !== 'success' && configured) rep.verificationsSkipped = 'a execução não foi bem-sucedida';
       if (rep.status === 'success' && configured) { rep.verificationsInterrupted = 'o servidor foi reiniciado antes das verificações reais desta rodada'; round.verification = 'skipped'; } else round.verification = verificationOutcome(rep, configured);
+      // M8: ciclo com estado de referência dos testes: o parecer do sistema desta rodada nunca foi feito. Fica INCONCLUSIVO até uma re-verificação/avaliação; o relato do Executor não conclui a etapa.
+      if (rep.status === 'success' && m.cycle.integrity?.baseline) rep.evidence = { ...buildEvidence({ report: rep, verification: round.verification, configured, expectedResults: null, integrity: { status: 'unknown', reason: 'o servidor reiniciou antes da avaliação desta rodada' } }), at: store.now() };
       return;
     }
     round.status = 'interrupted';
@@ -753,7 +852,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const parts = [
       ids((s) => s.status === 'completed') && `concluídas: ${ids((s) => s.status === 'completed')}`,
       ids((s) => s.uncertain) && `interrompida(s) com resultado incerto: ${ids((s) => s.uncertain)}`,
-      ids((s) => ['failed', 'interrupted'].includes(s.status) && !s.uncertain) && `não concluídas: ${ids((s) => ['failed', 'interrupted'].includes(s.status) && !s.uncertain)}`,
+      ids((s) => ['failed', 'interrupted', 'unverified'].includes(s.status) && !s.uncertain) && `não concluídas: ${ids((s) => ['failed', 'interrupted', 'unverified'].includes(s.status) && !s.uncertain)}`,
       ids((s) => s.status === 'queued') && `na fila: ${ids((s) => s.status === 'queued')}`,
     ].filter(Boolean);
     return parts.length ? ` Plano: ${parts.join('; ')}.` : '';

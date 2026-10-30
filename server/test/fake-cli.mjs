@@ -1,6 +1,7 @@
 // CLI FALSA usada somente nos testes automatizados (nunca pelo servidor real).
 // Lê o prompt do stdin e se comporta conforme a diretiva "MODE:<x>" nele.
 import fs from 'node:fs';
+import path from 'node:path';
 
 if (process.argv.includes('--version')) { console.log('0.0.0-fake (teste)'); process.exit(0); }
 
@@ -33,6 +34,15 @@ process.stdin.on('end', async () => {
     out({ type: 'result', subtype: 'success', is_error: false, result: 'Relatório de uso.', total_cost_usd: 0.05, duration_ms: 7, num_turns: 2,
       usage: { ...u(5, 9, 100, 200), output_tokens_details: { thinking_tokens: 0 } },
       modelUsage: { 'modelo-sintetico': { inputTokens: 5, outputTokens: 9, cacheReadInputTokens: 200, cacheCreationInputTokens: 100, webSearchRequests: 0, costUSD: 0.05, contextWindow: 1000000, maxOutputTokens: 128000, thinkingTokens: 0 } } });
+    process.exit(0);
+  }
+  if (['produce', 'edittest', 'modtest', 'deltest', 'editconf', 'nofile'].includes(mode)) { // M8: `FILE:<caminho>` no prompt = o arquivo que esta execução produz (padrão out.txt), com conteúdo único; o Executor mexe em testes/configuração de validação, ou declara sucesso SEM produzir nada
+    if (mode === 'edittest') { fs.mkdirSync('tests', { recursive: true }); fs.writeFileSync('tests/extra.test.js', '// criado pelo Executor\n'); }
+    if (mode === 'modtest') { fs.mkdirSync('tests', { recursive: true }); fs.writeFileSync('tests/old.test.js', '// enfraquecido pelo Executor\n'); }
+    if (mode === 'deltest') fs.rmSync('tests/old.test.js', { force: true });
+    if (mode === 'editconf') fs.writeFileSync('jest.config.js', 'module.exports = { testMatch: [] };\n');
+    if (mode !== 'nofile') { const file = /FILE:([\w./-]+)/.exec(input)?.[1] ?? 'out.txt'; fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `conferido ${process.hrtime.bigint()}\n`); }
+    out({ type: 'result', subtype: 'success', is_error: false, result: 'Tudo feito e conferido.\n' + block([{ name: 'tudo conferido', result: 'pass', detail: 'declarado pelo Executor' }]), total_cost_usd: 0.002, duration_ms: 10, num_turns: 2 });
     process.exit(0);
   }
   if (mode === 'check') {

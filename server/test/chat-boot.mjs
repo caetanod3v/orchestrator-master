@@ -11,8 +11,8 @@ globalThis.__ORCH_TEST_DEPS__ = {
       const t = userText(prompt);
       const out = /AMBIGUO/.test(t) ? { kind: 'clarify', message: 'Preciso de mais detalhes.', questions: ['Qual o nome do negócio?'], context: { goal: 'Site ainda sem definição', confirmed: [], assumptions: [], open: ['Nome do negócio'] } }
         : /LANDING/.test(t) ? { kind: 'plan', message: 'Plano em duas etapas.', title: 'Landing page', objective: 'Criar uma landing page.', context: { goal: 'Landing page', confirmed: ['Quer uma landing page'], assumptions: ['Visual escuro'], open: [] }, steps: [
-          { id: 's1', title: 'Estrutura da página', instructions: 'Criar index.html', acceptance: ['index.html existe'], dependsOn: [] },
-          { id: 's2', title: 'Estilo', instructions: 'Criar style.css', acceptance: ['style.css existe'], dependsOn: ['s1'] }] }
+          { id: 's1', title: 'Estrutura da página', instructions: 'Criar index.html', acceptance: ['index.html existe'], expectedFiles: ['index.html'], dependsOn: [] },
+          { id: 's2', title: 'Estilo', instructions: 'Criar style.css', acceptance: ['style.css existe'], expectedFiles: ['style.css'], dependsOn: ['s1'] }] }
         : { kind: 'reply', message: `Histórico visto: ${seen(prompt)} mensagens. Objetivo lembrado: ${/^  objetivo: (.*)$/m.exec(prompt)?.[1] ?? 'nenhum'}.` };
       return { text: JSON.stringify(out) };
     },

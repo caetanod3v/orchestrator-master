@@ -34,7 +34,7 @@ before(() => {
 });
 after(async () => { fs.rmSync(BLOCK_TMP, { recursive: true, force: true }); await sleep(800); fs.rmSync(tmp, { recursive: true, force: true }); });
 
-const step = (id, deps = [], mode = 'check') => ({ id, title: `Etapa ${id}`, instructions: `MODE:${mode} ${id}`, acceptance: ['conferir'], dependsOn: deps });
+const step = (id, deps = [], mode = 'check') => ({ id, title: `Etapa ${id}`, instructions: `MODE:${mode} ${id}`, acceptance: ['out.txt existe com o conteúdo conferido'], dependsOn: deps });
 const plan = (steps) => JSON.stringify({ decision: 'plan', rationale: 'dividir em etapas', steps });
 const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:check ${title}`, acceptance: ['conferir'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['verificação real aprovada'] });

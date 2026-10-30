@@ -1,23 +1,24 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { Btn, Status, statusLabel, PersistenceNote, VERIFICATION_LABEL, DECISION_LABEL } from './ui.jsx';
+import { Btn, Status, statusLabel, PersistenceNote, VERIFICATION_LABEL, DECISION_LABEL, EVIDENCE_BASIS } from './ui.jsx';
 
 const CODE = {
   planner_blocked: 'O Planner pediu intervenção humana', planner_invalid: 'Resposta do Planner inválida', planner_error: 'Falha do Planner',
   executor_failures: 'Execuções falharam em sequência', no_progress: 'Sem progresso', needs_approval: 'Permissão necessária',
   interrupted: 'Execução interrompida', verification_blocked: 'Verificação não pôde rodar', cannot_start: 'Não foi possível iniciar', restarted: 'Servidor reiniciado',
   planner_calls_limit: 'Limite de consultas ao Planner', internal_error: 'Erro interno', persistence_failed: 'Gravação em disco falhou', plan_invalid: 'Plano inconsistente',
-  planner_call_cap: 'Limite de chamadas ao Planner atingido', cost_budget_reached: 'Orçamento de custo estimado atingido', cost_budget_unknown: 'Orçamento de custo não verificável',
+  integrity_review: 'Testes ou configuração alterados: revisão necessária', planner_call_cap: 'Limite de chamadas ao Planner atingido', cost_budget_reached: 'Orçamento de custo estimado atingido', cost_budget_unknown: 'Orçamento de custo não verificável',
 };
 // Limites configurados no servidor (ORCH_CYCLE_*): o ciclo está PAUSADO (não concluído) e só retoma depois que o limite deixar de bloquear.
 const LIMIT_CODES = ['planner_call_cap', 'cost_budget_reached', 'cost_budget_unknown'];
 
 /** Plano de etapas gravado no ciclo (M4): estado e dependências de cada etapa, etapa atual e progresso. Só leitura; quem executa e verifica é o servidor. */
-function Plan({ plan }) {
+function Plan({ plan, rounds }) {
   const steps = plan.steps || [];
   const done = steps.filter((s) => s.status === 'completed').length;
-  const stuck = steps.some((s) => ['failed', 'interrupted'].includes(s.status));
+  const stuck = steps.some((s) => ['failed', 'interrupted', 'unverified'].includes(s.status));
+  const why = (s) => (['failed', 'unverified'].includes(s.status) ? (rounds || []).find((r) => r.n === s.round)?.report?.evidence?.reasons ?? [] : []);
   return (
     <div className="small">
       <div className="k">plano · {done} de {steps.length} etapas concluídas</div>
@@ -27,10 +28,12 @@ function Plan({ plan }) {
             <span className="n">{s.id}</span> {s.status === 'running' && '▶ '}<span className="grow">{s.title}</span> <Status value={s.status} />
             {s.dependsOn?.length > 0 && <span className="dim"> · depende de: {s.dependsOn.join(', ')}</span>}
             {s.round && <span className="dim"> · rodada {s.round}</span>}
+            {s.uncertain && <span className="s-interrupted"> · resultado incerto</span>}
+            {why(s).map((r, i) => <div key={i} className="dim">↳ {r}</div>)}
           </li>
         ))}
       </ul>
-      {stuck && <p className="dim">Uma etapa não foi concluída: as demais não rodam sozinhas. O Planner decide o próximo passo (novo plano, tarefa avulsa ou pedido de ajuda) ao retomar o ciclo.</p>}
+      {stuck && <p className="dim">Uma etapa não foi concluída (ou não pôde ser comprovada): as demais não rodam sozinhas. O Planner decide o próximo passo (novo plano, tarefa avulsa ou pedido de ajuda) ao retomar o ciclo.</p>}
     </div>
   );
 }
@@ -64,6 +67,13 @@ function Round({ r }) {
           </>}
           {rep.previousVerifications?.length > 0 && <div className="dim">verificações refeitas após retomada ({rep.previousVerifications.length} resultado(s) anterior(es) guardado(s) para auditoria)</div>}
           {rep.verificationsSkipped && <div className="dim">verificações reais não executadas: {rep.verificationsSkipped}</div>}
+          {rep.evidence && (
+            <div data-testid="evidence">
+              <div className="k">evidência do sistema: <Status value={rep.evidence.level} /> <span className="dim">({EVIDENCE_BASIS[rep.evidence.basis] || rep.evidence.basis})</span></div>
+              <div className="dim">o Executor relatou: {rep.evidence.executorClaim.status === 'success' ? 'sucesso' : rep.evidence.executorClaim.status} <b>(declarado, não é prova)</b> · verificado pelo sistema: verificações reais = {rep.evidence.system.verification}{rep.evidence.system.expectedFiles ? ` · arquivos esperados = ${rep.evidence.system.expectedFiles.map((x) => `${x.path}: ${x.ok ? 'ok' : 'falhou'}`).join(', ')}` : ''} · integridade dos testes = {rep.evidence.system.integrity}</div>
+              {rep.evidence.reasons.map((x, i) => <div key={i} className="s-blocked">⚠ {x}</div>)}
+            </div>
+          )}
           <div className="dim">verificações autodeclaradas pelo Executor (confiança menor): {rep.checks.length ? rep.checks.map((c) => `${c.name}=${c.result}`).join('; ') : rep.checksReported ? 'nenhuma' : 'não reportadas'}</div>
           {rep.errors.map((e, i) => <div key={i} className="s-failed">{e}</div>)}
           {rep.blockers.map((e, i) => <div key={i} className="s-blocked">⚠ {e}</div>)}
@@ -105,6 +115,13 @@ export default function CyclePanel({ mission }) {
       {blocked && LIMIT_CODES.includes(c.blockedCode) && (
         <p className="dim small">Pausado por limite, não concluído. O limite é definido no servidor e a retomada não o altera: Retomar só é aceito depois que ele for aumentado ou desativado (ver o motivo acima); o histórico e o contador deste ciclo são mantidos. Os valores de custo são estimativas da CLI, não a cobrança real.</p>
       )}
+      {blocked && c.blockedCode === 'integrity_review' && (
+        <div className="small" data-testid="integrity-review">
+          <p className="dim">O Executor mexeu em arquivos que validam o trabalho. Uma verificação que passa sobre testes alterados por ele não comprova a conclusão, então a etapa NÃO foi concluída. Se a alteração é legítima, revise-a e aprove: a aprovação vale só para o conteúdo exato que foi verificado.</p>
+          <ul className="plain">{(c.integrity?.pending || []).map((p) => <li key={p.path}><code>{p.path}</code> · {({ created: 'criado', modified: 'modificado', deleted: 'apagado' })[p.change] || p.change}{p.round ? ` na rodada ${p.round}` : ''}</li>)}</ul>
+          <div className="actions"><Btn kind="primary" onClick={() => call('resume', { note, approveIntegrity: true }, 'Alterações aprovadas; ciclo retomado.')}>✓ Aprovar as alterações e retomar</Btn></div>
+        </div>
+      )}
       {blocked && c.blockedCode === 'persistence_failed' && (
         <div className="small">
           <p className="dim">Causas comuns: disco cheio, falta de permissão, antivírus ou arquivo em uso. Nada foi iniciado nem declarado como concluído sem estar gravado; ao corrigir o armazenamento, Retomar confirma a gravação antes de continuar.</p>
@@ -144,7 +161,7 @@ export default function CyclePanel({ mission }) {
           </div>
         </div>
       )}
-      {c?.plan?.steps?.length > 0 && <Plan plan={c.plan} />}
+      {c?.plan?.steps?.length > 0 && <Plan plan={c.plan} rounds={c.rounds} />}
       {c?.rounds.length > 0 && <div className="rounds">{c.rounds.map((r) => <Round key={r.n} r={r} />)}</div>}
     </div>
   );

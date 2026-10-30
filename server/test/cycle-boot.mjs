@@ -12,7 +12,7 @@ const realSpawn = cp.spawn; cp.spawn = (cmd, args, opts) => realSpawn(cmd, args,
 const { createExecutor } = await import('../executor/index.js');
 
 const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fake-cli.mjs');
-const step = (id, deps, mode) => ({ id, title: `Etapa ${id}`, instructions: `MODE:${mode} ${id}`, acceptance: ['conferir'], dependsOn: deps });
+const step = (id, deps, mode) => ({ id, title: `Etapa ${id}`, instructions: `MODE:${mode} ${id}`, acceptance: ['out.txt existe com o conteúdo conferido'], expectedFiles: ['out.txt'], dependsOn: deps });
 globalThis.__ORCH_TEST_DEPS__ = {
   executor: createExecutor({ command: process.execPath, prefixArgs: [FAKE], args: [] }),
   planner: {

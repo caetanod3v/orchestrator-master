@@ -21,6 +21,7 @@
 // (não é copiado), então nenhuma chamada conta duas vezes nem se mistura com `cycle.plannerUsage`. Chamada que falhou ou foi rejeitada também consome e também é registrada.
 import * as store from './store.js';
 import { extractJson, validatePlanSteps, str, list, MAX_PLAN_STEPS } from './cycle-schema.js';
+import { evidencePathProblem } from './evidence.js';
 import { validateDir } from './workspaces.js';
 import { listWorkspace } from './planner.js';
 import { asyncRoute } from './async-route.js';
@@ -66,7 +67,7 @@ function validateContext(c, { needOpen }) {
  * clarify/ready/plan trazem `context` completo e `topic` ("same" por padrão, "new" = objetivo diferente); ready/plan aceitam `changes` (o que mudou na proposta).
  * @returns {{ok:true, value:object} | {ok:false, error:string}}
  */
-export function validateChatReply(raw, { plan = false, mayClarify = true } = {}) {
+export function validateChatReply(raw, { plan = false, mayClarify = true, workspace = null } = {}) { // workspace (M8): com ele, toda etapa precisa de um caminho de evidência independente (verificações reais do workspace ou expectedFiles)
   const j = extractJson(raw);
   if (!j.ok) return j;
   const d = j.value;
@@ -98,7 +99,11 @@ export function validateChatReply(raw, { plan = false, mayClarify = true } = {})
   if (d.changes !== undefined) out.changes = d.changes.trim();
   const c = validateContext(d.context, { needOpen: false }); if (c.error) return { ok: false, error: c.error };
   out.context = c.context;
-  if (d.kind === 'plan') { const p = validatePlanSteps(d.steps); if (!p.ok) return { ok: false, error: p.error }; out.steps = p.steps; }
+  if (d.kind === 'plan') {
+    const p = validatePlanSteps(d.steps, { strict: true }); if (!p.ok) return { ok: false, error: p.error };
+    const np = workspace ? evidencePathProblem(p.steps, workspace) : null; if (np) return { ok: false, error: np };
+    out.steps = p.steps;
+  }
   return { ok: true, value: out };
 }
 
@@ -139,7 +144,7 @@ function buildChatPrompt({ chat, workspace, listing, text, multiStep, mayClarify
       ? [`{"kind":"clarify","message":"...",${CONTEXT_FORMAT},"questions":["pergunta objetiva", "..."]}   — o pedido é de trabalho, mas falta algo IMPORTANTE que muda o plano e não dá para assumir. De 1 a 4 perguntas; não pergunte o que é secundário (assuma, registre em "assumptions" e diga na mensagem).`]
       : ['(Você já perguntou o bastante: NÃO use "clarify" agora. Passe o que falta para "assumptions", deixe "open" vazio e prossiga, listando as suposições na mensagem.)']),
     multiStep
-      ? `{"kind":"plan","message":"resumo do que será feito e das suposições",${CONTEXT_FORMAT},"title":"nome curto da missão (até 80)","objective":"objetivo e critérios de aceitação","changes":"(opcional) o que mudou em relação à proposta atual","steps":[{"id":"s1","title":"...","instructions":"...","acceptance":["critério verificável nos arquivos"],"dependsOn":[]},{"id":"s2","title":"...","instructions":"...","acceptance":["..."],"dependsOn":["s1"]}]}   — há informação suficiente ("open" vazio). De 1 a ${MAX_PLAN_STEPS} etapas pequenas, com ids únicos, dependências explícitas sem ciclos e pelo menos uma etapa sem dependências. O usuário NÃO edita etapas nem dependências: escreva-as bem.`
+      ? `{"kind":"plan","message":"resumo do que será feito e das suposições",${CONTEXT_FORMAT},"title":"nome curto da missão (até 80)","objective":"objetivo e critérios de aceitação","changes":"(opcional) o que mudou em relação à proposta atual","steps":[{"id":"s1","title":"...","instructions":"...","acceptance":["critério concreto e verificável"],"expectedFiles":["caminho/relativo.ext"],"dependsOn":[]},{"id":"s2","title":"...","instructions":"...","acceptance":["..."],"dependsOn":["s1"]}]}   — há informação suficiente ("open" vazio). De 1 a ${MAX_PLAN_STEPS} etapas pequenas, com ids únicos, dependências explícitas sem ciclos e pelo menos uma etapa sem dependências. O usuário NÃO edita etapas nem dependências: escreva-as bem. CRITÉRIOS: o usuário não escreve critérios técnicos; INFIRA critérios concretos e verificáveis (o que deve existir ou mudar: arquivo, conteúdo, comportamento observável) a partir do pedido; "funciona" ou "tarefa concluída" são rejeitados. "expectedFiles" (opcional, 1 a 8 caminhos relativos): arquivos que a etapa deve criar ou alterar, conferidos no disco pelo orquestrador. O relato do agente NÃO conclui etapa: só as verificações reais do workspace e/ou os expectedFiles concluem; SEM verificações reais configuradas, TODA etapa precisa de expectedFiles. Se faltar informação ESSENCIAL para definir critérios confiáveis, use "clarify" em vez de inventar requisitos importantes.`
       : `{"kind":"ready","message":"resumo do que será feito e das suposições",${CONTEXT_FORMAT},"title":"nome curto da missão (até 80)","objective":"objetivo e critérios de aceitação","changes":"(opcional) o que mudou em relação à proposta atual"}   — há informação suficiente ("open" vazio). O orquestrador decidirá as tarefas uma rodada por vez depois da aprovação (sem etapas aqui).`,
   ].filter((x) => x !== '').join('\n');
 }
@@ -224,7 +229,7 @@ export function createChat({ db, planner, cycle, multiStep = false, listFiles = 
         const res = await planner.decide({ prompt, cwd: w.ws.path });
         try { const rec = usageRecord(res.usage?.metrics, { ended: true, at: store.now() }); if (rec) recs.push(rec); } catch { /* o consumo é acessório: nunca derruba a conversa */ }
         if (res.error) return fail(502, `O Planner falhou: ${res.error}`);
-        const v = validateChatReply(res.text, { plan: multiStep, mayClarify });
+        const v = validateChatReply(res.text, { plan: multiStep, mayClarify, workspace: w.ws });
         const dup = v.ok ? repeatedQuestion(chat?.brief, v.value) : null;
         if (v.ok && !dup) reply = v.value;
         else { problem = v.ok ? `pergunta repetida (já feita neste objetivo): "${clip(dup, 120)}"; use o que o usuário já respondeu e pergunte só o que ainda falta, ou prossiga com suposições` : v.error; feedback = `Sua resposta anterior foi REJEITADA pelo backend: ${problem}. Corrija e responda apenas com o JSON válido.`; }

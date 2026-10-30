@@ -15,6 +15,8 @@
 //   running     : rodada em andamento (execução ou verificação real ainda não terminou)
 //   completed   : a execução teve sucesso E as verificações reais passaram (ou não há verificações configuradas)
 //   failed      : a execução falhou, ou a verificação real falhou/foi bloqueada/não rodou: o Planner decide o que fazer
+//   unverified  : (M8) a execução teve sucesso, mas o SISTEMA não conseguiu comprovar a conclusão (sem verificação real nem arquivos esperados, testes/configuração alterados
+//                 e não revisados, integridade não verificável): inconclusiva, nunca vira concluída sozinha e nada roda por cima dela; os motivos estão em round.report.evidence.reasons
 //   interrupted : a execução foi interrompida (cancelamento, queda do servidor); NUNCA é refeita automaticamente
 import { roundVerification } from './cycle.js';
 import { validatePlanSteps } from './cycle-schema.js';
@@ -44,7 +46,11 @@ export function stepStatusFromRound(round) {
   if (round.status !== 'succeeded') return 'failed'; // valor desconhecido: nunca vale como concluída
   if (round.verification === undefined && round.phase !== 'done') return 'running'; // a execução terminou, mas o resultado das verificações reais ainda não foi fechado
   const v = roundVerification(round);
-  return v === 'passed' || v === 'none' ? 'completed' : 'failed';
+  if (v !== 'passed' && v !== 'none') return 'failed';
+  // M8: o relato do Executor não conclui etapa. A evidência do SISTEMA (evidence.js) decide; rodadas gravadas antes do M8 não a têm e mantêm a regra anterior (já verificadas).
+  const ev = round.report?.evidence;
+  if (!ev) return 'completed';
+  return ev.level === 'verified' ? 'completed' : ev.level === 'failed' ? 'failed' : 'unverified';
 }
 
 /** Atualiza (idempotente) status/round/taskId de cada etapa do plano a partir das rodadas. Chamada a cada emit() do ciclo, antes de gravar. */
@@ -61,7 +67,7 @@ export function syncPlan(c, plan = c?.plan) {
 /** Etapas elegíveis agora: sem rodada e com todas as dependências concluídas (na ordem do plano); nenhuma se alguma etapa falhou ou foi interrompida. */
 export function eligibleSteps(c) {
   syncPlan(c);
-  if (steps(c).some((s) => s.status === 'failed' || s.status === 'interrupted')) return []; // etapa não concluída: nada mais roda sozinho; o Planner decide
+  if (steps(c).some((s) => ['failed', 'interrupted', 'unverified'].includes(s.status))) return []; // etapa não concluída: nada mais roda sozinho; o Planner decide
   const done = new Set(steps(c).filter((s) => s.status === 'completed').map((s) => s.id));
   return steps(c).filter((s) => s.status === 'queued' && (s.dependsOn || []).every((d) => done.has(d)));
 }

@@ -3,11 +3,12 @@
 // (permissions, command, cwd, authorized, allowTools…) invalida a resposta inteira.
 
 import { isAgent, AGENT_NAMES } from './agents.js';
+import { criterionProblem, safeRelPath, MAX_EXPECTED } from './evidence.js';
 
 export const DECISIONS = ['continue', 'complete', 'blocked'];
 export const PLAN_DECISION = 'plan'; // M4: só é aceita com `validateDecision(raw, { plan: true })` (ORCH_CYCLE_PLAN=on); sem isso o contrato é o de sempre
 const TOP_KEYS = ['decision', 'rationale', 'task', 'evidence', 'blockedReason'];
-const TASK_KEYS = ['title', 'instructions', 'acceptance', 'agent']; // agent: opcional (perfil de agents.js); ausente = perfil padrão, resolvido por quem executa
+const TASK_KEYS = ['title', 'instructions', 'acceptance', 'agent', 'expectedFiles']; // agent: opcional (perfil de agents.js); ausente = perfil padrão, resolvido por quem executa
 // eslint-disable-next-line no-control-regex
 const CTRL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/;
 
@@ -41,15 +42,34 @@ export const list = (v, name, minN, maxN, maxLen) => {
 
 // ---------- Plano de múltiplas etapas (M4) ----------
 export const MAX_PLAN_STEPS = 10;
-const STEP_KEYS = ['id', 'title', 'instructions', 'acceptance', 'dependsOn', 'agent'];
+const STEP_KEYS = ['id', 'title', 'instructions', 'acceptance', 'dependsOn', 'agent', 'expectedFiles'];
 const STEP_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
+
+/** expectedFiles (opcional): arquivos que a etapa deve CRIAR ou ALTERAR; o sistema os confere no disco depois. Caminhos relativos ao workspace, sem '..', absolutos nem coringas. */
+export function validateExpectedFiles(v, name) {
+  if (v === undefined) return { ok: true, files: undefined };
+  if (!Array.isArray(v) || v.length < 1 || v.length > MAX_EXPECTED) return { ok: false, error: `"${name}" deve ser uma lista de 1 a ${MAX_EXPECTED} caminhos` };
+  const out = [];
+  for (const p of v) { const rel = safeRelPath(p); if (!rel) return { ok: false, error: `"${name}" tem um caminho inválido (use caminhos relativos ao workspace, sem "..", sem caminho absoluto nem coringas): ${JSON.stringify(String(p).slice(0, 80))}` }; if (!out.includes(rel)) out.push(rel); }
+  return { ok: true, files: out };
+}
+
+/** Critérios de aceitação de uma etapa NOVA (do Planner): cada um precisa ser verificável (não vazio, não genérico) e nenhum pode repetir o título. */
+function acceptanceProblem(at, acceptance, title) {
+  const seen = new Set();
+  for (const a of acceptance) {
+    const why = criterionProblem(a); if (why) return `${at}.acceptance: o critério ${JSON.stringify(a.slice(0, 80))} ${why}`;
+    const k = a.trim().toLowerCase(); if (k === String(title).trim().toLowerCase()) return `${at}.acceptance: o critério ${JSON.stringify(a.slice(0, 80))} só repete o título da etapa`; if (seen.has(k)) return `${at}.acceptance repete o critério ${JSON.stringify(a.slice(0, 80))}`; seen.add(k);
+  }
+  return null;
+}
 
 /**
  * Valida a lista de etapas de um plano (a do Planner e, de novo, a que já está gravada): estrutura, ids únicos, dependências existentes,
  * sem auto-dependência nem ciclos e pelo menos uma etapa sem dependências (a única que pode começar). Não aceita chaves desconhecidas.
  * @returns {{ok:true, steps:object[]} | {ok:false, error:string}}
  */
-export function validatePlanSteps(raw) {
+export function validatePlanSteps(raw, { strict = false } = {}) { // strict (M8): plano NOVO vindo do Planner/chat; o plano já gravado é revalidado só na estrutura (não invalida planos antigos)
   if (!Array.isArray(raw)) return { ok: false, error: '"steps" deve ser uma lista' };
   if (raw.length < 1 || raw.length > MAX_PLAN_STEPS) return { ok: false, error: `"steps" deve ter de 1 a ${MAX_PLAN_STEPS} etapas` };
   const steps = [], ids = new Set();
@@ -64,10 +84,12 @@ export function validatePlanSteps(raw) {
     const e = str(x.title, `${at}.title`, 1, 200) || str(x.instructions, `${at}.instructions`, 1, 4000) || list(x.acceptance, `${at}.acceptance`, 1, 8, 300);
     if (e) return { ok: false, error: e };
     if (x.agent !== undefined && !isAgent(x.agent)) return { ok: false, error: `"${at}.agent" deve ser um perfil conhecido (${AGENT_NAMES.join(' | ')})` };
+    const ef = validateExpectedFiles(x.expectedFiles, `${at}.expectedFiles`); if (!ef.ok) return ef;
+    if (strict) { const ap = acceptanceProblem(at, x.acceptance, x.title); if (ap) return { ok: false, error: ap }; }
     const deps = x.dependsOn ?? [];
     if (!Array.isArray(deps) || deps.length > MAX_PLAN_STEPS - 1 || deps.some((d) => typeof d !== 'string')) return { ok: false, error: `${at}.dependsOn deve ser uma lista de ids de etapas` };
     if (new Set(deps).size !== deps.length) return { ok: false, error: `${at}.dependsOn repete uma dependência` };
-    steps.push({ id: x.id, title: x.title.trim(), instructions: x.instructions.trim(), acceptance: x.acceptance.map((a) => a.trim()), dependsOn: [...deps], ...(x.agent !== undefined ? { agent: x.agent } : {}) });
+    steps.push({ id: x.id, title: x.title.trim(), instructions: x.instructions.trim(), acceptance: x.acceptance.map((a) => a.trim()), dependsOn: [...deps], ...(x.agent !== undefined ? { agent: x.agent } : {}), ...(ef.files ? { expectedFiles: ef.files } : {}) });
   }
   for (const st of steps) {
     for (const d of st.dependsOn) {
@@ -106,10 +128,11 @@ export function validateDecision(raw, { plan = false } = {}) {
     if (e) return { ok: false, error: e };
     if (d.task.agent !== undefined && !isAgent(d.task.agent)) return { ok: false, error: `"task.agent" deve ser um perfil conhecido (${AGENT_NAMES.join(' | ')})` };
     if (d.evidence !== undefined || d.blockedReason !== undefined || d.steps !== undefined) return { ok: false, error: '"continue" não aceita "evidence", "steps" nem "blockedReason"' };
-    out.task = { title: d.task.title.trim(), instructions: d.task.instructions.trim(), acceptance: d.task.acceptance.map((x) => x.trim()), ...(d.task.agent !== undefined ? { agent: d.task.agent } : {}) };
+    const ef = validateExpectedFiles(d.task.expectedFiles, 'task.expectedFiles'); if (!ef.ok) return ef;
+    out.task = { title: d.task.title.trim(), instructions: d.task.instructions.trim(), acceptance: d.task.acceptance.map((x) => x.trim()), ...(d.task.agent !== undefined ? { agent: d.task.agent } : {}), ...(ef.files ? { expectedFiles: ef.files } : {}) };
   } else if (d.decision === PLAN_DECISION) {
     if (d.task !== undefined || d.evidence !== undefined || d.blockedReason !== undefined) return { ok: false, error: '"plan" não aceita "task", "evidence" nem "blockedReason"' };
-    const p = validatePlanSteps(d.steps);
+    const p = validatePlanSteps(d.steps, { strict: true });
     if (!p.ok) return { ok: false, error: p.error };
     out.steps = p.steps;
   } else if (d.decision === 'complete') {
