@@ -10,6 +10,7 @@ import { asyncRoute } from './async-route.js';
 import { pidAlive } from './instance-lock.js';
 import { usageRecord, usageEvent } from './usage.js';
 import { agentArgs } from './agents.js';
+import { evaluateTask } from './policy.js';
 
 const MAX_LOG = 600;
 const find = (arr, id) => arr.find((x) => x.id === id);
@@ -117,6 +118,9 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
     let why = check();
     if (why) return { ok: false, reason: why };
     const workspace = find(db.workspaces, mission.workspaceId);
+    // M9: ponto comum de execução (ciclo e tarefa manual): o que a política NEGA nunca inicia a CLI. (A aprovação de ações sensíveis do ciclo é tratada em cycle.js; a tarefa manual já exige a autorização humana explícita.)
+    const verdict = evaluateTask({ title: task.title, instructions: task.instructions ?? '', acceptance: task.acceptance ?? [], expectedFiles: [] }, { workspace, protectedDirs: [store.dataDir] });
+    if (verdict.decision === 'deny') return { ok: false, reason: `Negada pela política: ${verdict.summary.why.join(' ')}` };
     const before = await gitChanges(workspace.path); // linha de base para saber o que a execução alterou
     if (aborted()) return aborted();
     why = check(); // revalida: outra requisição pode ter tomado o lock durante o await

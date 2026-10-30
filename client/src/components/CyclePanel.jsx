@@ -9,7 +9,9 @@ const CODE = {
   interrupted: 'Execução interrompida', verification_blocked: 'Verificação não pôde rodar', cannot_start: 'Não foi possível iniciar', restarted: 'Servidor reiniciado',
   planner_calls_limit: 'Limite de consultas ao Planner', internal_error: 'Erro interno', persistence_failed: 'Gravação em disco falhou', plan_invalid: 'Plano inconsistente',
   integrity_review: 'Testes ou configuração alterados: revisão necessária', planner_call_cap: 'Limite de chamadas ao Planner atingido', cost_budget_reached: 'Orçamento de custo estimado atingido', cost_budget_unknown: 'Orçamento de custo não verificável',
+  approval_required: 'Aguardando a sua aprovação', approval_inconsistent: 'Registro de aprovações inconsistente',
 };
+const APPROVAL_LABEL = { pending: 'pendente', approved: 'aprovada (ainda não executada)', rejected: 'rejeitada', consumed: 'aprovada e usada', void: 'invalidada' };
 // Limites configurados no servidor (ORCH_CYCLE_*): o ciclo está PAUSADO (não concluído) e só retoma depois que o limite deixar de bloquear.
 const LIMIT_CODES = ['planner_call_cap', 'cost_budget_reached', 'cost_budget_unknown'];
 
@@ -105,6 +107,7 @@ export default function CyclePanel({ mission }) {
   const call = async (path, body, ok) => {
     const r = await act(async () => { await api.post(`/api/missions/${mission.id}/cycle/${path}`, body); return true; });
     if (r && ok) notify(ok);
+    return !!r;
   };
 
   return (
@@ -115,6 +118,21 @@ export default function CyclePanel({ mission }) {
       {blocked && LIMIT_CODES.includes(c.blockedCode) && (
         <p className="dim small">Pausado por limite, não concluído. O limite é definido no servidor e a retomada não o altera: Retomar só é aceito depois que ele for aumentado ou desativado (ver o motivo acima); o histórico e o contador deste ciclo são mantidos. Os valores de custo são estimativas da CLI, não a cobrança real.</p>
       )}
+      {blocked && c.blockedCode === 'approval_required' && (c.approvals || []).filter((a) => a.status === 'pending').map((a) => (
+        <div className="small" key={a.id} data-testid="approval-request">
+          <div className="k">ação que precisa da sua aprovação · {APPROVAL_LABEL[a.status]}</div>
+          <p><b>{a.summary.what}</b></p>
+          <div className="k">por que precisa de aprovação</div><ul className="plain">{a.summary.why.map((x, i) => <li key={i}>{x}</li>)}</ul>
+          <div className="k">impacto esperado</div><ul className="plain">{a.summary.impact.map((x, i) => <li key={i}>{x}</li>)}</ul>
+          <details><summary className="dim">instruções completas</summary><p className="dim">{a.action.instructions}</p></details>
+          <p className="dim">A aprovação vale só para esta ação, exatamente como apresentada, e é usada uma única vez. Se algo mudar, será pedida de novo. Aprovar não executa por si só: o ciclo é retomado em seguida e a execução ainda passa pelas verificações.</p>
+          <div className="actions">
+            <Btn kind="primary" onClick={async () => { if (await call(`approvals/${a.id}`, { decision: 'approve', digest: a.digest })) await call('resume', {}, 'Ação aprovada; ciclo retomado.'); }}>✓ Aprovar e continuar</Btn>
+            <Btn kind="danger" onClick={() => call(`approvals/${a.id}`, { decision: 'reject', digest: a.digest }, 'Ação rejeitada. Retome para o Planner escolher outro caminho.')}>✕ Rejeitar</Btn>
+          </div>
+        </div>
+      ))}
+      {c?.approvals?.length > 0 && <div className="dim small" data-testid="approval-history">aprovações: {c.approvals.map((a) => `${a.action.title} — ${APPROVAL_LABEL[a.status]}`).join(' · ')}</div>}
       {blocked && c.blockedCode === 'integrity_review' && (
         <div className="small" data-testid="integrity-review">
           <p className="dim">O Executor mexeu em arquivos que validam o trabalho. Uma verificação que passa sobre testes alterados por ele não comprova a conclusão, então a etapa NÃO foi concluída. Se a alteração é legítima, revise-a e aprove: a aprovação vale só para o conteúdo exato que foi verificado.</p>
@@ -152,7 +170,7 @@ export default function CyclePanel({ mission }) {
         </div>
       )}
       {active && <div className="actions"><Btn kind="danger" onClick={() => call('cancel', {}, 'Cancelamento solicitado.')}>✕ Cancelar ciclo</Btn></div>}
-      {blocked && (
+      {blocked && !(c.blockedCode === 'approval_required' && (c.approvals || []).some((a) => a.status === 'pending')) && (
         <div className="form">
           <label>Orientação para o Planner (opcional)<textarea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} /></label>
           <div className="actions">

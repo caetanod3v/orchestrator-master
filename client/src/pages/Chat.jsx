@@ -29,6 +29,7 @@ function Brief({ b }) {
 function Proposal({ p, chat, stale, rounds, setRounds, busy, onApprove, onDiscard }) {
   const steps = p.steps || [];
   const title = (id) => steps.find((s) => s.id === id)?.title || id;
+  const pol = (id) => p.policy?.find((x) => x.stepId === id);
   const need = Math.max(chat.maxIterations, steps.length);
   const value = rounds ?? Math.min(chat.hardMax, need);
   return (
@@ -42,7 +43,10 @@ function Proposal({ p, chat, stale, rounds, setRounds, busy, onApprove, onDiscar
         <ol className="plain">
           {steps.map((s) => (
             <li key={s.id}>
-              <b>{s.title}</b>{s.dependsOn.length > 0 && <span className="dim small"> · depois de: {s.dependsOn.map(title).join(', ')}</span>}
+              <b>{s.title}</b>
+              {pol(s.id)?.decision === 'approval_required' && <span className="s-awaiting_approval small"> · exigirá a sua aprovação antes de executar: {pol(s.id).why.join(' ')}</span>}
+              {pol(s.id)?.decision === 'deny' && <span className="s-blocked small"> · será bloqueada pela política: {pol(s.id).why.join(' ')}</span>}
+              {s.dependsOn.length > 0 && <span className="dim small"> · depois de: {s.dependsOn.map(title).join(', ')}</span>}
               <details className="small"><summary className="dim">detalhes</summary>
                 <p>{s.instructions}</p>
                 <ul className="plain">{s.acceptance.map((a) => <li key={a}>{a}</li>)}</ul>
