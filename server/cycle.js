@@ -532,7 +532,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       audit(m, { ...entry, outcome: 'awaiting_approval', approvalId: pending.id });
       note(m, 'policy', `Aguardando aprovação humana: ${clip(d.task.title, 100)}`);
     }
-    return stop(m, 'approval_required', `Aguardando a sua aprovação antes de executar: ${v.summary.what}. Motivo: ${v.summary.why.join(' ')} Impacto: ${v.summary.impact.join(' ')} Nada foi executado.`);
+    return stop(m, 'approval_required', `${v.summary.what} só será executada depois da sua aprovação. Motivo: ${v.summary.why.join(' ')} Impacto: ${v.summary.impact.join(' ')} Nada foi executado.`);
   }
 
   /** Decisão humana sobre uma solicitação pendente. Exige o digest que a interface mostrou; só vale para o ciclo bloqueado nela. */

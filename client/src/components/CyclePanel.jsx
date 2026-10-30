@@ -114,7 +114,12 @@ export default function CyclePanel({ mission }) {
     <div className="cycle">
       <div className="row"><b className="sub">Ciclo autônomo</b>{c && <Status value={c.status} masc />}</div>
       {c && <div className="dim small">rodada {c.rounds.length} de no máximo {c.maxIterations} · consultas ao Planner: {c.plannerCalls}</div>}
-      {blocked && <p className="s-blocked small">⚠ {CODE[c.blockedCode] || c.blockedCode}: {c.blockedReason}</p>}
+      {blocked && !(c.blockedCode === 'approval_required' && !(c.approvals || []).some((a) => a.status === 'pending')) && <p className="s-blocked small">⚠ {CODE[c.blockedCode] || c.blockedCode}: {c.blockedReason}</p>}
+      {blocked && c.blockedCode === 'approval_required' && !(c.approvals || []).some((a) => a.status === 'pending') && (() => {
+        // o blockedReason foi gravado quando a aprovação ainda estava pendente: depois da decisão, a mensagem segue o estado REAL da solicitação
+        const d = [...(c.approvals || [])].reverse().find((a) => ['approved', 'rejected'].includes(a.status));
+        return <p className="s-blocked small" data-testid="approval-decided">⚠ {d?.status === 'approved' ? `Ação aprovada, ainda não executada: "${d.action.title}". Clique em Retomar para executá-la.` : d?.status === 'rejected' ? `Ação rejeitada: "${d.action.title}" não será executada. Retome para o Planner escolher outro caminho.` : 'A solicitação foi invalidada. Retome para gerar uma nova.'}</p>;
+      })()}
       {blocked && LIMIT_CODES.includes(c.blockedCode) && (
         <p className="dim small">Pausado por limite, não concluído. O limite é definido no servidor e a retomada não o altera: Retomar só é aceito depois que ele for aumentado ou desativado (ver o motivo acima); o histórico e o contador deste ciclo são mantidos. Os valores de custo são estimativas da CLI, não a cobrança real.</p>
       )}
