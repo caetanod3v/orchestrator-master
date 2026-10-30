@@ -3,6 +3,9 @@
 // Estados (separados de propósito):
 //   missão  : mission.status (derivado das tarefas, como antes)
 //   ciclo   : mission.cycle.status  planning | running | blocked | completed | cancelled | limit_reached
+//                                   limit_reached = limite de RODADAS (retomável só com um novo maxIterations explícito); limites de chamadas do Planner e de
+//                                   custo estimado (limits.js) bloqueiam como `blocked` (blockedCode planner_call_cap | cost_budget_reached | cost_budget_unknown).
+//                                   Não existe limite de tempo total do ciclo: só os timeouts por chamada (Planner, Executor, verificação).
 //   rodada  : round.status          running | succeeded | failed | interrupted  (resultado da EXECUÇÃO do Executor; "succeeded" NÃO diz nada
 //                                   sobre as verificações reais, que podem ter falhado)
 //             round.verification    none | passed | failed | blocked | skipped  (resultado das verificações REAIS da rodada; ver
@@ -20,6 +23,13 @@ import { asyncRoute } from './async-route.js';
 import { usageRecord, usageEvent } from './usage.js';
 import { limitProblem } from './limits.js';
 import { DEFAULT_AGENT } from './agents.js';
+
+// O que precisa acontecer para um ciclo parado por limite poder retomar. Os limites vêm do ambiente do servidor; a retomada nunca os altera.
+const LIMIT_HINT = {
+  planner_call_cap: 'Para continuar, aumente ORCH_CYCLE_MAX_PLANNER_CALLS (ou desative com "off") e reinicie o servidor; o contador de chamadas deste ciclo é cumulativo e não é zerado.',
+  cost_budget_reached: 'Para continuar, aumente ORCH_CYCLE_MAX_ESTIMATED_COST_USD (ou desative com "off") e reinicie o servidor; o custo estimado já gasto neste ciclo é mantido.',
+  cost_budget_unknown: 'A CLI não reportou o custo de chamadas já feitas, então o orçamento não pode ser verificado: desative ORCH_CYCLE_MAX_ESTIMATED_COST_USD ("off") e reinicie o servidor, ou cancele este ciclo e inicie outro.',
+};
 
 // Política de persistência (M2): antes de AVANÇAR (consultar o Planner, iniciar uma rodada) o ciclo exige que o banco esteja gravando. Se a última gravação
 // falhou, tenta de novo com estas esperas (ms) para absorver uma falha TRANSITÓRIA (antivírus, indexador); esgotadas, ou diante de um erro real de E/S
@@ -577,17 +587,22 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
 
   async function resume(missionId, { note: text, maxIterations } = {}) {
     const m = mission(missionId), c = m?.cycle;
-    if (!c || c.status !== 'blocked') return fail(409, 'Só é possível retomar um ciclo bloqueado.');
+    // limit_reached (limite de RODADAS) só retoma por ação explícita: o novo limite vem no pedido (nunca é ampliado em silêncio) e precisa superar as rodadas já feitas.
+    const atRoundLimit = c?.status === 'limit_reached';
+    if (!c || (c.status !== 'blocked' && !atRoundLimit)) return fail(409, 'Só é possível retomar um ciclo bloqueado ou parado no limite de rodadas.');
     if (text !== undefined && (typeof text !== 'string' || text.length > 1000)) return fail(400, 'A orientação deve ser um texto de até 1000 caracteres.');
     if (maxIterations !== undefined && (!Number.isInteger(maxIterations) || maxIterations < c.rounds.length || maxIterations > HARD_MAX_ITERATIONS)) return fail(400, `maxIterations deve ser inteiro entre ${c.rounds.length} e ${HARD_MAX_ITERATIONS}.`);
+    if (atRoundLimit && (!Number.isInteger(maxIterations) || maxIterations <= c.rounds.length)) {
+      return fail(409, `O ciclo parou no limite de ${c.maxIterations} rodadas (${c.rounds.length} feitas). Para retomar, informe um novo limite de rodadas (maxIterations) maior que ${c.rounds.length} e até ${HARD_MAX_ITERATIONS}; o histórico e as rodadas concluídas são mantidos e não se repetem.`);
+    }
     if (starting || executor.isBusy() || loops.size) return fail(409, 'Outra execução ou ciclo está em andamento.');
     const ws = wsOf(m);
     if (!ws || !validateDir(ws.path).ok) return fail(409, 'Workspace inválido ou removido.');
     // Orçamento de consultas esgotado: retomar sem ampliar o limite só bloquearia de novo na hora (sem consultar o Planner). Recusa ANTES de
     // qualquer mutação, nota, bloco ou atividade; plannerCalls segue cumulativo (não é zerado).
-    if (c.blockedCode === 'planner_calls_limit' && c.plannerCalls >= ((maxIterations ?? c.maxIterations) + 1) * 3) return fail(409, 'O limite de consultas ao Planner deste ciclo foi atingido; aumente o limite de rodadas (maxIterations) para continuar.');
+    if ((c.blockedCode === 'planner_calls_limit' || atRoundLimit) && c.plannerCalls >= ((maxIterations ?? c.maxIterations) + 1) * 3) return fail(409, 'O limite de consultas ao Planner deste ciclo foi atingido; aumente o limite de rodadas (maxIterations) para continuar.');
     // Limites do incremento D: retomar não contorna o controle. Recusa ANTES de qualquer mutação enquanto o próximo passo (consultar o Planner) seria bloqueado de novo.
-    const lim = limitProblem(limits, m, 'planner'); if (lim) return fail(409, `${lim.reason} Aumente o limite (reinicie o servidor com um valor maior) para continuar.`);
+    const lim = limitProblem(limits, m, 'planner'); if (lim) return fail(409, `${lim.reason} ${LIMIT_HINT[lim.code]}`);
     // Persistência (M2): um ciclo parado por falha de gravação só retoma depois de o estado (inclusive este bloqueio) ser GRAVADO de fato; com qualquer outra falha
     // recente do banco também se exige uma gravação confirmada antes. Recusa ANTES de qualquer mutação.
     const reconcile = c.blockedCode === 'persistence_failed';
@@ -599,11 +614,11 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (text?.trim()) c.humanNotes.push({ at: store.now(), text: text.trim() });
     c.consecutiveFailures = 0; c.consecutiveNoProgress = 0; c.cancelRequested = false;
     c.reverifyPending = staleVerification(c.rounds.at(-1)); // evidência velha de ambiente: refazer antes de consultar o Planner
-    c.blockedReason = null; c.blockedCode = null; c.status = 'planning';
+    c.blockedReason = null; c.blockedCode = null; c.finishedAt = null; c.status = 'planning'; // finishedAt: limit_reached era um estado final até esta retomada
     return launchOrRollback(m, 'Ciclo retomado por um humano', 'retomar o ciclo', () => {
       // volta a "blocked" com o mesmo motivo, sem a orientação humana nova e sem perder o histórico (rounds, blocks, notas anteriores)
       c.humanNotes.length = prev.humanNotes;
-      for (const k of ['status', 'blockedCode', 'blockedReason', 'maxIterations', 'consecutiveFailures', 'consecutiveNoProgress', 'cancelRequested', 'reverifyPending']) {
+      for (const k of ['status', 'finishedAt', 'blockedCode', 'blockedReason', 'maxIterations', 'consecutiveFailures', 'consecutiveNoProgress', 'cancelRequested', 'reverifyPending']) {
         if (prev[k] === undefined) delete c[k]; else c[k] = prev[k];
       }
     }) || { status: 202, cycle: c };
