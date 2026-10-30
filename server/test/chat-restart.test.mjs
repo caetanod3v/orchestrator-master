@@ -40,15 +40,15 @@ test('reinício real: mensagens e proposta pendente voltam intactas, o Planner r
     for (const text of ['oi', 'AMBIGUO: quero um site', 'LANDING page para uma barbearia']) assert.equal((await call(baseA, '/api/chat/message', { text })).status, 200, text);
     before_ = (await call(baseA, '/api/chat')).json;
     assert.equal(before_.messages.length, 6); assert.deepEqual(before_.messages.filter((m) => m.role === 'assistant').map((m) => m.kind), ['reply', 'clarify', 'plan']);
-    assert.equal(before_.proposal.status, 'proposed'); assert.deepEqual(before_.proposal.steps.map((s) => s.id), ['s1', 's2']); assert.equal(before_.planMode, true);
+    assert.equal(before_.brief.goal, 'Landing page'); assert.equal(before_.phase, 'proposal'); assert.equal(before_.proposal.status, 'proposed'); assert.deepEqual(before_.proposal.steps.map((s) => s.id), ['s1', 's2']); assert.equal(before_.planMode, true);
   } finally { a.child.kill('SIGKILL'); await a.exited; } // encerramento forçado: sem shutdown limpo, o que vale é o que já estava gravado
   const portB = await freePort(), b = boot(portB, dir), baseB = `http://127.0.0.1:${portB}`;
   try {
     assert.ok(await waitUp(b), `servidor B não subiu:\n${b.out()}`);
     const after_ = (await call(baseB, '/api/chat')).json;
-    assert.deepEqual(after_.messages, before_.messages, 'as mensagens voltaram idênticas'); assert.deepEqual(after_.proposal, before_.proposal, 'a proposta pendente voltou idêntica'); assert.equal(after_.workspace.name, before_.workspace.name);
+    assert.deepEqual(after_.messages, before_.messages, 'as mensagens voltaram idênticas'); assert.deepEqual(after_.proposal, before_.proposal, 'a proposta pendente voltou idêntica'); assert.deepEqual(after_.brief, before_.brief, 'o contexto consolidado voltou idêntico'); assert.equal(after_.phase, 'proposal'); assert.equal(after_.workspace.name, before_.workspace.name);
     const next = await call(baseB, '/api/chat/message', { text: 'e agora, o que falta?' });
-    assert.equal(next.status, 200); assert.match(next.json.messages.at(-1).text, /Histórico visto: 6 mensagens/, 'o Planner recebeu o contexto anterior depois do reinício');
+    assert.equal(next.status, 200); assert.match(next.json.messages.at(-1).text, /Histórico visto: 6 mensagens. Objetivo lembrado: Landing page./, 'o Planner recebeu o histórico e o contexto consolidado depois do reinício');
     assert.equal(next.json.proposal.id, before_.proposal.id, 'uma conversa simples não troca a proposta');
     const disk = JSON.parse(fs.readFileSync(path.join(dir, 'db.json'), 'utf8'));
     assert.equal(disk.missions.filter((m) => !m.demo).length, 0, 'nenhuma missão real'); assert.ok(!disk.missions.some((m) => m.cycle), 'nenhum ciclo'); assert.equal(disk.chat.proposal.status, 'proposed');

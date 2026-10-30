@@ -5,16 +5,39 @@ import { Panel, Btn, Empty } from '../components/ui.jsx';
 
 const EXAMPLE = 'Quero criar uma landing page para uma barbearia, com agendamento pelo WhatsApp e visual moderno.';
 
+// Onde a conversa está (chat.phase, calculado no servidor). A cor reaproveita as classes de estado existentes.
+const PHASE = {
+  discussing: ['queued', 'Conversando sobre o objetivo'], clarifying: ['awaiting_approval', 'Preciso de uma informação sua'], proposal: ['awaiting_approval', 'Plano aguardando sua aprovação'],
+  new_goal: ['blocked', 'Novo objetivo em discussão'], approving: ['running', 'Aprovação em andamento'],
+};
+
+/** O que o sistema entendeu até agora: o que você confirmou fica separado do que ele está só supondo e do que ainda falta saber. */
+function Brief({ b }) {
+  if (!b) return null;
+  const List = ({ title, items, cls }) => (items.length > 0 ? <div className="small"><div className={`k ${cls || ''}`}>{title}</div><ul className="plain">{items.map((x) => <li key={x}>{x}</li>)}</ul></div> : null);
+  return (
+    <Panel title="O que entendi" right={<span className="dim small">objetivo {b.goalNo}</span>}>
+      <p><b>{b.goal}</b></p>
+      <List title="falta saber" items={b.open} cls="s-awaiting_approval" />
+      <List title="você confirmou" items={b.confirmed} />
+      <List title="estou assumindo (diga se estiver errado)" items={b.assumptions} />
+    </Panel>
+  );
+}
+
 /** Plano preparado em linguagem corrente: etapas e dependências só para leitura (o usuário aprova ou pede ajustes por mensagem; não edita a estrutura). */
-function Proposal({ p, chat, rounds, setRounds, busy, onApprove, onDiscard }) {
+function Proposal({ p, chat, stale, rounds, setRounds, busy, onApprove, onDiscard }) {
   const steps = p.steps || [];
   const title = (id) => steps.find((s) => s.id === id)?.title || id;
   const need = Math.max(chat.maxIterations, steps.length);
   const value = rounds ?? Math.min(chat.hardMax, need);
   return (
     <Panel title="Plano preparado" right={<span className="dim small">ainda não executado</span>}>
+      {stale && <p className="s-blocked small">⚠ Este plano é do objetivo anterior{p.context?.goal ? ` ("${p.context.goal}")` : ''}; agora a conversa é sobre "{chat.brief.goal}". Aprovar executa ESTE plano; para preparar o novo, continue a conversa.</p>}
       <p><b>{p.title}</b></p>
       <p>{p.objective}</p>
+      {p.revision > 1 && <p className="small"><b>Revisão {p.revision}</b>{p.changes ? `: ${p.changes}` : ''}. Esta versão precisa ser aprovada de novo.</p>}
+      {p.context?.assumptions?.length > 0 && <div className="small"><div className="k">suposições deste plano (você não confirmou)</div><ul className="plain">{p.context.assumptions.map((a) => <li key={a}>{a}</li>)}</ul></div>}
       {steps.length > 0 ? (
         <ol className="plain">
           {steps.map((s) => (
@@ -88,6 +111,7 @@ export default function Chat() {
     <div className="two split">
       <div className="col">
         <Panel title="Conversa" right={<Btn onClick={reset} disabled={!!working || chat.messages.length === 0}>Nova conversa</Btn>}>
+          {PHASE[chat.phase] && <p><span className={`status s-${PHASE[chat.phase][0]}`}><i />{PHASE[chat.phase][1]}</span></p>}
           <div className="chat-log" role="log" aria-live="polite" aria-label="Mensagens da conversa">
             {chat.messages.length === 0 && (
               <Empty>
@@ -102,7 +126,7 @@ export default function Chat() {
                 {m.questions?.length > 0 && <ul>{m.questions.map((q) => <li key={q}>{q}</li>)}</ul>}
               </div>
             ))}
-            {working === 'send' && <div className="msg assistant dim" role="status">Interpretando o pedido…</div>}
+            {working === 'send' && <div className="msg assistant dim" role="status">{p ? 'Atualizando o plano com o que você disse…' : chat.brief ? 'Considerando o que já combinamos…' : 'Interpretando o pedido…'}</div>}
             <div ref={end} />
           </div>
           {unavailable && <p className="s-blocked small">⚠ {unavailable} {chat.workspaceProblem && <a href="#/workspaces">Espaços de trabalho →</a>}</p>}
@@ -119,8 +143,10 @@ export default function Chat() {
         </Panel>
       </div>
       <div className="col">
+        <Brief b={chat.brief} />
+        {chat.brief && <div className="gap" />}
         {p
-          ? <Proposal p={p} chat={chat} rounds={rounds} setRounds={setRounds} busy={!!working || blocked} onApprove={approve} onDiscard={discard} />
+          ? <Proposal p={p} chat={chat} stale={chat.phase === 'new_goal'} rounds={rounds} setRounds={setRounds} busy={!!working || blocked} onApprove={approve} onDiscard={discard} />
           : <Panel title="Plano preparado"><Empty>Nenhum plano ainda. Quando você descrever um trabalho e eu tiver informação suficiente, o plano aparece aqui para você aprovar.</Empty></Panel>}
       </div>
     </div>

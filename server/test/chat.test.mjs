@@ -38,9 +38,11 @@ const reset = () => { db.missions = []; db.activity = []; delete db.chat; db.set
 const step = (id, deps = [], mode = 'check') => ({ id, title: `Etapa ${id}`, instructions: `MODE:${mode} ${id}`, acceptance: ['conferir'], dependsOn: deps });
 const J = (o) => JSON.stringify(o);
 const reply = (message = 'Olá! Em que posso ajudar?') => J({ kind: 'reply', message });
-const clarify = (...questions) => J({ kind: 'clarify', message: 'Preciso de mais detalhes.', questions: questions.length ? questions : ['Qual o nome da barbearia?'] });
-const ready = (title = 'Landing page') => J({ kind: 'ready', message: 'Entendi o pedido.', title, objective: 'Criar uma landing page para a barbearia.' });
-const planReply = (steps = [step('s1'), step('s2', ['s1'])], title = 'Landing page') => J({ kind: 'plan', message: 'Plano em duas etapas.', title, objective: 'Criar uma landing page para a barbearia.', steps });
+const ctx = (over = {}) => ({ goal: 'Landing page para a barbearia', confirmed: ['É uma barbearia'], assumptions: ['Visual escuro'], open: [], ...over });
+const clarifyC = (c = {}, extra = {}, ...questions) => J({ kind: 'clarify', message: 'Preciso de mais detalhes.', context: ctx({ open: ['Nome da barbearia'], ...c }), questions: questions.length ? questions : ['Qual o nome da barbearia?'], ...extra });
+const clarify = (...questions) => clarifyC({}, {}, ...questions);
+const ready = (title = 'Landing page', extra = {}) => J({ kind: 'ready', message: 'Entendi o pedido.', title, objective: 'Criar uma landing page para a barbearia.', context: ctx(), ...extra });
+const planReply = (steps = [step('s1'), step('s2', ['s1'])], title = 'Landing page', extra = {}) => J({ kind: 'plan', message: 'Plano em duas etapas.', title, objective: 'Criar uma landing page para a barbearia.', context: ctx(), steps, ...extra });
 const done = () => J({ decision: 'complete', rationale: 'ok', evidence: ['verificação real aprovada'] });
 const cont = (title) => J({ decision: 'continue', rationale: title, task: { title, instructions: `MODE:check ${title}`, acceptance: ['conferir'] } });
 const metrics = (cost) => { const t = { input: 2, output: 100, cacheCreation: 50, cacheRead: 20 }; return { final: { tokens: t, tokensAllModels: t, costUsd: cost, models: { m: { ...t, thinking: 0, costUsd: cost } } }, live: null, rateLimit: null }; };
@@ -52,10 +54,10 @@ const scripted = (answers, { beforeAnswer = null, busy = false, cost = null } = 
 const verifier = () => ({ isBusy: () => false, stop: async () => ({ stopped: false }),
   run: async (w, item) => { fs.rmSync(path.join(wsDir, 'out.txt'), { force: true }); return { id: item.id, script: item.script, required: item.required, command: `npm run ${item.script}`, source: 'backend', status: 'pass', exitCode: 0, durationMs: 5, outputTail: '', truncated: false, reason: null }; } });
 /** Chat com ciclo REAL (CLI falsa) e Planner simulado compartilhado: as respostas saem na ordem em que são pedidas. */
-function world(answers, { multiStep = true, plannerOpts } = {}) {
+function world(answers, { multiStep = true, plannerOpts, limits = null } = {}) {
   reset();
   const planner = scripted(answers, plannerOpts);
-  const cy = createCycle({ db, executor, planner, startTaskRun, verifier: verifier(), listFiles: () => ['LEIAME.md'], multiStep, persistRetryMs: [1] });
+  const cy = createCycle({ db, executor, planner, startTaskRun, verifier: verifier(), listFiles: () => ['LEIAME.md'], multiStep, limits, persistRetryMs: [1] });
   const chat = createChat({ db, planner, cycle: cy, multiStep, listFiles: () => ['LEIAME.md'] });
   return { planner, cy, chat };
 }
@@ -132,8 +134,8 @@ test('uma nova proposta não substitui a anterior em silêncio: o usuário é av
   db.missions.push(existing); const before_ = JSON.stringify(existing);
   const v1 = await sent(w.chat, 'Primeiro pedido'); const first = v1.proposal.id;
   const v2 = await sent(w.chat, 'Na verdade, quero também uma galeria.');
-  assert.notEqual(v2.proposal.id, first); assert.equal(v2.proposal.supersedes, first); assert.match(v2.messages.at(-1).text, /substitui a anterior, que ainda não tinha sido aprovada/); assert.match(w.planner.calls[1].prompt, /PROPOSTA ATUAL \(ainda NÃO aprovada\): "Primeira"/);
-  assert.ok(db.activity.some((a) => /Segunda \(substitui a proposta anterior/.test(a.message)));
+  assert.notEqual(v2.proposal.id, first); assert.equal(v2.proposal.supersedes, first); assert.match(v2.messages.at(-1).text, /atualiza a anterior \(revisão 2\), que ainda não tinha sido aprovada/); assert.match(w.planner.calls[1].prompt, /PROPOSTA ATUAL \(ainda NÃO aprovada, revisão 1\): "Primeira"/);
+  assert.ok(db.activity.some((a) => /Segunda \(revisão 2\) \(substitui a proposta anterior/.test(a.message)));
   const stale = await w.chat.approve({ proposalId: first }); assert.equal(stale.status, 409); assert.match(stale.error, /não é mais o atual/); assert.equal(db.missions.length, 1);
   assert.equal(JSON.stringify(existing), before_, 'a missão e o plano existentes não foram alterados');
   const gone = await w.chat.discard({ proposalId: v2.proposal.id }); assert.equal(gone.status, 200); assert.equal(gone.chat.proposal, null); assert.equal(onDisk().chat.proposal, null);
@@ -257,4 +259,139 @@ test('consumo do chat: falha do Planner e gravação recusada também registram 
   try { console.error = () => {}; const bad = await w.chat.message('dois'); assert.equal(bad.status, 503); } finally { console.error = origErr; fs.rmSync(BLOCK_TMP, { recursive: true, force: true }); }
   assert.equal(db.chat.messages.length, 2, 'a mensagem não gravada não aparece'); assert.equal(db.chat.plannerUsage.length, 2, 'mas a chamada gastou e ficou registrada'); assert.equal(db.chat.plannerCalls, 2);
   const none = world([reply('x')]); await sent(none.chat); assert.deepEqual(db.chat.plannerUsage, []); assert.equal(summarizeUsage([], db.chat), null, 'sem métricas reportadas não há consumo (nunca zero inventado)');
+});
+
+// ---------- M6: contexto conversacional e esclarecimentos ----------
+test('M6 contrato: clarify exige context.open; plan/ready só com open vazio; reply não leva contexto; topic, changes e limites do contexto', () => {
+  const ok = (raw, o) => { const r = validateChatReply(raw, o); assert.ok(r.ok, r.error); return r.value; };
+  const bad = (raw, re, o) => { const r = validateChatReply(raw, o); assert.equal(r.ok, false, String(raw).slice(0, 90)); assert.match(r.error, re); };
+  const c = ok(clarify()); assert.deepEqual(c.context.open, ['Nome da barbearia']); assert.equal(c.topic, 'same');
+  bad(J({ kind: 'clarify', message: 'x', questions: ['a?'] }), /"context" deve ser um objeto/); bad(clarifyC({ open: [] }), /exige context\.open/);
+  bad(planReply(undefined, 't', { context: ctx({ open: ['falta algo'] }) }), /context\.open não está vazio/, { plan: true }); bad(ready('t', { context: ctx({ open: ['falta'] }) }), /context\.open não está vazio/);
+  bad(planReply(undefined, 't', { context: undefined }), /"context" deve ser um objeto/, { plan: true });
+  bad(J({ kind: 'reply', message: 'x', context: ctx() }), /"reply" não aceita "context"/); bad(J({ kind: 'reply', message: 'x', topic: 'new' }), /"reply" não aceita "topic"/);
+  bad(clarifyC({}, { topic: 'talvez' }), /"topic" deve ser "same" ou "new"/); bad(clarifyC({}, { changes: 'x' }), /"clarify" não aceita "changes"/);
+  bad(J({ kind: 'clarify', message: 'x', questions: ['a?'], context: { ...ctx({ open: ['x'] }), segredo: 1 } }), /chaves não permitidas em "context": segredo/);
+  bad(clarifyC({ confirmed: Array.from({ length: 13 }, (_, i) => `fato ${i}`) }), /de 0 a 12 itens/); bad(clarifyC({ goal: '' }), /context\.goal/);
+  const p = ok(planReply(undefined, 't', { topic: 'new', changes: 'trocou a cor' }), { plan: true }); assert.equal(p.topic, 'new'); assert.equal(p.changes, 'trocou a cor');
+  bad(planReply(undefined, 't', { changes: '' }), /changes/, { plan: true });
+  assert.deepEqual(ok(J({ kind: 'ready', message: 'm', title: 't', objective: 'o', context: { goal: 'g' } })).context, { goal: 'g', confirmed: [], assumptions: [], open: [] }, 'listas ausentes valem como vazias');
+});
+
+test('contexto: a resposta às perguntas é ligada ao objetivo em andamento (sem repetir o pedido), o confirmado fica separado das suposições e o brief é gravado', async () => {
+  const ans = ctx({ goal: 'Landing page da Navalha de Ouro', confirmed: ['É uma barbearia', 'Nome: Navalha de Ouro', 'WhatsApp: 11 98765-4321'], assumptions: ['Visual escuro com dourado'], open: [] });
+  const w = world([clarifyC({ confirmed: ['É uma barbearia'], assumptions: [] }, {}, 'Qual o nome da barbearia?', 'Qual o WhatsApp?'), planReply(undefined, 'Landing', { context: ans })]);
+  assert.equal(w.chat.view().phase, 'idle'); assert.equal(w.chat.view().brief, null);
+  const v1 = await sent(w.chat, 'Quero uma landing page para minha barbearia.');
+  assert.equal(v1.phase, 'clarifying'); assert.equal(v1.brief.goalNo, 1); assert.deepEqual(v1.brief.open, ['Nome da barbearia']); assert.equal(v1.proposal, null, 'faltou informação essencial: ainda não há plano');
+  const v2 = await sent(w.chat, 'Navalha de Ouro, 11 98765-4321'); // só a resposta: não repete o objetivo
+  const p2 = w.planner.calls[1].prompt;
+  assert.match(p2, /CONTEXTO CONSOLIDADO \(gravado pelo orquestrador[^)]*nº 1\)/); assert.match(p2, /objetivo: Landing page para a barbearia/); assert.match(p2, /confirmado pelo usuário:\n    - É uma barbearia/);
+  assert.match(p2, /perguntas JÁ FEITAS neste objetivo \(não repita\):\n    - Qual o nome da barbearia\?\n    - Qual o WhatsApp\?/); assert.match(p2, /"Navalha de Ouro, 11 98765-4321"/);
+  assert.equal(v2.phase, 'proposal'); assert.deepEqual(v2.brief.confirmed, ans.confirmed); assert.deepEqual(v2.brief.assumptions, ['Visual escuro com dourado']); assert.deepEqual(v2.brief.open, []);
+  assert.ok(!v2.brief.assumptions.some((a) => v2.brief.confirmed.includes(a)), 'suposição nunca aparece como confirmada');
+  assert.deepEqual(v2.proposal.context, { goal: 'Landing page da Navalha de Ouro', confirmed: ans.confirmed, assumptions: ['Visual escuro com dourado'] }); assert.equal(v2.proposal.goalNo, 1); assert.equal(v2.proposal.revision, 1);
+  const d = onDisk().chat; assert.equal(d.brief.goalNo, 1); assert.deepEqual(d.brief.confirmed, ans.confirmed); assert.equal(d.proposal.context.goal, 'Landing page da Navalha de Ouro');
+  assert.equal(db.missions.length, 0); assert.equal(execStarts, 0);
+});
+
+test('perguntas: nunca repete uma já feita (mesmo com outra caixa, acento ou pontuação), nunca gera plano com informação essencial faltando e, depois de 2 rodadas, assume em vez de perguntar', async () => {
+  const a = world([clarify('Qual o nome da barbearia?'), clarify('qual o NÓME da barbearia'), clarifyC({ open: ['Cores'] }, {}, 'Quais cores?')]);
+  await sent(a.chat, 'um'); const v = await sent(a.chat, 'dois');
+  assert.equal(a.planner.calls.length, 3, 'a pergunta repetida foi rejeitada e a nova tentativa vale'); assert.match(a.planner.calls[2].prompt, /REJEITADA pelo backend: pergunta repetida \(já feita neste objetivo\): "qual o NÓME da barbearia"/);
+  assert.deepEqual(v.messages.at(-1).questions, ['Quais cores?']); assert.deepEqual(db.chat.brief.asked, ['qual o nome da barbearia', 'quais cores']);
+  const b = world([planReply(undefined, 't', { context: ctx({ open: ['Qual o objetivo do site?'] }) }), clarifyC({ open: ['Objetivo do site'] }, {}, 'Qual o objetivo do site?')]);
+  const vb = await sent(b.chat, 'Quero um site'); assert.equal(vb.proposal, null, 'plano com `open` não vira proposta'); assert.equal(vb.messages.at(-1).kind, 'clarify'); assert.match(b.planner.calls[1].prompt, /REJEITADA pelo backend: context\.open não está vazio/);
+  const c = world([clarify('P1?'), clarify('P2?'), planReply(undefined, 't', { context: ctx({ open: ['ainda falta'] }) }), planReply(undefined, 't', { context: ctx({ assumptions: ['Assumi o tema escuro porque você não respondeu'], open: [] }) })]);
+  await sent(c.chat, 'a'); await sent(c.chat, 'b'); const vc = await sent(c.chat, 'c');
+  assert.match(c.planner.calls[2].prompt, /NÃO use "clarify" agora/); assert.match(c.planner.calls[2].prompt, /deixe "open" vazio/); assert.equal(vc.proposal.kind, 'plan'); assert.deepEqual(vc.brief.assumptions, ['Assumi o tema escuro porque você não respondeu']); assert.deepEqual(vc.proposal.context.assumptions, vc.brief.assumptions);
+});
+
+test('correção de requisito: o contexto troca o fato corrigido e mantém o resto; a proposta vira nova REVISÃO (id novo, `changes`, aviso) e a anterior não é mais aprovável', async () => {
+  const steps = [step('a'), step('b', ['a'])];
+  const w = world([planReply(steps, 'Landing', { context: ctx({ confirmed: ['É uma barbearia', 'Cor: dourado'] }) }), planReply(steps, 'Landing', { changes: 'Cor principal trocada para azul', context: ctx({ confirmed: ['É uma barbearia', 'Cor: azul'] }) })]);
+  const v1 = await sent(w.chat, 'Landing para barbearia, dourado.'); const first = v1.proposal;
+  const v2 = await sent(w.chat, 'Na verdade a cor principal é azul, não dourado.');
+  assert.match(w.planner.calls[1].prompt, /Cor: dourado/); assert.match(w.planner.calls[1].prompt, /PROPOSTA ATUAL \(ainda NÃO aprovada, revisão 1\)/); assert.match(w.planner.calls[1].prompt, /e o usuário muda algo, devolva a proposta completa atualizada/);
+  assert.deepEqual(v2.brief.confirmed, ['É uma barbearia', 'Cor: azul']); assert.ok(!JSON.stringify(v2.brief).includes('dourado'), 'o fato corrigido saiu do contexto');
+  assert.notEqual(v2.proposal.id, first.id); assert.equal(v2.proposal.revision, 2); assert.equal(v2.proposal.supersedes, first.id); assert.equal(v2.proposal.changes, 'Cor principal trocada para azul'); assert.equal(v2.proposal.goalNo, 1);
+  assert.match(v2.messages.at(-1).text, /atualiza a anterior \(revisão 2\).*aprovar esta versão/s);
+  const old = await w.chat.approve({ proposalId: first.id }); assert.equal(old.status, 409, 'a versão antiga exige a nova aprovação'); assert.equal(db.missions.length, 0); assert.equal(execStarts, 0); assert.equal(db.chat.proposal.status, 'proposed');
+});
+
+test('objetivo novo: contexto do zero, o anterior vai para o histórico de objetivos, a proposta pendente não é trocada em silêncio e a interface é avisada', async () => {
+  const w = world([planReply(undefined, 'Landing'), clarifyC({ goal: 'Blog de receitas', confirmed: ['Quer um blog'], assumptions: [], open: ['Quais categorias?'] }, { topic: 'new' }, 'Quais categorias de receitas?'),
+    planReply([step('r1')], 'Blog', { changes: 'ignorada: é outro objetivo', context: ctx({ goal: 'Blog de receitas', confirmed: ['Quer um blog', 'Categorias: doces'] }) })]);
+  const v1 = await sent(w.chat, 'Landing para a barbearia.'); const first = v1.proposal;
+  const v2 = await sent(w.chat, 'Mudando de assunto: quero um blog de receitas.');
+  assert.equal(v2.brief.goalNo, 2); assert.equal(v2.brief.goal, 'Blog de receitas'); assert.deepEqual(v2.brief.confirmed, ['Quer um blog']); assert.equal(v2.previousGoals[0].goal, 'Landing page para a barbearia'); assert.equal(v2.previousGoals[0].goalNo, 1);
+  assert.equal(v2.proposal.id, first.id, 'a proposta do objetivo anterior continua como estava (não foi trocada nem descartada)'); assert.equal(v2.proposal.status, 'proposed'); assert.equal(v2.phase, 'new_goal');
+  assert.doesNotMatch(v2.messages.at(-1).text, /substitui|atualiza a anterior/);
+  const v3 = await sent(w.chat, 'Doces.');
+  assert.equal(v3.proposal.goalNo, 2); assert.equal(v3.proposal.revision, 1, 'objetivo diferente reinicia a contagem de revisões'); assert.equal(v3.proposal.changes, undefined); assert.equal(v3.proposal.supersedes, first.id);
+  assert.match(v3.messages.at(-1).text, /de um objetivo diferente e substitui a anterior/); assert.equal(v3.phase, 'proposal'); assert.equal((await w.chat.approve({ proposalId: first.id })).status, 409);
+});
+
+test('conversa solta não mexe no contexto nem na proposta; descartar o plano mantém o que já foi dito; nova conversa limpa tudo', async () => {
+  const w = world([planReply(), reply('Claro, é só pedir.'), reply('ok')]);
+  const v1 = await sent(w.chat, 'Landing para barbearia'); const snap = JSON.stringify([v1.brief, v1.proposal]);
+  const v2 = await sent(w.chat, 'valeu, e quanto tempo isso leva?'); assert.equal(JSON.stringify([v2.brief, v2.proposal]), snap); assert.equal(v2.phase, 'proposal');
+  const d = w.chat.discard({ proposalId: v1.proposal.id }); assert.equal(d.status, 200); assert.equal(d.chat.proposal, null); assert.equal(d.chat.brief.goal, v1.brief.goal); assert.equal(d.chat.phase, 'discussing');
+  await sent(w.chat, 'e agora?'); assert.match(w.planner.calls.at(-1).prompt, /objetivo: Landing page para a barbearia/, 'o contexto sobreviveu ao descarte do plano');
+  const r = w.chat.reset(); assert.equal(r.chat.brief, null); assert.deepEqual(r.chat.previousGoals, []); assert.equal(r.chat.phase, 'idle');
+});
+
+test('memória honesta: com mais mensagens que o histórico guarda ou envia, o Planner é avisado do que NÃO vê e o contexto consolidado continua disponível', async () => {
+  const w = world([clarifyC({ goal: 'Meta importante', confirmed: ['fato antigo'] }), ...Array.from({ length: 24 }, () => reply('ok'))]);
+  await sent(w.chat, 'PEDIDO-INICIAL-XYZ');
+  for (let i = 0; i < 24; i++) await sent(w.chat, `conversa ${i}`);
+  const last = w.planner.calls.at(-1).prompt;
+  assert.match(last, /só as 12 mensagens mais recentes aparecem abaixo \(há outras 28 gravadas que NÃO estão neste prompt\) e 8 mensagens mais antigas foram descartadas do histórico/);
+  assert.match(last, /objetivo: Meta importante/); assert.match(last, /- fato antigo/); assert.doesNotMatch(last, /PEDIDO-INICIAL-XYZ/, 'a mensagem original saiu do histórico: só o contexto consolidado a representa');
+  assert.match(last, /MEMÓRIA: você só sabe o que está no CONTEXTO CONSOLIDADO/); assert.equal(w.chat.view().messages.length, KEEP_MESSAGES); assert.equal(db.chat.trimmed, 10); assert.equal(db.chat.brief.goal, 'Meta importante');
+});
+
+test('persistência do contexto: o brief vai para o disco, volta depois de "recarregar" o banco e alimenta o próximo prompt; falha de gravação não perde nem altera o contexto anterior', async () => {
+  const origErr = console.error;
+  const w = world([clarify('Q1?'), clarifyC({ open: ['Cor'], confirmed: ['É uma barbearia', 'nova info'] }, {}, 'Q2?'), clarifyC({ open: ['Cor'], confirmed: ['É uma barbearia', 'nova info'] }, {}, 'Q3?'), reply('ok')], { plannerOpts: { beforeAnswer: (n) => { if (n === 2) fs.mkdirSync(BLOCK_TMP); } } });
+  await sent(w.chat, 'um'); const snap = JSON.stringify([db.chat.brief, db.chat.messages, db.chat.proposal, db.chat.previousGoals]);
+  assert.deepEqual(onDisk().chat.brief, JSON.parse(JSON.stringify(db.chat.brief)), 'o brief está no disco');
+  try {
+    console.error = () => {};
+    const bad = await w.chat.message('dois'); assert.equal(bad.status, 503); assert.match(bad.error, /nada foi alterado/);
+    assert.equal(JSON.stringify([db.chat.brief, db.chat.messages, db.chat.proposal, db.chat.previousGoals]), snap, 'o contexto anterior continua exatamente como estava');
+    assert.deepEqual(w.chat.view().brief.open, ['Nome da barbearia']);
+  } finally { console.error = origErr; fs.rmSync(BLOCK_TMP, { recursive: true, force: true }); }
+  const ok = await w.chat.message('dois'); assert.equal(ok.status, 200, ok.error); assert.deepEqual(ok.chat.brief.open, ['Cor']); assert.ok(ok.chat.brief.confirmed.includes('nova info'));
+  db.chat = JSON.parse(JSON.stringify(onDisk().chat)); // "reinício": o estado volta do disco
+  assert.equal(w.chat.view().phase, 'clarifying'); await sent(w.chat, 'tres');
+  assert.match(w.planner.calls.at(-1).prompt, /nova info/); assert.match(w.planner.calls.at(-1).prompt, /Q1\?/);
+});
+
+test('proteção: mensagens (plano, correção, objetivo novo) nunca iniciam ciclo nem tocam em missão, plano ou execução existentes; durante uma aprovação o chat recusa', async () => {
+  const w = world([planReply(), planReply(undefined, 'Landing', { changes: 'mudou', context: ctx({ confirmed: ['É uma barbearia', 'Cor: azul'] }) }), clarifyC({ goal: 'Outro', open: ['x'] }, { topic: 'new' }, 'Outra?')]);
+  let starts = 0; const spy = { start: async () => { starts++; return { status: 500, error: 'não deveria ser chamado' }; } };
+  const chat = createChat({ db, planner: w.planner, cycle: spy, multiStep: true, listFiles: () => [] });
+  const existing = { id: 'mis_exist', demo: false, title: 'Existente', objective: 'o', workspaceId: 'ws', createdAt: 'T0', tasks: [], cycle: { id: 'cyc_x', status: 'blocked', maxIterations: 5, plannerCalls: 1, rounds: [], humanNotes: [], rejections: [], blocks: [], blockedCode: 'planner_blocked', blockedReason: 'x', finishedAt: null, plan: { id: 'pl_x', createdAt: 'T0', rationale: 'r', steps: [{ ...step('z'), status: 'queued', round: null, taskId: null }] } } };
+  db.missions.push(existing); const before_ = JSON.stringify(existing);
+  await sent(chat, 'Landing para barbearia'); await sent(chat, 'Cor azul, por favor'); await sent(chat, 'Outro assunto totalmente diferente');
+  assert.equal(starts, 0, 'nenhuma mensagem chamou cycle.start'); assert.equal(db.missions.length, 1); assert.equal(JSON.stringify(existing), before_, 'a missão, o ciclo e o plano existentes ficaram idênticos'); assert.equal(execStarts, 0);
+  db.chat.proposal.status = 'approved'; db.chat.proposal.missionId = 'mis_x'; // aprovação em andamento (ou interrompida por queda)
+  const m = await chat.message('mais uma coisa'); assert.equal(m.status, 409); assert.match(m.error, /em aprovação/); assert.equal(chat.discard({}).status, 404);
+  const a = await chat.approve({ proposalId: db.chat.proposal.id }); assert.equal(a.status, 409); assert.match(a.error, /já foi aprovado/); assert.equal(starts, 0); assert.equal(w.chat.view().phase, 'approving');
+});
+
+test('aprovado o plano do chat, os limites do ciclo (M3) valem como sempre: o orçamento bloqueia a etapa seguinte; a missão guarda o contexto aprovado', async () => {
+  const w = world([planReply([step('s1', [], 'usage'), step('s2', ['s1'])], 'Landing', { context: ctx({ confirmed: ['Fato A'], assumptions: ['Suposição B'] }) })], { limits: { maxPlannerCalls: null, maxEstimatedCostUsd: 0.04 } }); // a CLI falsa reporta 0,05 na 1ª etapa
+  const v = await sent(w.chat); const r = await w.chat.approve({ proposalId: v.proposal.id }); assert.equal(r.status, 202, r.error); await w.cy.idle();
+  const m = db.missions[0]; assert.equal(m.cycle.status, 'blocked'); assert.equal(m.cycle.blockedCode, 'cost_budget_reached'); assert.equal(m.cycle.rounds.length, 1); assert.equal(execStarts, 1, 'a 2ª etapa não iniciou');
+  assert.deepEqual(m.brief, { goal: 'Landing page para a barbearia', confirmed: ['Fato A'], assumptions: ['Suposição B'] }, 'confirmado e suposto ficam registrados na missão'); assert.equal(w.chat.view().phase, 'idle'); assert.equal(w.chat.view().brief, null);
+});
+
+test('modo legado (ORCH_CYCLE_PLAN desligado): o contexto e os esclarecimentos funcionam igual, a proposta "ready" leva o contexto e a aprovação inicia o ciclo de sempre', async () => {
+  const w = world([clarify('Qual o nome?'), ready('Landing legado', { context: ctx({ confirmed: ['Nome: Navalha'], assumptions: ['Tema escuro'] }) }), cont('A'), done()], { multiStep: false });
+  const v1 = await sent(w.chat, 'Quero um site de barbearia'); assert.equal(v1.phase, 'clarifying'); assert.equal(v1.planMode, false); assert.doesNotMatch(w.planner.calls[0].prompt, /"kind":"plan"/); assert.match(w.planner.calls[0].prompt, /"kind":"ready"/);
+  const v2 = await sent(w.chat, 'Navalha'); assert.equal(v2.proposal.kind, 'ready'); assert.equal(v2.proposal.steps, undefined); assert.deepEqual(v2.proposal.context.confirmed, ['Nome: Navalha']); assert.equal(v2.phase, 'proposal');
+  const r = await w.chat.approve({ proposalId: v2.proposal.id }); assert.equal(r.status, 202, r.error); await w.cy.idle();
+  const m = db.missions[0]; assert.equal(m.cycle.status, 'completed', m.cycle.blockedReason); assert.equal(m.cycle.plan, undefined); assert.deepEqual(m.brief.assumptions, ['Tema escuro']);
 });
