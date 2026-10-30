@@ -12,9 +12,8 @@ import { useStore } from './store.jsx';
 import { PersistenceNote } from './components/ui.jsx';
 
 const PAGES = { chat: Chat, cockpit: Cockpit, missions: Missions, agents: Agents, workspaces: Workspaces, activity: Activity, settings: Settings };
-// Título e frase de apoio de cada página interna (o Cockpit é tela cheia e não tem cabeçalho). Mantenha os títulos iguais aos rótulos da navegação.
+// Título e frase de apoio de cada página interna (o Cockpit e a Conversa ocupam a área principal e não têm cabeçalho de página; a Conversa é a tela inicial). Mantenha os títulos iguais aos rótulos da navegação.
 const HEAD = {
-  chat: ['Conversa', 'Descreva o que você quer em linguagem livre; o plano só é executado depois da sua aprovação.'],
   missions: ['Missões', 'Crie missões, acompanhe o ciclo autônomo e gerencie as tarefas.'],
   agents: ['Agentes', 'Conheça os papéis do Planner e do Executor e como trabalham em conjunto.'],
   workspaces: ['Espaços de trabalho', 'Repositórios autorizados e verificações reais aprovadas por você.'],
@@ -46,6 +45,8 @@ export default function App() {
         {toast && <div className={`toast ${toast.kind}`} role="status">{toast.text}</div>}
         {page === 'cockpit'
           ? <div className="content full"><Page /></div>
+          : page === 'chat'
+          ? <div className="content chatpage"><Page /></div>
           : (
             <div className="content">
               <div className={`page${page === 'activity' ? ' wide' : ''}`}>
