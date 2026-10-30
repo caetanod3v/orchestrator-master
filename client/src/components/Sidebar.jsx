@@ -3,7 +3,7 @@ import { useStore } from '../store.jsx';
 import { Status, DemoTag } from './ui.jsx';
 
 const NAV = [
-  ['cockpit', 'Cockpit'], ['missions', 'Missões'], ['agents', 'Agentes'],
+  ['chat', 'Conversa'], ['cockpit', 'Cockpit'], ['missions', 'Missões'], ['agents', 'Agentes'],
   ['workspaces', 'Espaços de trabalho'], ['activity', 'Atividade'], ['settings', 'Configurações'],
 ];
 

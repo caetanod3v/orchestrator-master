@@ -271,3 +271,10 @@ input[type="checkbox"] { accent-color: var(--accent); }
 /* Tokens dentro da caixa do agente */
 .node .tokens { font-size: var(--fs-2xs); color: var(--text); white-space: nowrap; }
 .node .tokens em { font-style: normal; color: var(--awaiting); margin-left: 4px; }
+
+/* Conversa (M5) */
+.chat-log { display: flex; flex-direction: column; gap: var(--s-3); max-height: 52vh; overflow-y: auto; margin-bottom: var(--s-4); }
+.msg { max-width: 88%; padding: var(--s-3) var(--s-4); border: 1px solid var(--line); border-radius: var(--r); background: var(--bg2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.user { align-self: flex-end; background: var(--accent-bg); border-color: var(--accent-line); }
+.msg .who { display: block; color: var(--dim); font-size: var(--fs-xs); margin-bottom: var(--s-1); }
+.msg ul { margin: var(--s-2) 0 0; padding-left: var(--s-6); white-space: normal; }

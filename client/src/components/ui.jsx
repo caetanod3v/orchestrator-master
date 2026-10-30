@@ -12,7 +12,7 @@ export const statusLabel = (value, masc) => (masc && STATUS_MASC[value]) || STAT
 // Tipos de evento da Atividade (a chave é o `type` gravado pelo servidor).
 export const TYPE_LABEL = {
   mission: 'missão', task: 'tarefa', approval: 'aprovação', rejection: 'rejeição', workspace: 'espaço de trabalho',
-  settings: 'configurações', system: 'sistema', execution: 'execução', cycle: 'ciclo',
+  settings: 'configurações', system: 'sistema', execution: 'execução', cycle: 'ciclo', chat: 'conversa',
 };
 export const typeLabel = (type) => TYPE_LABEL[type] || type;
 

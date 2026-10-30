@@ -91,6 +91,6 @@ test('ausência de dados: nada vira zero; só limite, só legado e registros ant
 test('/api/state usa o resumo e mantém os campos existentes (verificação estática: o index.js não pode ser importado sem iniciar o servidor)', () => {
   const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.js'), 'utf8');
   const handler = src.slice(src.indexOf("app.get('/api/state'"), src.indexOf('// ---------- Workspaces'));
-  assert.ok(handler.includes('usage: summarizeUsage(visibleMissions())'));
+  assert.ok(handler.includes('usage: summarizeUsage(visibleMissions(), db.chat)')); // M5: o 2º argumento é o consumo do chat ainda sem missão
   assert.ok(handler.includes('persistence: store.persistenceStatus()') && handler.includes('counts:') && handler.includes('activeWorkspace'));
 });

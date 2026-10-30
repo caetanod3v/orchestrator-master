@@ -18,7 +18,7 @@ export function usageRecord(snap, { ended, at }) {
 }
 
 // ---------- Agregação (Token Monitor, fase 3) ----------
-// Tudo é DERIVADO dos registros existentes (task.tokenUsage, cycle.plannerUsage, task.usage); nada é persistido aqui.
+// Tudo é DERIVADO dos registros existentes (task.tokenUsage, cycle.plannerUsage, mission.chatUsage, chat.plannerUsage, task.usage); nada é persistido aqui.
 const FIELDS = ['input', 'output', 'cacheCreation', 'cacheRead', 'costUsd'];
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -60,7 +60,7 @@ export function entryOf(rec) {
  * Tarefas do Executor fora de qualquer rodada contam na missão e no total, mas em nenhum ciclo. Ciclos antigos além dos 5 guardados em pastCycles saem do resumo.
  * @returns {object|null} null se não há nenhum dado de uso
  */
-export function summarizeUsage(missions) {
+export function summarizeUsage(missions, chat = null) {
   const all = bucket(), mis = new Map(), cyc = new Map(), seen = new Set();
   let costUsd = null, runs = 0, durationMs = null, rl = null, rlAt = '';
   const noteLimit = (rec, agent, missionId) => {
@@ -98,6 +98,13 @@ export function summarizeUsage(missions) {
       if (!e || seen.has(k)) continue;
       seen.add(k); count('executor', taskCycle.get(t.id) ?? null, e);
     }
+    // Consumo do Planner no CHAT que gerou a missão (movido para cá na aprovação): conta uma vez, na missão, fora de qualquer ciclo.
+    (Array.isArray(m.chatUsage) ? m.chatUsage : []).forEach((p, i) => {
+      noteLimit(p, 'planner', m.id);
+      const e = entryOf(p), k = `h|${m.id}|${p?.call ?? `i${i}`}`;
+      if (!e || seen.has(k)) return;
+      seen.add(k); count('planner', null, e);
+    });
     for (const { c, key } of cycles) {
       (Array.isArray(c.plannerUsage) ? c.plannerUsage : []).forEach((p, i) => {
         noteLimit(p, 'planner', m.id);
@@ -107,6 +114,14 @@ export function summarizeUsage(missions) {
       });
     }
   }
+
+  // Chat ainda sem missão (conversa em andamento ou proposta não aprovada): entra nos totais e no Planner, sem missão nem ciclo.
+  (Array.isArray(chat?.plannerUsage) ? chat.plannerUsage : []).forEach((p, i) => {
+    noteLimit(p, 'planner', null);
+    const e = entryOf(p), k = `c|${chat.id ?? ''}|${p?.call ?? `i${i}`}`;
+    if (!e || seen.has(k)) return;
+    seen.add(k); add(all.total, e); add(all.byAgent.planner, e);
+  });
 
   if (costUsd === null && all.total.entries === 0 && !rl) return null;
   return {

@@ -24,8 +24,8 @@ import { asyncRoute } from './async-route.js';
 import { usageRecord, usageEvent } from './usage.js';
 import { limitProblem } from './limits.js';
 import { DEFAULT_AGENT } from './agents.js';
-import { MAX_PLAN_STEPS } from './cycle-schema.js';
-import { syncPlan, nextStep, openSteps, planProblem, dependencyTaskIds, planProgress } from './plan.js';
+import { MAX_PLAN_STEPS, validatePlanSteps } from './cycle-schema.js';
+import { syncPlan, nextStep, openSteps, planProblem, dependencyTaskIds, planProgress, newPlan } from './plan.js';
 
 // O que precisa acontecer para um ciclo parado por limite poder retomar. Os limites vêm do ambiente do servidor; a retomada nunca os altera.
 const LIMIT_HINT = {
@@ -498,7 +498,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (last) last.decision = { decision: d.decision, rationale: d.rationale, at: store.now() };
       if (d.decision === 'plan') {
         const old = c.plan, oldHistory = c.planHistory;
-        syncPlan(c); c.plan = { id: store.uid('plan'), createdAt: store.now(), rationale: d.rationale, steps: d.steps.map((st) => ({ ...st, status: 'queued', round: null, taskId: null })) };
+        syncPlan(c); c.plan = newPlan({ id: store.uid('plan'), at: store.now(), rationale: d.rationale, steps: d.steps });
         if (old) c.planHistory = [old, ...(c.planHistory || [])].slice(0, 5);
         try { store.saveOrThrow(); } catch (e) { // o plano só vale depois de gravado: senão volta ao anterior e o ciclo bloqueia por persistência (launch)
           if (old) c.plan = old; else delete c.plan;
@@ -579,12 +579,20 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     return null;
   }
 
-  async function start(missionId, maxIterations) {
+  /** `plan` (M5, só em processo: a rota HTTP nunca o repassa): plano JÁ aprovado por um humano, semeado no ciclo novo e gravado junto com ele antes de qualquer execução. */
+  async function start(missionId, maxIterations, { plan = null } = {}) {
     const m = mission(missionId);
     if (!m) return fail(404, 'Missão não encontrada.');
     if (m.demo) return fail(409, 'Missão demonstrativa: o ciclo real está desabilitado.');
     const max = maxIterations === undefined ? (db.settings.cycleMaxIterations || DEFAULT_MAX_ITERATIONS) : maxIterations;
     if (!Number.isInteger(max) || max < 1 || max > HARD_MAX_ITERATIONS) return fail(400, `maxIterations deve ser um inteiro de 1 a ${HARD_MAX_ITERATIONS}.`);
+    let seed = null;
+    if (plan) {
+      const v = validatePlanSteps(plan.steps);
+      if (!v.ok) return fail(400, `Plano inválido: ${v.error}`);
+      if (v.steps.length > max) return fail(400, `O plano tem ${v.steps.length} etapas e o limite de rodadas é ${max}: cada etapa usa uma rodada.`);
+      seed = { rationale: String(plan.rationale ?? '').slice(0, 1500) || 'Plano aprovado pelo usuário.', steps: v.steps };
+    }
     if (starting) return fail(409, 'Outra execução ou ciclo está em andamento.');
     const blocked = startBlocker(m);
     if (blocked) return blocked;
@@ -594,18 +602,19 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     try {
       const probe = await executor.probe();
       if (!probe.available) return fail(409, 'Claude Code não foi encontrado no PATH.');
-      return startBlocker(m) || begin(m, max); // revalida: durante o await a missão, o workspace ou o executor podem ter mudado
+      return startBlocker(m) || begin(m, max, seed); // revalida: durante o await a missão, o workspace ou o executor podem ter mudado
     } finally { starting = null; } // begin() é síncrono: ao liberar, o ciclo já está registrado em loops (ou foi revertido)
   }
 
-  function begin(m, max) {
+  function begin(m, max, seed = null) {
     const prev = { cycle: m.cycle, pastCycles: m.pastCycles };
     if (m.cycle) { m.pastCycles = [m.cycle, ...(m.pastCycles || [])].slice(0, 5); }
     m.cycle = {
       id: store.uid('cyc'), status: 'planning', maxIterations: max, rounds: [], plannerCalls: 0, consecutiveFailures: 0, consecutiveNoProgress: 0,
       humanNotes: [], rejections: [], blocks: [], blockedCode: null, blockedReason: null, finalSummary: null, evidence: null, cancelRequested: false, startedAt: store.now(), finishedAt: null,
+      ...(seed ? { plan: newPlan({ id: store.uid('plan'), at: store.now(), rationale: seed.rationale, steps: seed.steps }) } : {}),
     };
-    return launchOrRollback(m, `Ciclo autônomo iniciado por um humano (limite: ${max} rodadas)`, 'iniciar o ciclo', () => {
+    return launchOrRollback(m, `Ciclo autônomo iniciado por um humano (limite: ${max} rodadas${seed ? `; plano aprovado de ${seed.steps.length} etapa(s)` : ''})`, 'iniciar o ciclo', () => {
       m.cycle = prev.cycle;
       if (prev.pastCycles === undefined) delete m.pastCycles; else m.pastCycles = prev.pastCycles;
     }) || { status: 202, cycle: m.cycle };

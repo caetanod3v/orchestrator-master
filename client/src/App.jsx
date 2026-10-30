@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import Topbar from './components/Topbar.jsx';
 import Cockpit from './pages/Cockpit.jsx';
+import Chat from './pages/Chat.jsx';
 import Missions from './pages/Missions.jsx';
 import Agents from './pages/Agents.jsx';
 import Workspaces from './pages/Workspaces.jsx';
@@ -10,16 +11,17 @@ import Settings from './pages/Settings.jsx';
 import { useStore } from './store.jsx';
 import { PersistenceNote } from './components/ui.jsx';
 
-const PAGES = { cockpit: Cockpit, missions: Missions, agents: Agents, workspaces: Workspaces, activity: Activity, settings: Settings };
+const PAGES = { chat: Chat, cockpit: Cockpit, missions: Missions, agents: Agents, workspaces: Workspaces, activity: Activity, settings: Settings };
 // Título e frase de apoio de cada página interna (o Cockpit é tela cheia e não tem cabeçalho). Mantenha os títulos iguais aos rótulos da navegação.
 const HEAD = {
+  chat: ['Conversa', 'Descreva o que você quer em linguagem livre; o plano só é executado depois da sua aprovação.'],
   missions: ['Missões', 'Crie missões, acompanhe o ciclo autônomo e gerencie as tarefas.'],
   agents: ['Agentes', 'Conheça os papéis do Planner e do Executor e como trabalham em conjunto.'],
   workspaces: ['Espaços de trabalho', 'Repositórios autorizados e verificações reais aprovadas por você.'],
   activity: ['Atividade', 'Registro de eventos do sistema, do mais recente ao mais antigo.'],
   settings: ['Configurações', 'Preferências locais e limites de segurança do orquestrador.'],
 };
-const current = () => { const p = location.hash.replace('#/', '').split('?')[0]; return p in PAGES ? p : 'cockpit'; };
+const current = () => { const p = location.hash.replace('#/', '').split('?')[0]; return p in PAGES ? p : 'chat'; };
 
 export default function App() {
   const [page, setPage] = useState(current());

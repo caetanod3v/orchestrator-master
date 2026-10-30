@@ -14,6 +14,7 @@ import { createClaudePlanner, plannerConfigFromEnv } from './planner.js';
 import { routingFromEnv, createRouter } from './routing.js';
 import { cycleLimitsFromEnv } from './limits.js';
 import { planModeFromEnv } from './plan.js';
+import { setupChat } from './chat.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
 import { acquireInstanceLock } from './instance-lock.js';
@@ -81,7 +82,7 @@ app.get('/api/state', async (req, res) => {
     settings: { cycleMaxIterations: DEFAULT_MAX_ITERATIONS, ...db.settings, cycleHardMax: HARD_MAX_ITERATIONS },
     activeWorkspace: find(db.workspaces, db.settings.activeWorkspaceId) || null,
     // costUsd/runs (legado: execuções reais que reportaram custo) + durationMs + tokens agregados por agente/missão/ciclo (ver usage.js); null sem nenhum dado
-    usage: summarizeUsage(visibleMissions()),
+    usage: summarizeUsage(visibleMissions(), db.chat),
   });
 });
 
@@ -247,7 +248,8 @@ const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor,
 childRegistry.reclaim({ executor: claudeCodeExecutor }); // órfãos do Planner/verificador: depois dos do Executor, antes de qualquer ciclo (setupCycle) e de ouvir a porta
 setupVerification(app, { db, verifier });
 setupWorkspaceRemoval(app, { db });
-setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: multiStepPlan });
+const cycle = setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: multiStepPlan });
+setupChat(app, { db, planner, cycle, multiStep: multiStepPlan }); // M5: chat geral; só prepara propostas, executar exige /api/chat/approve
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));
 app.use((err, req, res, next) => bad(res, err.type === 'entity.parse.failed' ? 'JSON inválido.' : 'Erro interno.', err.status || 500));

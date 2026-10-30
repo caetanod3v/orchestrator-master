@@ -24,7 +24,7 @@ export function extractJson(text) {
   return { ok: false, error: 'não foi encontrado um objeto JSON válido' };
 }
 
-const str = (v, name, min, max) => {
+export const str = (v, name, min, max) => {
   if (typeof v !== 'string') return `"${name}" deve ser texto`;
   const s = v.trim();
   if (s.length < min) return `"${name}" não pode ser vazio`;
@@ -32,7 +32,7 @@ const str = (v, name, min, max) => {
   if (CTRL.test(s)) return `"${name}" contém caracteres de controle`;
   return null;
 };
-const list = (v, name, minN, maxN, maxLen) => {
+export const list = (v, name, minN, maxN, maxLen) => {
   if (!Array.isArray(v)) return `"${name}" deve ser uma lista`;
   if (v.length < minN || v.length > maxN) return `"${name}" deve ter de ${minN} a ${maxN} itens`;
   for (const x of v) { const e = str(x, `${name}[]`, 1, maxLen); if (e) return e; }

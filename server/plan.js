@@ -26,6 +26,9 @@ export function planModeFromEnv(env = process.env) {
   throw new Error(`${PLAN_ENV} inválido: use "on" para permitir planos de várias etapas, ou "off" (ou vazio) para desativar.`);
 }
 
+/** Plano gravado no ciclo a partir de etapas JÁ validadas (validatePlanSteps): todas começam "queued", sem rodada. Único ponto que cria a forma de cycle.plan. */
+export const newPlan = ({ id, at, rationale, steps }) => ({ id, createdAt: at, rationale, steps: steps.map((st) => ({ ...st, status: 'queued', round: null, taskId: null })) });
+
 const steps = (c) => (Array.isArray(c?.plan?.steps) ? c.plan.steps.filter((s) => s && typeof s === 'object') : []);
 const roundsOf = (c, stepId, planId = c.plan?.id) => (Array.isArray(c.rounds) ? c.rounds : []).filter((r) => r?.planId === planId && r.stepId === stepId);
 
