@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ChatView } from '../pages/Chat.jsx';
+import { Icon } from './ui.jsx';
 
 const KEY = 'cockpit-chat';
 const read = () => { try { return localStorage.getItem(KEY) === 'open'; } catch { return false; } };
@@ -12,10 +13,11 @@ export default function ChatDock() {
   return (
     <section className={`chat-dock${open ? ' open' : ''}`} aria-label="Conversa com o orquestrador">
       <button type="button" className="dock-bar" aria-expanded={open} aria-controls="chat-dock-body" onClick={toggle}>
-        <span className="k">Conversa com o orquestrador</span>
+        <span className="dock-ico" aria-hidden="true"><Icon name="cockpit" size={16} /></span>
+        <span className="ttl">Conversa com o orquestrador</span>
         {phase && <span className={`status s-${phase.tone}`}><i />{phase.label}</span>}
         <span className="grow" />
-        <span className="dim small">{open ? '▾ Recolher' : '▴ Expandir'}</span>
+        <span className="tog"><span className="txt">{open ? 'Recolher' : 'Expandir'}</span><Icon name={open ? 'chevronDown' : 'chevronUp'} size={16} /></span>
       </button>
       <div id="chat-dock-body" className="dock-body" hidden={!open}><ChatView embedded visible={open} onPhase={setPhase} /></div>
     </section>

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 
-const GREEN = '63,178,127', RED = '229,83,75', GREY = '200,208,217';
+const GREEN = '63,207,142', RED = '239,106,98', GREY = '150,205,255'; // GREY: pulso neutro (azul-claro do tema)
 
 // Evento real do backend -> reação visual. `node` = nó que acende; `link` = [origem, destino]
 // percorrido por pontos de tráfego; `ring` = onda para fora; `inward` = onda de parada.
@@ -54,7 +54,7 @@ const approach = (cur, target, rate, dt) => cur + (target - cur) * (1 - Math.exp
  * fresh: {batch, events} com eventos NOVOS do backend (nunca o histórico). Só eles geram tráfego.
  * selected: id do nó selecionado (realça as conexões e provoca uma onda no núcleo).
  */
-export default function NeuralCore({ running, awaiting, nodes, links, fresh, selected, layout, forceMotion, center = { x: 0.5, y: 0.5 } }) {
+export default function NeuralCore({ running, awaiting, nodes, links, fresh, selected, layout, forceMotion, center = { x: 0.5, y: 0.46 } }) {
   const canvas = useRef(null);
   const live = useRef({});
   const pulses = useRef([]);
@@ -113,16 +113,22 @@ export default function NeuralCore({ running, awaiting, nodes, links, fresh, sel
       tiltX = approach(tiltX, tx, 3, dt); tiltY = approach(tiltY, ty, 3, dt);
 
       const cx = w * c.x, cy = h * c.y;
-      const R0 = Math.min(w * 0.27, h * 0.31);
+      const R0 = Math.min(w * 0.25, h * 0.285);
       const R = R0 * (1 + (0.03 + 0.01 * glow) * Math.sin(time * 0.8) + 0.012 * Math.sin(time * 1.9 + 1.3));
       const bright = 0.93 + 0.07 * Math.sin(time * 0.8 + 0.5) + 0.08 * glow;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
-      const g = ctx.createRadialGradient(cx, cy, R * 0.75, cx, cy, R * 1.45);
-      g.addColorStop(0, 'rgba(210,222,240,0)');
-      g.addColorStop(0.5, `rgba(210,222,240,${(0.05 + 0.05 * glow) * bright})`);
-      g.addColorStop(1, 'rgba(210,222,240,0)');
+      const errNow = nds.some((n) => n.state === 'error'), tone = errNow ? '239,106,98' : '76,141,255'; // o tom só muda com estado real (erro)
+      const g0 = ctx.createRadialGradient(cx, cy, R * 0.15, cx, cy, R * 2);
+      g0.addColorStop(0, `rgba(${tone},${(0.17 + 0.08 * glow + (run ? 0.06 : 0)) * bright})`);
+      g0.addColorStop(0.5, `rgba(${errNow ? tone : '110,96,235'},${0.07 * bright})`);
+      g0.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g0; ctx.fillRect(cx - R * 2.1, cy - R * 2.1, R * 4.2, R * 4.2);
+      const g = ctx.createRadialGradient(cx, cy, R * 0.78, cx, cy, R * 1.4);
+      g.addColorStop(0, 'rgba(120,220,255,0)');
+      g.addColorStop(0.5, `rgba(120,220,255,${(0.07 + 0.06 * glow) * bright})`);
+      g.addColorStop(1, 'rgba(120,220,255,0)');
       ctx.fillStyle = g; ctx.fillRect(cx - R * 1.5, cy - R * 1.5, R * 3, R * 3);
 
       // conexões (estáticas: a relação existe; tráfego só aparece nos pulsos de eventos reais)
@@ -150,15 +156,23 @@ export default function NeuralCore({ running, awaiting, nodes, links, fresh, sel
         const err = pos[a].s === 'error' || pos[b].s === 'error';
         const isLive = LIVE.has(pos[a].s) && LIVE.has(pos[b].s);
         const pending = wait > 0 && (a === 'gate' || b === 'gate') && (a === 'core' || b === 'core');
+        const p0 = gm[0], p2 = gm[2];
+        let c0, c1;
+        if (err) { c0 = c1 = '239,106,98'; } else if (pending) { c0 = c1 = '227,181,59'; } else if (isLive) { c0 = '58,214,242'; c1 = '139,108,255'; } else { c0 = c1 = '118,134,170'; }
+        const al = err ? 0.6 + 0.35 * H : pending ? 0.7 + 0.25 * H : isLive ? 0.34 + 0.5 * H : 0.24 + 0.4 * H;
+        const lg = ctx.createLinearGradient(p0.x, p0.y, p2.x, p2.y);
+        lg.addColorStop(0, `rgba(${c0},${al})`); lg.addColorStop(1, `rgba(${c1},${al})`);
+        const path = new Path2D(); path.moveTo(p0.x, p0.y);
+        if (gm[1]) path.quadraticCurveTo(gm[1].x, gm[1].y, p2.x, p2.y); else path.lineTo(p2.x, p2.y);
         ctx.save();
-        ctx.lineWidth = 1 + 0.8 * H;
-        ctx.strokeStyle = err ? `rgba(229,83,75,${0.5 + 0.4 * H})`
-          : pending ? `rgba(212,167,44,${0.65 + 0.3 * H})`
-          : isLive ? `rgba(200,208,217,${0.28 + 0.5 * H})` : `rgba(139,148,158,${0.2 + 0.4 * H})`;
-        if (!isLive && !err) ctx.setLineDash([3, 6]);
-        ctx.beginPath(); ctx.moveTo(gm[0].x, gm[0].y);
-        if (gm[1]) ctx.quadraticCurveTo(gm[1].x, gm[1].y, gm[2].x, gm[2].y); else ctx.lineTo(gm[2].x, gm[2].y);
-        ctx.stroke();
+        ctx.strokeStyle = lg;
+        if (isLive || err || pending) { ctx.globalAlpha = 0.14; ctx.lineWidth = 5 + 3 * H; ctx.stroke(path); ctx.globalAlpha = 1; } // brilho suave sob o traço
+        ctx.lineWidth = 1.2 + 0.9 * H;
+        if (!isLive && !err) ctx.setLineDash([3, 6]); // tracejada = relação existe, mas o destino não está ativo
+        ctx.stroke(path);
+        ctx.setLineDash([]);
+        ctx.fillStyle = `rgba(${c0},${Math.min(1, al + 0.25)})`; ctx.beginPath(); ctx.arc(p0.x, p0.y, 2.6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = `rgba(${c1},${Math.min(1, al + 0.25)})`; ctx.beginPath(); ctx.arc(p2.x, p2.y, 2.6, 0, Math.PI * 2); ctx.fill();
         ctx.restore();
       }
 
@@ -183,25 +197,30 @@ export default function NeuralCore({ running, awaiting, nodes, links, fresh, sel
         else {
           const rho = Math.hypot(x2, y2); // limbo mais brilhante, centro escuro
           const wave = 0.22 * Math.sin(1.6 * x + 1.2 * y - time * 0.5);
-          b = Math.max(0, Math.min(BUCKETS - 1, Math.floor((rho * 3.6 - 1 + wave) * (BUCKETS / 4))));
+          b = Math.max(0, Math.min(BUCKETS - 1, Math.floor((rho * 3.6 - 1 + wave + 0.55 * z2) * (BUCKETS / 4)))); // + z2: a face voltada para o observador é mais clara (volume)
         }
         pb[i] = b; cnt[b + 1]++;
       }
       for (let b = 0; b < BUCKETS; b++) cnt[b + 1] += cnt[b];
       const fill = cnt.slice(0, BUCKETS);
       for (let i = 0; i < n; i++) order[fill[pb[i]]++] = i;
-      ctx.fillStyle = '#e8edf2';
       const sz = (1.0 + R / 420) * (1 + (1 - q) * 0.3); // menos partículas: um pouco maiores e mais brilhantes
       const comp = Math.min(1.3, Math.pow(1 / q, 0.3));
       for (let b = 0, s = 0; b < BUCKETS; b++) {
         const e = cnt[b + 1];
-        ctx.globalAlpha = Math.min(1, (0.12 + (b / (BUCKETS - 1)) * 0.78 + (run ? 0.06 : 0)) * bright * comp);
+        const tt = b / (BUCKETS - 1);
+        ctx.fillStyle = `rgb(${(124 + 56 * tt) | 0},${(112 + 124 * tt + (run ? 12 : 0)) | 0},255)`;
+        ctx.globalAlpha = Math.min(1, (0.12 + tt * 0.78 + (run ? 0.06 : 0)) * bright * comp);
         for (; s < e; s++) { const i = order[s]; ctx.fillRect(px[i], py[i], sz, sz); }
       }
       ctx.globalAlpha = 1;
 
+      ctx.save(); ctx.lineWidth = 1; // órbitas: só dão profundidade; giram devagar e não indicam atividade
+      ctx.strokeStyle = `rgba(58,214,242,${0.13 + 0.05 * glow})`; ctx.beginPath(); ctx.ellipse(cx, cy, R * 1.42, R * 0.48, -0.35 + rot * 0.15, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = 'rgba(139,108,255,.13)'; ctx.beginPath(); ctx.ellipse(cx, cy, R * 1.2, R * 0.42, 0.5 - rot * 0.1, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+
       if (wait > 0 || run) {
-        ctx.strokeStyle = wait > 0 ? 'rgba(212,167,44,.5)' : 'rgba(76,141,255,.5)';
+        ctx.strokeStyle = wait > 0 ? 'rgba(227,181,59,.55)' : 'rgba(58,214,242,.55)';
         ctx.setLineDash([2, 7]); ctx.lineWidth = 1;
         ctx.beginPath(); ctx.arc(cx, cy, R * 1.3, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
       }

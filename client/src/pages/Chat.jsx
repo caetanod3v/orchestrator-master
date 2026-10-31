@@ -1,15 +1,11 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { Panel, Btn, Empty } from '../components/ui.jsx';
+import { Btn, Empty, Icon } from '../components/ui.jsx';
 
 const EXAMPLE = 'Quero criar uma landing page para uma barbearia, com agendamento pelo WhatsApp e visual moderno.';
 const MAX_COMPOSER_PX = 200; // o campo cresce com o texto até esta altura; depois rola por dentro
 
-const Icon = ({ d, size = 18 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d={d} /></svg>
-);
-const PLUS = 'M12 5v14M5 12h14', SEND = 'M12 19V5M5 12l7-7 7 7', CLOSE = 'M6 6l12 12M18 6L6 18';
 const fmtSize = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
 // Onde a conversa está (chat.phase, calculado no servidor). A cor reaproveita as classes de estado existentes.
@@ -32,7 +28,7 @@ function Brief({ b }) {
   );
 }
 
-/** Plano preparado em linguagem corrente: etapas e dependências só para leitura (o usuário aprova ou pede ajustes por mensagem; não edita a estrutura). */
+/** Plano preparado: cartão com a linha do tempo de etapas. O que cada etapa exige (aprovação ou bloqueio) vem da prévia calculada pelo servidor; aprovar o plano NÃO aprova as etapas sensíveis. */
 function Proposal({ p, chat, stale, rounds, setRounds, busy, onApprove, onDiscard }) {
   const steps = p.steps || [];
   const title = (id) => steps.find((s) => s.id === id)?.title || id;
@@ -40,39 +36,49 @@ function Proposal({ p, chat, stale, rounds, setRounds, busy, onApprove, onDiscar
   const need = Math.max(chat.maxIterations, steps.length);
   const value = rounds ?? Math.min(chat.hardMax, need);
   return (
-    <Panel title="Plano preparado" right={<span className="dim small">ainda não executado</span>}>
+    <section className="plan" aria-label="Plano preparado">
+      <div className="plan-head">
+        <span className="plan-kicker"><Icon name="gate" size={14} /> Plano preparado</span>
+        <span className="chip warn">Aguardando a sua aprovação</span>
+        <span className="dim small">ainda não executado</span>
+      </div>
       {stale && <p className="s-blocked small">⚠ Este plano é do objetivo anterior{p.context?.goal ? ` ("${p.context.goal}")` : ''}; agora a conversa é sobre "{chat.brief.goal}". Aprovar executa ESTE plano; para preparar o novo, continue a conversa.</p>}
-      <p><b>{p.title}</b></p>
+      <h4 className="plan-title">{p.title}</h4>
       <p>{p.objective}</p>
       {p.revision > 1 && <p className="small"><b>Revisão {p.revision}</b>{p.changes ? `: ${p.changes}` : ''}. Esta versão precisa ser aprovada de novo.</p>}
       {p.context?.assumptions?.length > 0 && <div className="small"><div className="k">suposições deste plano (você não confirmou)</div><ul className="plain">{p.context.assumptions.map((a) => <li key={a}>{a}</li>)}</ul></div>}
       {steps.length > 0 ? (
-        <ol className="plain">
-          {steps.map((s) => (
-            <li key={s.id}>
-              <b>{s.title}</b>
-              {pol(s.id)?.decision === 'approval_required' && <span className="s-awaiting_approval small"> · exigirá a sua aprovação antes de executar: {pol(s.id).why.join(' ')}</span>}
-              {pol(s.id)?.decision === 'deny' && <span className="s-blocked small"> · será bloqueada pela política: {pol(s.id).why.join(' ')}</span>}
-              {s.dependsOn.length > 0 && <span className="dim small"> · depois de: {s.dependsOn.map(title).join(', ')}</span>}
-              <details className="small"><summary className="dim">detalhes</summary>
-                <p>{s.instructions}</p>
-                <ul className="plain">{s.acceptance.map((a) => <li key={a}>{a}</li>)}</ul>
-              </details>
-            </li>
-          ))}
+        <ol className="plan-steps">
+          {steps.map((s, i) => {
+            const pl = pol(s.id);
+            return (
+              <li key={s.id} className={pl?.decision === 'approval_required' ? 'step-warn' : pl?.decision === 'deny' ? 'step-bad' : ''}>
+                <span className="step-n">{i + 1}</span>
+                <div className="step-main">
+                  <b>{s.title}</b>{s.dependsOn.length > 0 && <span className="dim small"> · depois de: {s.dependsOn.map(title).join(', ')}</span>}
+                  {pl?.decision === 'approval_required' && <div><span className="chip warn"><Icon name="gate" size={12} /> exigirá a sua aprovação antes de executar</span><p className="step-why">{pl.why.join(' ')}</p></div>}
+                  {pl?.decision === 'deny' && <div><span className="chip bad"><Icon name="alert" size={12} /> será bloqueada pela política</span><p className="step-why">{pl.why.join(' ')}</p></div>}
+                  <details className="small"><summary className="dim">detalhes</summary>
+                    <p>{s.instructions}</p>
+                    <ul className="plain">{s.acceptance.map((a) => <li key={a}>{a}</li>)}</ul>
+                  </details>
+                </div>
+              </li>
+            );
+          })}
         </ol>
       ) : <p className="dim small">O ciclo decidirá as tarefas uma rodada por vez, com o Planner, depois da aprovação (o modo de plano em etapas, ORCH_CYCLE_PLAN, está desligado no servidor).</p>}
-      <div className="form">
+      <div className="form plan-actions">
         <label>Limite de rodadas (1 a {chat.hardMax}){steps.length > 0 && ` · o plano tem ${steps.length} etapas, uma por rodada`}
           <input type="number" min={1} max={chat.hardMax} value={value} onChange={(e) => setRounds(Number(e.target.value))} />
         </label>
-        <p className="dim small">Aprovar cria uma missão nova e inicia o ciclo. O Executor só lê e edita arquivos no espaço de trabalho, e cada etapa passa pelas verificações reais configuradas. Para mudar algo, descreva o ajuste na conversa: um novo plano substitui este.</p>
+        <p className="dim small">Aprovar cria uma missão nova e inicia o ciclo. O Executor só lê e edita arquivos no espaço de trabalho, e cada etapa passa pelas verificações reais configuradas. Etapas marcadas como sensíveis ainda pedem a sua aprovação separada na hora de executar. Para mudar algo, descreva o ajuste na conversa: um novo plano substitui este.</p>
         <div className="actions">
-          <Btn kind="primary" disabled={busy} onClick={() => onApprove(value)}>▶ Aprovar e executar</Btn>
+          <Btn kind="primary" disabled={busy} onClick={() => onApprove(value)}><Icon name="check" size={15} /> Aprovar e executar</Btn>
           <Btn disabled={busy} onClick={onDiscard}>Descartar plano</Btn>
         </div>
       </div>
-    </Panel>
+    </section>
   );
 }
 
@@ -92,7 +98,12 @@ export function ChatView({ embedded = false, visible = true, onPhase = null }) {
   useEffect(() => { onPhase?.(status0 ? { label: status0[1], tone: status0[0] } : null); }, [chat?.phase]);
   const load = async () => { try { setChat(await api.get('/api/chat')); setLoadError(null); } catch (e) { setLoadError(e.message); } };
   useEffect(() => { load(); }, []);
-  useEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight; }, [chat?.messages.length, chat?.proposal?.id, working, visible]);
+  useEffect(() => {
+    const el = scroller.current; if (!el) return;
+    const plan = el.querySelector('.plan');
+    // com um plano na tela, alinha o início dele (o botão de aprovar vem depois de ler); sem plano, vai para a última mensagem
+    if (plan && !working) el.scrollTop += plan.getBoundingClientRect().top - el.getBoundingClientRect().top - 12; else el.scrollTop = el.scrollHeight;
+  }, [chat?.messages.length, chat?.proposal?.id, working, visible]);
   // o campo cresce moderadamente com o texto (até MAX_COMPOSER_PX) e volta a uma linha ao esvaziar
   useLayoutEffect(() => { const el = box.current; if (!el || !visible) return; el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_PX)}px`; }, [text, chat === null, visible]);
 
@@ -153,12 +164,15 @@ export function ChatView({ embedded = false, visible = true, onPhase = null }) {
           )}
           {chat.messages.map((m) => (
             <div key={m.id} className={`msg ${m.role}`}>
-              <span className={m.kind === 'clarify' ? 'who' : 'sr'}>{m.role === 'user' ? 'Você' : 'Assistente'}{m.kind === 'clarify' ? ' · preciso de mais informações' : ''}</span>
-              {m.text}
-              {m.questions?.length > 0 && <ul>{m.questions.map((q) => <li key={q}>{q}</li>)}</ul>}
+              {m.role === 'assistant' && <span className="avatar" aria-hidden="true"><Icon name="cockpit" size={15} /></span>}
+              <div className="msg-body">
+                <span className={m.kind === 'clarify' ? 'who' : 'sr'}>{m.role === 'user' ? 'Você' : 'Assistente'}{m.kind === 'clarify' ? ' · preciso de mais informações' : ''}</span>
+                {m.text}
+                {m.questions?.length > 0 && <ul>{m.questions.map((q) => <li key={q}>{q}</li>)}</ul>}
+              </div>
             </div>
           ))}
-          {working === 'send' && <div className="msg assistant dim" role="status">{p ? 'Atualizando o plano com o que você disse…' : chat.brief ? 'Considerando o que já combinamos…' : 'Interpretando o pedido…'}</div>}
+          {working === 'send' && <div className="msg assistant" role="status"><span className="avatar" aria-hidden="true"><Icon name="cockpit" size={15} /></span><div className="msg-body dim">{p ? 'Atualizando o plano com o que você disse…' : chat.brief ? 'Considerando o que já combinamos…' : 'Interpretando o pedido…'}<span className="typing" aria-hidden="true"><i /><i /><i /></span></div></div>}
           <Brief b={chat.brief} />
           {p && <Proposal p={p} chat={chat} stale={chat.phase === 'new_goal'} rounds={rounds} setRounds={setRounds} busy={!!working || blocked} onApprove={approve} onDiscard={discard} />}
         </div>
@@ -171,7 +185,7 @@ export function ChatView({ embedded = false, visible = true, onPhase = null }) {
               {files.map((f) => (
                 <span className="chip" key={f.key} title={`${f.name} (${fmtSize(f.size)})`}>
                   <span className="chip-name">{f.name}</span><span className="dim">{fmtSize(f.size)}</span>
-                  <button type="button" className="chip-x" aria-label={`Remover ${f.name}`} onClick={() => setFiles((old) => old.filter((o) => o.key !== f.key))}><Icon d={CLOSE} size={12} /></button>
+                  <button type="button" className="chip-x" aria-label={`Remover ${f.name}`} onClick={() => setFiles((old) => old.filter((o) => o.key !== f.key))}><Icon name="close" size={12} /></button>
                 </span>
               ))}
               <span className="dim small">Seleção local: os arquivos ainda não são enviados ao Planner.</span>
@@ -179,11 +193,11 @@ export function ChatView({ embedded = false, visible = true, onPhase = null }) {
           )}
           <div className="composer">
             <input ref={picker} type="file" multiple hidden onChange={pick} tabIndex={-1} />
-            <button type="button" className="icon-btn" aria-label="Selecionar arquivos (ainda não são enviados ao Planner)" title="Selecionar arquivos (ainda não são enviados ao Planner)" disabled={blocked || !!working} onClick={() => picker.current?.click()}><Icon d={PLUS} /></button>
+            <button type="button" className="icon-btn" aria-label="Selecionar arquivos (ainda não são enviados ao Planner)" title="Selecionar arquivos (ainda não são enviados ao Planner)" disabled={blocked || !!working} onClick={() => picker.current?.click()}><Icon name="plus" /></button>
             <textarea ref={box} rows={1} value={text} maxLength={2000} disabled={blocked || !!working} aria-label="Sua mensagem" placeholder="Escreva o que você quer construir…"
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
-            <button type="submit" className="icon-btn send" aria-label={working === 'send' ? 'Enviando' : 'Enviar mensagem'} title="Enviar (Enter)" disabled={blocked || !!working || !text.trim()}><Icon d={SEND} /></button>
+            <button type="submit" className="icon-btn send" aria-label={working === 'send' ? 'Enviando' : 'Enviar mensagem'} title="Enviar (Enter)" disabled={blocked || !!working || !text.trim()}><Icon name="send" /></button>
           </div>
           <p className="dim small composer-hint">{chat.workspace ? `Espaço de trabalho: ${chat.workspace.name} · ` : ''}Enter envia · Shift+Enter quebra a linha · conversar não executa nada</p>
         </div>

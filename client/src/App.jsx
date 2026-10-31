@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import Sidebar from './components/Sidebar.jsx';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import NavDrawer from './components/NavDrawer.jsx';
 import Topbar from './components/Topbar.jsx';
 import Cockpit from './pages/Cockpit.jsx';
 import Chat from './pages/Chat.jsx';
@@ -24,38 +24,39 @@ const current = () => { const p = location.hash.replace('#/', '').split('?')[0];
 
 export default function App() {
   const [page, setPage] = useState(current());
+  const [navOpen, setNavOpen] = useState(false);
+  const menuRef = useRef(null);
   const { error, toast, state } = useStore();
   useEffect(() => {
-    const on = () => setPage(current());
+    const on = () => { setPage(current()); setNavOpen(false); };
     window.addEventListener('hashchange', on);
     return () => window.removeEventListener('hashchange', on);
   }, []);
+  const closeNav = useCallback(() => { setNavOpen(false); setTimeout(() => menuRef.current?.focus(), 0); }, []);
   const Page = PAGES[page];
   return (
     <div className="app">
-      <Sidebar page={page} />
-      <div className="main">
-        <Topbar />
-        {error && <div className="banner err" role="alert">{error}</div>}
-        {state?.persistence && !state.persistence.ok && (
-          <div className="banner err" role="alert">
-            O banco não está sendo gravado em disco (erro {state.persistence.error}): o estado só existe em memória. Novos ciclos, retomadas e execuções são recusados ou bloqueados até a gravação voltar. <PersistenceNote incident={state.persistenceIncident} />
-          </div>
-        )}
-        {toast && <div className={`toast ${toast.kind}`} role="status">{toast.text}</div>}
-        {page === 'cockpit'
-          ? <div className="content full"><Page /></div>
-          : page === 'chat'
-          ? <div className="content chatpage"><Page /></div>
-          : (
-            <div className="content">
-              <div className={`page${page === 'activity' ? ' wide' : ''}`}>
-                <header className="page-head"><h1>{HEAD[page][0]}</h1><p>{HEAD[page][1]}</p></header>
-                <Page />
-              </div>
+      <Topbar onMenu={() => setNavOpen(true)} menuRef={menuRef} navOpen={navOpen} />
+      <NavDrawer open={navOpen} page={page} onClose={closeNav} />
+      {error && <div className="banner err" role="alert">{error}</div>}
+      {state?.persistence && !state.persistence.ok && (
+        <div className="banner err" role="alert">
+          O banco não está sendo gravado em disco (erro {state.persistence.error}): o estado só existe em memória. Novos ciclos, retomadas e execuções são recusados ou bloqueados até a gravação voltar. <PersistenceNote incident={state.persistenceIncident} />
+        </div>
+      )}
+      {toast && <div className={`toast ${toast.kind}`} role="status">{toast.text}</div>}
+      {page === 'cockpit'
+        ? <main className="content full"><Page /></main>
+        : page === 'chat'
+        ? <main className="content chatpage"><Page /></main>
+        : (
+          <main className="content">
+            <div className={`page${page === 'activity' ? ' wide' : ''}`}>
+              <header className="page-head"><h1>{HEAD[page][0]}</h1><p>{HEAD[page][1]}</p></header>
+              <Page />
             </div>
-          )}
-      </div>
+          </main>
+        )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { Progress, DemoTag, Empty, Btn, fmtTime, statusLabel, typeLabel } from '../components/ui.jsx';
+import { Progress, DemoTag, Empty, Btn, Icon, fmtTime, statusLabel, typeLabel, cycleApprovalPending } from '../components/ui.jsx';
 import { AgentCard, TaskQueue, Terminal, ReviewPanel } from '../components/Widgets.jsx';
 import NeuralCore, { reactionFor, usePrefersReduced } from '../components/NeuralCore.jsx';
 import CyclePanel from '../components/CyclePanel.jsx';
@@ -11,12 +11,15 @@ import { agentTokens } from '../usage-view.js';
 // Posição de cada nó (fração da área) e conexões justificadas pela arquitetura:
 // planner propõe -> portão humano aprova -> executor executa no workspace; a fila alimenta o núcleo.
 // Uma conexão desenhada indica relação, não comunicação em andamento.
-const POS = { planner: [0.2, 0.2], executor: [0.8, 0.2], queue: [0.1, 0.58], workspace: [0.9, 0.58], gate: [0.5, 0.91] };
+const POS = { planner: [0.17, 0.3], executor: [0.83, 0.3], queue: [0.1, 0.66], workspace: [0.9, 0.66], gate: [0.5, 0.9] };
 const LINKS = [
   ['core', 'planner'], ['core', 'executor'], ['core', 'gate'], ['core', 'workspace'], ['core', 'queue'],
   ['planner', 'gate'], ['gate', 'executor'], ['executor', 'workspace'],
 ];
 const LABEL = { planner: 'Planner', executor: 'Executor', gate: 'Aprovação humana', queue: 'Fila de tarefas', workspace: 'Espaço de trabalho' };
+const ICON = { planner: 'planner', executor: 'executor', gate: 'gate', queue: 'queue', workspace: 'workspace' };
+// Descrição fixa do papel de cada elemento na arquitetura (não é dado de execução).
+const ROLE = { planner: 'Decide a próxima etapa', executor: 'Lê e edita arquivos', gate: 'Decisão humana', queue: 'Tarefas da missão', workspace: 'Repositório autorizado' };
 const KIND = { planner: 'agent', executor: 'agent', gate: 'gate', queue: 'res', workspace: 'res' };
 const STATE_LABEL = {
   active: 'ativo', idle: 'ocioso', live: 'disponível', awaiting: 'aguardando aprovação',
@@ -47,27 +50,37 @@ function Node({ id, line, tokens, state, selected, flash, onClick }) {
   return (
     <button id={`node-${id}`} type="button" aria-pressed={selected}
       aria-label={`${LABEL[id]}, ${KIND_LABEL[kind]}, estado: ${STATE_LABEL[state]}${line ? `, ${line}` : ''}${tokens ? `, tokens: ${tokens.text}${tokens.partial ? ' (parcial)' : ''}` : ''}`}
-      className={`node k-${kind} st-${state}${selected ? ' sel' : ''}${flash ? ' flash' : ''}${POS[id][0] > 0.7 ? ' shiftable' : ''}`}
+      className={`nc-node k-${kind} st-${state}${selected ? ' sel' : ''}${flash ? ' flash' : ''}${POS[id][0] > 0.7 ? ' shiftable' : ''}`}
       style={{ '--x': `${POS[id][0] * 100}%`, '--y': `${POS[id][1] * 100}%` }} onClick={onClick}>
-      <span className="kind">{KIND_LABEL[kind]}</span>
-      <b>{LABEL[id]}</b>
-      <span className="st"><i />{STATE_LABEL[state]}</span>
-      {line && <span className="line">{line}</span>}
-      {tokens && (
-        <span className="tokens" title="Tokens reportados pela CLI do Claude Code nesta missão. Parcial: ainda sem o total final da execução.">
-          Tokens: {tokens.text}{tokens.partial && <em> parcial</em>}
-        </span>
-      )}
+      <span className="ico" aria-hidden="true"><Icon name={ICON[id]} size={18} /></span>
+      <span className="body">
+        <span className="kind">{KIND_LABEL[kind]}</span>
+        <b>{LABEL[id]}</b>
+        <span className="role">{ROLE[id]}</span>
+        <span className="st"><i />{STATE_LABEL[state]}</span>
+        {line && <span className="line">{line}</span>}
+        {tokens && (
+          <span className="tokens" title="Tokens reportados pela CLI do Claude Code nesta missão. Parcial: ainda sem o total final da execução.">
+            Tokens: {tokens.text}{tokens.partial && <em> parcial</em>}
+          </span>
+        )}
+      </span>
     </button>
   );
 }
 
+// Tom visual do evento (só reforça o tipo, que sempre aparece em texto): aprovação = verde; rejeição = vermelho; o resto, neutro.
+const EVENT_TONE = { approval: 'ok', rejection: 'bad' };
 function Events({ items, empty }) {
   if (!items.length) return <div className="dim small">{empty}</div>;
   return (
     <ul className="events">
       {items.map((a) => (
-        <li key={a.id}><span className="dim">{fmtTime(a.at).split(' ')[1]}</span> <span className={`type t-${a.type}`}>{typeLabel(a.type)}</span> {a.message}</li>
+        <li key={a.id} className={`ev-${EVENT_TONE[a.type] || 'n'}`}>
+          <time className="ev-time mono" dateTime={a.at}>{fmtTime(a.at).split(' ')[1]}</time>
+          <span className={`ev-type t-${a.type}`}>{typeLabel(a.type)}</span>
+          <span className="ev-msg">{a.message}</span>
+        </li>
       ))}
     </ul>
   );
@@ -75,7 +88,7 @@ function Events({ items, empty }) {
 const Row = ({ k, children }) => <div className="row small"><span className="dim">{k}</span><span className="val">{children}</span></div>;
 
 export default function Cockpit() {
-  const { mission, missions, agents, activity, state, act, notify } = useStore();
+  const { mission, missions, agents, activity, state, act, notify, selectMission } = useStore();
   const [taskId, setTaskId] = useState(null);
   const [sel, setSel] = useState(null);       // nó selecionado (alvo)
   const [panel, setPanel] = useState(null);   // painel renderizado (permanece montado durante a saída)
@@ -122,6 +135,7 @@ export default function Cockpit() {
   const planner = agents.find((a) => a.id === 'planner');
   const executor = agents.find((a) => a.id === 'executor');
   const awaiting = state?.counts.awaitingApproval ?? 0;
+  const cycleApprovals = missions.filter(cycleApprovalPending); // M9: ações do ciclo esperando aprovação (dado real do servidor)
   const running = (state?.counts.running ?? 0) > 0;
   const ws = state?.activeWorkspace;
   const execBusy = !!state?.executor.busy;
@@ -190,31 +204,35 @@ export default function Cockpit() {
   return (
     <div className="cockpit-shell">
     <div className={`stage${shifted ? ' panel-open' : ''}`}>
-      <NeuralCore running={running} awaiting={awaiting} nodes={nodes} links={LINKS} fresh={fresh} selected={sel} forceMotion={force} layout={shifted ? 'shifted' : 'full'} />
+      <NeuralCore running={running} awaiting={awaiting + cycleApprovals.length} nodes={nodes} links={LINKS} fresh={fresh} selected={sel} forceMotion={force} layout={shifted ? 'shifted' : 'full'} />
 
-      <div className="hud tl">
-        <div className="k">missão {mission?.demo && <DemoTag />}</div>
-        <div className="v">{mission ? mission.title : <>nenhuma — <a href="#/missions?new">criar</a></>}</div>
-        {mission?.cycle && <><div className="k">ciclo</div><div className="v">{statusLabel(mission.cycle.status, true)} · rodada {mission.cycle.rounds.length}/{mission.cycle.maxIterations}</div></>}
-        <div className="k">tarefa</div>
-        <div className="v">{current ? current.title : '—'}</div>
-        {mission && mission.tasks.length > 0 && <div className="mini"><Progress done={done} total={mission.tasks.length} /><span className="dim small">{done}/{mission.tasks.length}</span></div>}
+      <div className="nc-mission" aria-label="Missão atual">
+        <div className="nc-m-main">
+          <span className="k">missão {mission?.demo && <DemoTag />}</span>
+          <b className="nc-m-title">{mission ? mission.title : <>nenhuma — <a href="#/missions?new">criar</a></>}</b>
+        </div>
+        {mission?.cycle && <div className="nc-m-cell"><span className="k">ciclo</span><b>{statusLabel(mission.cycle.status, true)} · rodada {mission.cycle.rounds.length}/{mission.cycle.maxIterations}</b></div>}
+        <div className="nc-m-cell"><span className="k">tarefa</span><b>{current ? current.title : '—'}</b></div>
+        {mission && mission.tasks.length > 0 && <div className="nc-m-cell mini"><Progress done={done} total={mission.tasks.length} /><span className="dim small">{done}/{mission.tasks.length}</span></div>}
       </div>
-      <div className="hud tr">
+      <div className="nc-actions">
         {prefersReduced && <button type="button" className="btn motion" onClick={toggleForce} aria-pressed={force}>{force ? 'Animação forçada · voltar à preferência do sistema' : 'Movimento reduzido pelo sistema · animar mesmo assim'}</button>}
+        {cycleApprovals.length > 0 && (
+          <button className="alert" onClick={() => { selectMission(cycleApprovals[0].id); setSel('planner'); }}><Icon name="gate" size={14} /> {cycleApprovals.length} {cycleApprovals.length === 1 ? 'ação do ciclo aguarda' : 'ações do ciclo aguardam'} sua aprovação — revisar</button>
+        )}
         {awaiting > 0
-          ? <button className="alert" onClick={() => choose('gate')}>● {awaiting} {awaiting === 1 ? 'aprovação pendente' : 'aprovações pendentes'} — revisar</button>
-          : <span className="dim small">nenhuma aprovação pendente</span>}
+          ? <button className="alert" onClick={() => choose('gate')}><Icon name="gate" size={14} /> {awaiting} {awaiting === 1 ? 'aprovação pendente' : 'aprovações pendentes'} — revisar</button>
+          : cycleApprovals.length === 0 && <span className="dim small">nenhuma aprovação pendente</span>}
       </div>
-      <div className="hud bl">
-        <div className="k">eventos recentes</div>
-        <Events items={activity.slice(0, 3)} empty="Sem eventos ainda." />
-      </div>
-      <div className="hud br">
+      <section className="nc-events" aria-label="Eventos recentes">
+        <header><span className="k">eventos recentes</span><a href="#/activity">ver atividade →</a></header>
+        <Events items={activity.slice(0, 4)} empty="Sem eventos ainda." />
+      </section>
+      <div className="nc-foot">
         <div className="legend">
           {['active', 'idle', 'awaiting', 'disconnected', 'unavailable', 'error'].map((s) => <span key={s} className={`st-${s}`}><i />{STATE_LABEL[s]}</span>)}
         </div>
-        <button type="button" className="btn" aria-pressed={sel === 'queue'} onClick={() => choose('queue')}>{sel === 'queue' ? '▾' : '▴'} Fila e terminal</button>
+        <button type="button" className="btn" aria-pressed={sel === 'queue'} onClick={() => choose('queue')}><Icon name={sel === 'queue' ? 'chevronDown' : 'chevronUp'} size={14} /> Fila e terminal</button>
       </div>
 
       {Object.keys(POS).filter((id) => (id !== 'planner' || planner) && (id !== 'executor' || executor)).map((id) => (
@@ -222,7 +240,7 @@ export default function Cockpit() {
       ))}
 
       {panel && panel !== 'queue' && (
-        <aside className={`overlay${closing ? ' out' : ''}`} ref={panelRef} tabIndex={-1} role="dialog" aria-label={`Detalhes: ${LABEL[panel]}`}>
+        <aside className={`nc-overlay${closing ? ' out' : ''}`} ref={panelRef} tabIndex={-1} role="dialog" aria-label={`Detalhes: ${LABEL[panel]}`}>
           <header><h3>{LABEL[panel]} {panel === 'gate' && mission?.demo && <DemoTag />}</h3>{closeBtn}</header>
           <div className="rowline"><span className={`st-${st[panel]}`}><i className="dot" />{STATE_LABEL[st[panel]]}</span><span className="dim small">{KIND_LABEL[KIND[panel]]}</span></div>
 
@@ -284,7 +302,7 @@ export default function Cockpit() {
       )}
 
       {panel === 'queue' && (
-        <section className={`drawer${closing ? ' out' : ''}`} ref={panelRef} role="dialog" aria-label="Fila de tarefas e terminal">
+        <section className={`nc-drawer${closing ? ' out' : ''}`} ref={panelRef} role="dialog" aria-label="Fila de tarefas e terminal">
           <header><h3>Fila e terminal {mission?.demo && <DemoTag />}</h3>{closeBtn}</header>
           {mission ? (
             <div className="drawer-body">

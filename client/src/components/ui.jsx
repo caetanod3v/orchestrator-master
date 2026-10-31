@@ -60,3 +60,21 @@ export const PersistenceNote = ({ incident }) => (incident ? (
 export function taskBlocked(task, tasks) {
   return task.dependsOn.some((d) => tasks.find((t) => t.id === d)?.status !== 'completed');
 }
+
+// Ícones de traço único (24x24), usados em toda a interface. Decorativos (aria-hidden): o texto ao lado sempre diz o mesmo.
+const ICONS = {
+  menu: 'M4 7h16M4 12h16M4 17h16', close: 'M6 6l12 12M18 6L6 18', plus: 'M12 5v14M5 12h14', send: 'M12 19V5M5 12l7-7 7 7', check: 'M5 12l5 5 9-10',
+  chevronUp: 'M6 15l6-6 6 6', chevronDown: 'M6 9l6 6 6-6', stop: 'M7 7h10v10H7z', alert: 'M12 4l9 16H3zM12 10v4M12 17h.01',
+  chat: 'M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z', cockpit: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z',
+  missions: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01', agents: 'M12 4a3.2 3.2 0 1 0 0 6.4A3.2 3.2 0 0 0 12 4zM5 20a7 7 0 0 1 14 0',
+  workspace: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', activity: 'M3 12h4l3-8 4 16 3-8h4',
+  settings: 'M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4',
+  planner: 'M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 17c7 0 2-10 8-10', executor: 'M4 6l6 6-6 6M12 18h8',
+  gate: 'M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6zM9 12l2 2 4-4', queue: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01',
+};
+export const Icon = ({ name, size = 18 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d={ICONS[name]} /></svg>
+);
+
+/** Ciclo da missão parado numa ação que espera aprovação humana (M9): dado real do servidor, nunca inferido. */
+export const cycleApprovalPending = (m) => m?.cycle?.status === 'blocked' && m.cycle.blockedCode === 'approval_required' && (m.cycle.approvals || []).some((a) => a?.status === 'pending');
