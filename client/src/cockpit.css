@@ -24,6 +24,10 @@
 .cv-world { position: absolute; left: 0; top: 0; width: max-content; transform-origin: 0 0; }
 .cv-ctl { position: absolute; z-index: 3; left: var(--sp-3); bottom: var(--sp-3); display: flex; align-items: center; gap: 2px; padding: 3px; background: var(--raise); border-radius: var(--r-2); cursor: default; }
 .cv-ctl .icon-btn { width: 32px; height: 32px; }
+.cv-ctl { flex-wrap: wrap; max-width: calc(100% - 2 * var(--sp-3)); }
+.cv-fit { display: inline-flex; align-items: center; gap: var(--sp-2); height: 32px; padding: 0 var(--sp-3); font: inherit; font-size: var(--fs-sm); color: var(--dim); background: transparent; border: 0; border-radius: var(--r-2); cursor: pointer; white-space: nowrap; }
+.cv-fit:active { transform: scale(.97); }
+@media (hover: hover) and (pointer: fine) { .cv-fit:hover { background: var(--raise2); color: var(--strong); } }
 .cv-pct { min-width: 46px; text-align: center; font-family: var(--mono); font-size: var(--fs-xs); color: var(--dim); font-variant-numeric: tabular-nums; }
 .cv-sep { width: 1px; height: 18px; margin: 0 var(--sp-1); background: var(--line-strong); }
 .ck-empty { margin: var(--sp-6); max-width: 46ch; } .ck-empty p { line-height: var(--lh-read); }
@@ -148,6 +152,7 @@
   .ck:has(.chat-dock.open) { display: flex; flex-direction: column; overflow: hidden; }
 }
 
+@media (max-width: 480px) { .cv-fit { flex-basis: 100%; justify-content: center; } .cv-sep { display: none; } } /* controles em duas linhas: o rótulo "Ajustar ao espaço" nunca é cortado */
 @media (prefers-reduced-motion: reduce) {
   .fnode, .fnode.flash, .ck-panel { animation: none; }
   .edge, .edge.wait, .edge.next { animation: none; stroke-dashoffset: 0; }

@@ -4,7 +4,7 @@ import { usePrefersReduced } from './NeuralCore.jsx';
 import { taskTone, taskLabel } from '../op-state.js';
 import { approvalGates, buildGraph } from '../graph.js';
 import ApprovalGate from './ApprovalGate.jsx';
-import { ZOOM, zoomAt, wheelFactor, fitView, initialView, centerOn, ensureVisible, panBy, stepZoom, lerpView, easeOut, sanitizeView, shouldAutoFrame } from '../viewport.js';
+import { ZOOM, zoomAt, wheelFactor, fitView, initialView, centerOn, ensureVisible, panBy, stepZoom, lerpView, easeOut, sanitizeView, shouldAutoFrame, reconcileOnResize } from '../viewport.js';
 
 const num = (tasks, id) => String(tasks.findIndex((t) => t.id === id) + 1).padStart(2, '0');
 const KEY = (id) => `ck-view:${id}`; // a vista (zoom e posição) é guardada por missão, só na sessão do navegador
@@ -33,6 +33,7 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
   const touched = useRef(false), framed = useRef({ ids: '', w: 0, h: 0 });
   const anim = useRef(0), saveT = useRef(0), drag = useRef(null), pointers = useRef(new Map()), pinch = useRef(0), suppress = useRef(false);
   const missionId = useRef(null);
+  const lastVp = useRef({ w: 0, h: 0 }), burst = useRef(null), burstT = useRef(0); // tamanho anterior da área do grafo e o início de uma rajada de mudanças de layout
   const [pct, setPct] = useState(100);
   const [edges, setEdges] = useState([]);
   const reduced = usePrefersReduced();
@@ -96,9 +97,19 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
     measure();
     const saved = readSaved(mission.id);
     if (saved) { touched.current = true; stopAnim(); commit(saved); framed.current = { ids: idsSig, w: size.current.w, h: size.current.h }; } else { touched.current = false; frame(false); }
+    lastVp.current = { ...size.current }; burst.current = null; clearTimeout(burstT.current);
   }, [mission?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useLayoutEffect(() => { measure(); }, [sig, measure]);
+
+  // vista MANUAL: quando a área do grafo muda de tamanho (conversa aberta/fechada, divisor, janela) o zoom e a posição ficam como estão; passada a rajada de mudanças,
+  // se a Intenção estava visível e deixou de estar, desloca o mínimo para ela voltar. Atualizações de tarefas não mudam o tamanho da área e nunca chegam aqui.
+  const settle = useCallback(() => {
+    const b = burst.current; burst.current = null;
+    if (!b || !touched.current) return;
+    const v = reconcileOnResize({ touched: true, view: view.current, prev: b, size: size.current, rect: boxes.current.get('intent') });
+    if (v !== view.current) act(v, true);
+  }, [act]);
 
   useEffect(() => {
     const el = vp.current, w = world.current; if (!el || !w) return undefined;
@@ -106,10 +117,16 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
       measure();
       const f = framed.current, s = size.current;
       if (shouldAutoFrame({ touched: touched.current }) && (f.ids !== idsRef.current || f.w !== s.w || f.h !== s.h)) frame(false);
+      const last = lastVp.current;
+      if (touched.current && (last.w !== s.w || last.h !== s.h)) {
+        if (!burst.current) burst.current = { size: { ...last }, view: { ...view.current } };
+        clearTimeout(burstT.current); burstT.current = setTimeout(settle, 120);
+      }
+      lastVp.current = { w: s.w, h: s.h };
     });
     ro.observe(el); ro.observe(w);
-    return () => ro.disconnect();
-  }, [measure, frame, mission?.id]);
+    return () => { ro.disconnect(); clearTimeout(burstT.current); burst.current = null; };
+  }, [measure, frame, settle, mission?.id]);
 
   // roda do mouse: zoom em torno do cursor. Ouvinte nativo não passivo, só neste elemento (inspetor, logs e conversa rolam normalmente).
   useEffect(() => {
@@ -239,8 +256,8 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
         <output className="cv-pct" aria-label={`Zoom ${pct}%`}>{pct}%</output>
         <button type="button" className="icon-btn" onClick={() => zoomBy(1)} disabled={pct >= Math.round(ZOOM.max * 100)} aria-label="Aumentar o zoom"><Icon name="plus" size={16} /></button>
         <span className="cv-sep" aria-hidden="true" />
-        <button type="button" className="icon-btn" onClick={fit} aria-label="Ajustar o grafo à tela"><Icon name="fit" size={16} /></button>
         <button type="button" className="icon-btn" onClick={() => selectedId && centerTask(selectedId)} disabled={!selectedId} aria-label="Centralizar a tarefa selecionada"><Icon name="target" size={16} /></button>
+        <button type="button" className="cv-fit" onClick={fit} title="Volta ao enquadramento automático (atalho: 0)"><Icon name="fit" size={16} /><span>Ajustar ao espaço</span></button>
       </div>
     </div>
   );

@@ -11,10 +11,18 @@
 .dock-bar .status { min-width: 0; }
 .dock-bar .tog { flex: none; display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--dim); font-size: var(--fs-sm); white-space: nowrap; }
 .chat-dock.open .dock-bar { border-radius: var(--r-3) var(--r-3) 0 0; background: var(--raise); }
-.dock-body { height: clamp(280px, 36vh, 420px); display: flex; flex-direction: column; min-height: 0; background: var(--raise); border-radius: 0 0 var(--r-3) var(--r-3); overflow: hidden; }
+.dock-body { height: var(--dock-h, clamp(280px, 36vh, 420px)); display: flex; flex-direction: column; min-height: 0; background: var(--raise); border-radius: 0 0 var(--r-3) var(--r-3); overflow: hidden; }
 .dock-body[hidden] { display: none; }
+/* divisor entre o grafo e a conversa: faixa de 16px (alvo grande) com um "grip" que não depende de cor; só com a conversa aberta e fora das telas estreitas */
+.dock-sep { position: relative; display: grid; place-items: center; height: 16px; margin-top: calc(-1 * var(--sp-2)); cursor: row-resize; touch-action: none; user-select: none; border-radius: var(--r-2); }
+.dock-sep::before { content: ''; width: 44px; height: 6px; border-block: 2px solid var(--dim); transition: width var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease); }
+.dock-sep:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; }
+.dock-sep:focus-visible::before, .dock-sep.dragging::before { width: 64px; border-color: var(--strong); }
+@media (hover: hover) and (pointer: fine) { .dock-sep:hover::before { width: 64px; border-color: var(--strong); } }
+body.dock-resizing { cursor: row-resize; user-select: none; }
 @media (hover: hover) and (pointer: fine) { .dock-bar:hover { background: var(--raise2); color: var(--strong); } .chat-dock.open .dock-bar:hover { background: var(--raise); } .dock-bar:hover .tog { color: var(--strong); } }
 @media (max-width: 900px) {
+  .dock-sep { display: none; } /* a conversa aberta já ocupa a folha toda: não há o que dividir */
   .chat-dock { padding: 0 var(--sp-3) var(--sp-3); } .dock-bar .tog .txt, .dock-bar .hint, .dock-bar .status { display: none; }
   .chat-dock.open { flex: 1; display: flex; flex-direction: column; min-height: 0; } .chat-dock.open .dock-body { height: auto; flex: 1; }
 }
@@ -93,4 +101,4 @@
 @media (max-width: 900px) { .composer-wrap { padding-inline: var(--sp-2); } .composer-hint { display: none; } }
 .dock-body .composer-wrap { padding-bottom: var(--sp-3); } .dock-body .composer { background: var(--raise2); } .dock-body .composer:focus-within { background: var(--bg); }
 
-@media (prefers-reduced-motion: reduce) { .msg, .plan, .plan-steps li { animation: none; } .typing i { animation: none; } .chat-scroll { scroll-behavior: auto; } }
+@media (prefers-reduced-motion: reduce) { .dock-sep::before { transition: none; } .msg, .plan, .plan-steps li { animation: none; } .typing i { animation: none; } .chat-scroll { scroll-behavior: auto; } }

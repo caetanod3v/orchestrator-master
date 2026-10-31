@@ -53,12 +53,12 @@ export function isVisible(rect, size, view, margin = 0) {
   return l >= margin && t >= margin && l + rect.w * view.k <= size.w - margin && t + rect.h * view.k <= size.h - margin;
 }
 
-/** Desloca o mínimo necessário para `rect` ficar visível; se não couber, centraliza. Não muda o zoom. */
-export function ensureVisible(rect, size, view, margin = 24) {
+/** Desloca o mínimo necessário para `rect` ficar visível; se não couber, centraliza (ou, com `align: 'start'`, alinha o começo: topo/esquerda). Não muda o zoom. */
+export function ensureVisible(rect, size, view, margin = 24, { align = 'center' } = {}) {
   if (isVisible(rect, size, view, margin)) return view;
   const w = rect.w * view.k, h = rect.h * view.k;
   const shift = (pos, len, span) => { // deslocamento (em tela) a aplicar neste eixo
-    if (len > span - 2 * margin) return span / 2 - (pos + len / 2); // não cabe: centraliza
+    if (len > span - 2 * margin) return align === 'start' ? margin - pos : span / 2 - (pos + len / 2); // não cabe
     if (pos < margin) return margin - pos;
     if (pos + len > span - margin) return span - margin - (pos + len);
     return 0;
@@ -89,3 +89,15 @@ export function sanitizeView(v, z = ZOOM) {
 
 /** Só enquadra sozinho enquanto o usuário não mexeu na vista (nunca sobrescreve zoom/posição manuais). */
 export const shouldAutoFrame = ({ touched }) => !touched;
+
+/**
+ * Mudou o tamanho da área do grafo (conversa aberta/fechada, divisor, janela) com zoom/posição MANUAIS: mantém o zoom e desloca só o necessário
+ * para a Intenção (`rect`, mundo) continuar visível. Só age se ela estava inteira na tela ANTES da mudança (`prev`: tamanho e vista de antes);
+ * se o usuário já a tinha afastado, a câmera não é puxada de volta. Na vista automática não faz nada (quem enquadra é o enquadramento automático).
+ */
+export function reconcileOnResize({ touched, view, prev, size, rect, margin = 24 }) {
+  if (!touched || !rect || !prev?.size || !prev.view) return view;
+  if (prev.size.w === size.w && prev.size.h === size.h) return view;
+  if (!isVisible(rect, prev.size, prev.view, 0)) return view;
+  return ensureVisible(rect, size, view, margin, { align: 'start' });
+}

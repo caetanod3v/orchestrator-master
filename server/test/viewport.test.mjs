@@ -1,7 +1,7 @@
 // Canvas do Cockpit (client/src/viewport.js, funções puras): zoom no cursor, limites, enquadramento, centralização e navegação. Sem React, DOM, servidor ou banco.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ZOOM, clampZoom, zoomAt, wheelFactor, fitView, initialView, centerOn, isVisible, ensureVisible, panBy, stepZoom, toWorld, toScreen, sanitizeView, shouldAutoFrame, lerpView, easeOut } from '../../client/src/viewport.js';
+import { ZOOM, clampZoom, zoomAt, wheelFactor, fitView, initialView, centerOn, isVisible, ensureVisible, panBy, stepZoom, toWorld, toScreen, sanitizeView, shouldAutoFrame, lerpView, easeOut, reconcileOnResize } from '../../client/src/viewport.js';
 
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} !~ ${b}`);
 const SIZE = { w: 800, h: 600 };
@@ -110,4 +110,44 @@ test('vista salva é validada; o enquadramento automático nunca sobrescreve a v
   assert.deepEqual(sanitizeView({ x: 1, y: 2, k: 99 }), { x: 1, y: 2, k: ZOOM.max });
   assert.equal(shouldAutoFrame({ touched: false }), true);
   assert.equal(shouldAutoFrame({ touched: true }), false, 'depois que o usuário mexe, mudanças de dados não reenquadram');
+});
+
+test('garantir visibilidade com alinhamento ao começo: o que não cabe fica com o topo/esquerda na margem (o padrão continua centralizando)', () => {
+  const big = { x: 0, y: 0, w: 2000, h: 1200 }, v = { x: -300, y: -200, k: 1 };
+  const c = ensureVisible(big, SIZE, v, 24), a = ensureVisible(big, SIZE, v, 24, { align: 'start' });
+  assert.equal(a.x, 24); assert.equal(a.y, 24); assert.equal(a.k, 1);
+  assert.notEqual(c.x, a.x, 'sem a opção, centraliza como antes');
+  const fits = { x: 100, y: 100, w: 200, h: 100 };
+  assert.equal(ensureVisible(fits, SIZE, { x: 0, y: 0, k: 1 }, 24, { align: 'start' }).x, 0, 'já visível: não mexe');
+});
+
+test('redimensionamento (conversa/divisor/janela) com vista MANUAL: mantém o zoom e desloca só o necessário para a Intenção', () => {
+  const intent = { x: 300, y: 40, w: 260, h: 110 };
+  const before = { w: 800, h: 700 }, after = { w: 800, h: 300 }; // a conversa abriu e a área do grafo encolheu
+  const view = { x: 0, y: 500, k: 1 }; // Intenção em y=540..650 : visível em 700, cortada em 300
+  assert.equal(isVisible(intent, before, view, 0), true);
+  assert.equal(isVisible(intent, after, view, 0), false);
+  const r = reconcileOnResize({ touched: true, view, prev: { size: before, view }, size: after, rect: intent });
+  assert.equal(r.k, 1, 'zoom intacto');
+  assert.equal(r.x, view.x, 'sem deslocamento horizontal desnecessário');
+  assert.equal(isVisible(intent, after, r, 24), true);
+  assert.equal(r.y, 300 - 24 - (500 + 40 + 110) + 500, 'deslocamento mínimo: a base da Intenção fica na margem');
+});
+
+test('redimensionamento: vista automática, tamanho igual, Intenção que já estava fora ou ainda visível não movem a câmera', () => {
+  const intent = { x: 300, y: 40, w: 260, h: 110 }, view = { x: 0, y: 500, k: 1 };
+  const before = { w: 800, h: 700 }, after = { w: 800, h: 300 };
+  const same = (o) => { const args = { view, prev: { size: before, view }, size: after, rect: intent, touched: true, ...o }; assert.equal(reconcileOnResize(args), args.view); };
+  same({ touched: false });                                  // automática: quem enquadra é o enquadramento automático
+  same({ size: before });                                    // nada mudou de tamanho
+  same({ prev: { size: before, view: { x: 0, y: 2000, k: 1 } } }); // o usuário já tinha afastado a Intenção: não é puxada de volta
+  same({ view: { x: 0, y: 0, k: 1 }, prev: { size: before, view: { x: 0, y: 0, k: 1 } } }); // continua visível
+  same({ rect: null });
+  same({ prev: null });
+});
+
+test('redimensionamento: Intenção maior que a área fica com o topo legível e o zoom não muda', () => {
+  const big = { x: 0, y: 0, w: 900, h: 400 }, view = { x: 10, y: 10, k: 1.5 };
+  const r = reconcileOnResize({ touched: true, view, prev: { size: { w: 1400, h: 900 }, view }, size: { w: 600, h: 300 }, rect: big });
+  assert.equal(r.k, 1.5); assert.equal(r.x, 24); assert.equal(r.y, 24);
 });
