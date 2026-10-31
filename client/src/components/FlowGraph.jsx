@@ -143,7 +143,6 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
     const b = boxes.current.get(id); if (!b) return;
     act(centerOn(b, size.current, view.current, Math.max(view.current.k, 1.1)), true);
   }, [act]);
-  useEffect(() => { if (locate?.id) centerTask(locate.id); }, [locate?.n]); // eslint-disable-line react-hooks/exhaustive-deps
   // selecionar (ou focar com o teclado) uma tarefa fora da área visível: desloca o mínimo, sem mudar o zoom
   const reveal = useCallback((id, animate) => {
     const b = boxes.current.get(id); if (!b) return;
@@ -151,6 +150,8 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
     if (v !== view.current) act(v, animate);
   }, [act]);
   useEffect(() => { if (selectedId) reveal(selectedId, true); }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ordem importa: "Revisar" seleciona a tarefa E pede para mostrar o portão no mesmo ciclo; o pedido explícito (locate) vem DEPOIS de revelar a tarefa para prevalecer
+  useEffect(() => { if (locate?.id) centerTask(locate.id); }, [locate?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // arraste: fundo (botão esquerdo), botão do meio ou Alt + botão esquerdo; dois dedos fazem pinça
   const onPointerDown = (e) => {
