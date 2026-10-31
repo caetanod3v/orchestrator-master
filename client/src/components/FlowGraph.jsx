@@ -2,25 +2,9 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { Glyph, Icon, TASK_GLYPH } from './ui.jsx';
 import { usePrefersReduced } from './NeuralCore.jsx';
 import { taskTone, taskLabel } from '../op-state.js';
+import { approvalGates, buildGraph } from '../graph.js';
+import ApprovalGate from './ApprovalGate.jsx';
 import { ZOOM, zoomAt, wheelFactor, fitView, initialView, centerOn, ensureVisible, panBy, stepZoom, lerpView, easeOut, sanitizeView, shouldAutoFrame } from '../viewport.js';
-
-/** Camadas do grafo: o nível de uma tarefa é 1 + o maior nível das tarefas de que depende (sem dependências = 0). Dados reais: tasks[].dependsOn. */
-export function layers(tasks) {
-  const by = new Map(tasks.map((t) => [t.id, t]));
-  const memo = new Map();
-  const level = (t, seen = new Set()) => {
-    if (memo.has(t.id)) return memo.get(t.id);
-    if (seen.has(t.id)) return 0; // ciclo inesperado: não trava a tela
-    seen.add(t.id);
-    const ds = (t.dependsOn || []).map((d) => by.get(d)).filter(Boolean);
-    const v = ds.length ? 1 + Math.max(...ds.map((d) => level(d, seen))) : 0;
-    memo.set(t.id, v);
-    return v;
-  };
-  const rows = [];
-  tasks.forEach((t) => { (rows[level(t)] ||= []).push(t); });
-  return rows.filter(Boolean);
-}
 
 const num = (tasks, id) => String(tasks.findIndex((t) => t.id === id) + 1).padStart(2, '0');
 const KEY = (id) => `ck-view:${id}`; // a vista (zoom e posição) é guardada por missão, só na sessão do navegador
@@ -41,7 +25,7 @@ const HINT = 'Roda do mouse: zoom no cursor. Arrastar o fundo, botão do meio ou
  * O "mundo" (nós + conectores SVG) recebe um único transform; os conectores são medidos em coordenadas de layout, então nunca desalinham com o zoom.
  * A vista só é enquadrada sozinha enquanto o usuário não mexeu nela (e é lembrada por missão na sessão).
  */
-export default function FlowGraph({ mission, selectedId, onSelect, flash, empty, locate }) {
+export default function FlowGraph({ mission, selectedId, onSelect, flash, empty, locate, gateActions }) {
   const vp = useRef(null), world = useRef(null);
   const view = useRef({ x: 0, y: 0, k: 1 });
   const size = useRef({ w: 0, h: 0 }), content = useRef({ w: 0, h: 0 });
@@ -53,9 +37,11 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
   const [edges, setEdges] = useState([]);
   const reduced = usePrefersReduced();
   const tasks = mission?.tasks ?? [];
-  const rows = useMemo(() => layers(tasks), [tasks]);
-  const sig = tasks.map((t) => `${t.id}:${t.status}:${(t.dependsOn || []).join('.')}`).join('|');
-  const idsSig = tasks.map((t) => `${t.id}:${(t.dependsOn || []).join('.')}`).join('|');
+  const gates = useMemo(() => approvalGates(mission), [mission]);
+  const graph = useMemo(() => buildGraph(tasks, gates), [tasks, gates]);
+  const rows = graph.rows;
+  const sig = graph.nodes.map((n) => `${n.id}:${n.status}:${n.deps.join('.')}`).join('|');
+  const idsSig = graph.nodes.map((n) => `${n.id}:${n.deps.join('.')}`).join('|');
   missionId.current = mission?.id ?? null;
 
   const commit = useCallback((v) => {
@@ -82,22 +68,19 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
     size.current = { w: el.clientWidth, h: el.clientHeight };
     content.current = { w: w.offsetWidth, h: w.offsetHeight };
     const m = new Map(); const list = [];
-    const tk = tasksRef.current;
+    const nodes = graphRef.current.nodes;
     const box = (id) => { if (m.has(id)) return m.get(id); const n = w.querySelector(`[data-node="${id}"]`); const b = n ? layoutBox(n, w) : null; m.set(id, b); return b; };
-    const roots = tk.filter((t) => !(t.dependsOn || []).some((d) => tk.some((x) => x.id === d)));
-    for (const t of tk) {
-      const to = box(t.id); if (!to) continue;
-      const from = (t.dependsOn || []).filter((d) => tk.some((x) => x.id === d));
-      if (!from.length && roots.includes(t)) from.push('intent');
-      for (const f of from) {
+    for (const n of nodes) {
+      const to = box(n.id); if (!to) continue;
+      for (const f of n.deps.length ? n.deps : ['intent']) { // sem dependências: parte da Intenção
         const a = box(f); if (!a) continue;
-        list.push({ key: `${f}>${t.id}`, a: { x: a.x + a.w / 2, y: a.y + a.h }, b: { x: to.x + to.w / 2, y: to.y }, from: f === 'intent' ? 'completed' : tk.find((x) => x.id === f)?.status, to: t.status });
+        list.push({ key: `${f}>${n.id}`, a: { x: a.x + a.w / 2, y: a.y + a.h }, b: { x: to.x + to.w / 2, y: to.y }, from: f === 'intent' ? 'completed' : nodes.find((x) => x.id === f)?.status, to: n.status });
       }
     }
     boxes.current = m;
     setEdges(list);
   }, []);
-  const tasksRef = useRef(tasks); tasksRef.current = tasks;
+  const graphRef = useRef(graph); graphRef.current = graph;
 
   // enquadramento: ao abrir a missão (ou restaurar a vista salva) e, enquanto o usuário não mexeu, quando o grafo ou o viewport mudam de tamanho
   const frame = useCallback((animate) => {
@@ -232,7 +215,9 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
           {rows.length === 0 && <div className="flow-row"><div className="fnode ghost"><span className="fn-body"><b className="fn-title">Nenhuma etapa ainda</b><span className="fn-meta">As tarefas aparecem aqui quando o ciclo planejar ou quando você adicionar uma em Missões.</span></span></div></div>}
           {rows.map((row, ri) => (
             <div className="flow-row" key={ri}>
-              {row.map((t) => {
+              {row.map((n) => {
+                if (n.kind === 'gate') return <ApprovalGate key={n.id} gate={n.gate} actions={gateActions} style={{ '--d': `${ri * 70}ms` }} />;
+                const t = n.task;
                 const deps = (t.dependsOn || []).filter((d) => tasks.some((x) => x.id === d));
                 const meta = [deps.length ? `depois de ${deps.map((d) => num(tasks, d)).join(', ')}` : null, t.authorized ? 'execução autorizada' : null].filter(Boolean).join(' · ');
                 return (

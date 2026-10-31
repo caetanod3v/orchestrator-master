@@ -7,6 +7,7 @@ import NeuralCore from '../components/NeuralCore.jsx';
 import FlowGraph from '../components/FlowGraph.jsx';
 import CyclePanel from '../components/CyclePanel.jsx';
 import ChatDock from '../components/ChatDock.jsx';
+import { useCycleActions } from '../cycle-actions.js';
 import { agentTokens } from '../usage-view.js';
 import { latestExecutionFailed, coreMode, orchestratorVisual } from '../op-state.js';
 import AgentStatus, { StateMark } from '../components/AgentStatus.jsx';
@@ -52,6 +53,7 @@ export default function Cockpit() {
   const panelRef = useRef(null);
   const fresh = useFresh(activity, !!state);
   const flash = useMemo(() => new Set(fresh.events.map((e) => e.taskId).filter(Boolean)), [fresh.batch]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cycle = useCycleActions(mission);
   const [locate, setLocate] = useState(null); // pedido de centralizar uma tarefa no canvas
 
   // ao trocar de missão a seleção só sobrevive se a tarefa pertence à nova missão
@@ -88,8 +90,8 @@ export default function Cockpit() {
   const tokens = { planner: agentTokens(state?.usage, mission?.id, 'planner'), executor: agentTokens(state?.usage, mission?.id, 'executor') };
 
   // Cada ação chama a API; o servidor revalida tudo e devolve o motivo em caso de bloqueio.
-  const post = async (path, ok) => {
-    const r = await act(() => api.post(`/api/missions/${mission.id}/tasks/${task.id}/${path}`));
+  const post = async (path, ok, id = task?.id) => {
+    const r = await act(() => api.post(`/api/missions/${mission.id}/tasks/${id}/${path}`));
     if (r && ok) notify(ok);
   };
   const stopRun = () => act(async () => { const r = await api.post('/api/execution/stop'); notify(r.detail, r.stopped ? 'info' : 'error'); });
@@ -101,11 +103,20 @@ export default function Cockpit() {
     approve: () => post('approve', 'Resultado aprovado.'),
     reject: () => post('reject', 'Resultado rejeitado.'),
   };
+  // portão de aprovação no grafo: reutiliza as ações existentes (resultado de tarefa: rotas /tasks/:id/approve|reject; ação do ciclo: o mesmo hook do painel Ciclo)
+  const gateActions = {
+    approveTask: (id) => post('approve', 'Resultado aprovado.', id),
+    rejectTask: (id) => post('reject', 'Resultado rejeitado.', id),
+    approveAction: cycle.approveAction,
+    rejectAction: cycle.rejectAction,
+    details: (g) => (g.kind === 'task' ? select(g.taskId) : setTab('cycle')),
+  };
   const review = () => {
     if (!pendingFirst && cycleApprovals.length) { selectMission(cycleApprovals[0].id); setTab('cycle'); return; }
     if (!pendingFirst) return;
     if (pendingFirst.m.id !== mission?.id) selectMission(pendingFirst.m.id);
     select(pendingFirst.t.id);
+    if (pendingFirst.m.id === mission?.id) setLocate((l) => ({ id: `gate:${pendingFirst.t.id}`, n: (l?.n || 0) + 1 })); // mostra o portão no canvas
   };
 
   useEffect(() => {
@@ -147,7 +158,7 @@ export default function Cockpit() {
           )}
         </header>
         <div className="ck-canvas">
-          <FlowGraph mission={mission} selectedId={sel} onSelect={select} flash={flash} locate={locate}
+          <FlowGraph mission={mission} selectedId={sel} onSelect={select} flash={flash} locate={locate} gateActions={gateActions}
             empty={<div className="ck-empty"><h3>Comece por aqui</h3><p className="dim">O grafo do trabalho aparece quando há uma missão: a intenção no topo e as tarefas ligadas por suas dependências.</p><div className="actions"><a className="btn primary" href="#/chat">Conversar com o orquestrador</a><a className="btn" href="#/missions?new">Criar missão manualmente</a></div></div>} />
         </div>
       </section>

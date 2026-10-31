@@ -84,4 +84,4 @@ export const Icon = ({ name, size = 18 }) => (
 );
 
 /** Ciclo da missão parado numa ação que espera aprovação humana (M9): dado real do servidor, nunca inferido. */
-export const cycleApprovalPending = (m) => m?.cycle?.status === 'blocked' && m.cycle.blockedCode === 'approval_required' && (m.cycle.approvals || []).some((a) => a?.status === 'pending');
+export { cycleApprovalPending } from '../op-state.js';

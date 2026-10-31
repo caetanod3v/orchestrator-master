@@ -49,14 +49,18 @@
 .fnode.intent .fn-title { font-weight: 450; color: var(--text); line-height: var(--lh); }
 .fnode.ghost { background: transparent; box-shadow: inset 0 0 0 1.5px var(--line-strong); border-radius: var(--r-3); }
 /* portas: pontos de ligação dos conectores */
-.fnode.task::before, .fnode::after { content: ''; position: absolute; left: 50%; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%; background: var(--canvas); box-shadow: 0 0 0 1.5px var(--line-strong); z-index: 2; }
-.fnode.task::before { top: -4.5px; } .fnode::after { bottom: -4.5px; } .fnode.ghost::after { display: none; }
+.fnode.task::before, .fnode.gate::before, .fnode::after { content: ''; position: absolute; left: 50%; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%; background: var(--canvas); box-shadow: 0 0 0 1.5px var(--line-strong); z-index: 2; }
+.fnode.task::before, .fnode.gate::before { top: -4.5px; } .fnode::after { bottom: -4.5px; } .fnode.ghost::after { display: none; }
 /* estado do nó: só indicadores (filete à esquerda, porta, texto do estado). O cartão continua grafite. Seleção (contorno claro) e execução (filete azul) são coisas diferentes. */
 .fnode.task { --tone: var(--muted); --port: var(--line-strong); }
 .fnode.tone-run { --tone: var(--run); --port: var(--run); } .fnode.tone-ok { --tone: var(--ok); --port: rgba(98, 196, 143, .7); } .fnode.tone-wait { --tone: var(--warn); --port: var(--warn); }
 .fnode.tone-stop { --tone: var(--interrupted); --port: var(--interrupted); } .fnode.tone-err { --tone: var(--err); --port: var(--err); }
 .fnode.tone-run, .fnode.tone-wait, .fnode.tone-stop, .fnode.tone-err { box-shadow: inset 3px 0 0 var(--tone); }
 .fnode.task::before, .fnode.task::after { box-shadow: 0 0 0 1.5px var(--port); }
+/* portão de aprovação: o único cartão com ações dentro do grafo; filete âmbar como as demais esperas por decisão */
+.fnode.gate { --port: var(--warn); box-shadow: inset 3px 0 0 var(--warn); cursor: default; }
+.fnode.gate::before, .fnode.gate::after { box-shadow: 0 0 0 1.5px var(--port); }
+.gate-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
 .fnode.tone-run { background: var(--raise2); }
 .fnode.tone-ok .fn-title { color: var(--text); font-weight: 450; } /* concluídas: reconhecíveis (check verde), sem competir com a tarefa atual */
 .fnode.sel { outline: 1.5px solid var(--strong); outline-offset: 2px; }
@@ -138,6 +142,8 @@
   .ck-side { border-left: 0; border-top: 1px solid var(--line); margin-top: var(--sp-2); }
   .ck-panel { overflow: visible; }
   .flow { padding-inline: var(--sp-4); gap: 44px; }
+  /* o grafo se ajusta a no mínimo 60%: botões de 44px de layout ficam com >= 26px na tela (WCAG 2.5.8) */
+  .gate-actions .btn { min-height: 44px; padding-inline: var(--sp-5); }
   .ck:has(.chat-dock.open) > :not(.chat-dock) { display: none; } /* telas estreitas: aberta, a conversa ocupa a folha toda */
   .ck:has(.chat-dock.open) { display: flex; flex-direction: column; overflow: hidden; }
 }

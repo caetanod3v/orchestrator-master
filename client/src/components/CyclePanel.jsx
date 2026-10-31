@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { api } from '../api.js';
 import { useStore } from '../store.jsx';
+import { useCycleActions } from '../cycle-actions.js';
 import { Btn, Status, Icon, statusLabel, PersistenceNote, VERIFICATION_LABEL, DECISION_LABEL, EVIDENCE_BASIS } from './ui.jsx';
 
 const CODE = {
@@ -88,7 +88,7 @@ function Round({ r }) {
 
 /** Ciclo autônomo da missão: iniciar com limite, acompanhar rodadas, cancelar e retomar. O servidor valida tudo. */
 export default function CyclePanel({ mission }) {
-  const { state, act, notify } = useStore();
+  const { state } = useStore();
   const c = mission.cycle;
   const hard = state?.settings.cycleHardMax ?? 10;
   const [max, setMax] = useState(state?.settings.cycleMaxIterations ?? 5);
@@ -104,11 +104,7 @@ export default function CyclePanel({ mission }) {
     : state?.executor.available === false ? 'Claude Code não encontrado.'
     : state?.executor.busy ? 'Há uma execução em andamento.' : null;
 
-  const call = async (path, body, ok) => {
-    const r = await act(async () => { await api.post(`/api/missions/${mission.id}/cycle/${path}`, body); return true; });
-    if (r && ok) notify(ok);
-    return !!r;
-  };
+  const { call, approveAction, rejectAction } = useCycleActions(mission);
 
   return (
     <div className="cycle">
@@ -132,8 +128,8 @@ export default function CyclePanel({ mission }) {
           <details><summary className="dim">instruções completas</summary><p className="dim">{a.action.instructions}</p></details>
           <p className="dim">A aprovação vale só para esta ação, exatamente como apresentada, e é usada uma única vez. Se algo mudar, será pedida de novo. Aprovar não executa por si só: o ciclo é retomado em seguida e a execução ainda passa pelas verificações.</p>
           <div className="actions">
-            <Btn kind="primary" onClick={async () => { if (await call(`approvals/${a.id}`, { decision: 'approve', digest: a.digest })) await call('resume', {}, 'Ação aprovada; ciclo retomado.'); }}><Icon name="check" size={15} />Aprovar e continuar</Btn>
-            <Btn kind="danger" onClick={() => call(`approvals/${a.id}`, { decision: 'reject', digest: a.digest }, 'Ação rejeitada. Retome para o Planner escolher outro caminho.')}>Rejeitar</Btn>
+            <Btn kind="primary" onClick={() => approveAction(a)}><Icon name="check" size={15} />Aprovar e continuar</Btn>
+            <Btn kind="danger" onClick={() => rejectAction(a)}>Rejeitar</Btn>
           </div>
         </div>
       ))}
