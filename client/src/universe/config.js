@@ -18,7 +18,7 @@ export const UNIVERSE = Object.freeze({
   twinkle: Object.freeze({ rate: [0.12, 0.55], depth: 0.2 }), // rad/s, desincronizado por estrela; profundidade da variação de brilho (0..1)
   sizeRef: 70, // profundidade de referência do tamanho aparente do ponto
   fps: 30, // teto de quadros por segundo da deriva (é lenta: 30 já é fluido e custa metade da GPU)
-  staticTime: 90, // instante (s) congelado quando há movimento reduzido ou nenhum quadro precisa animar
+  staticTime: 90, // instante (s) em que a cena começa (campo já "em andamento")
   tint: Object.freeze({ warm: [1.0, 0.96, 0.9], cool: [0.8, 0.89, 1.0] }),
   // níveis de qualidade: partículas e teto de pixel ratio
   quality: Object.freeze({

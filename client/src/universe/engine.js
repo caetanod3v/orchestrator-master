@@ -8,10 +8,10 @@ const readOverride = () => { try { return localStorage.getItem(QUALITY_KEY) || u
 
 /**
  * Cria o universo sobre `canvas`. Lança se o WebGL não estiver disponível (o chamador mostra o fundo estático).
- * Opções: reduced (movimento reduzido => um quadro estático, sem laço), onLost (contexto perdido).
- * Estado legível no DOM (diagnóstico): canvas.dataset.state = running | paused | static | lost | disposed; frames = quadros desenhados; stars; quality.
+ * Opção: onLost (contexto perdido). A deriva é ambiente e fica SEMPRE ativa: não segue prefers-reduced-motion (decisão de produto); só pausa com a aba oculta, fora da tela ou sem tamanho.
+ * Estado legível no DOM (diagnóstico): canvas.dataset.state = running | paused | lost | disposed; frames = quadros desenhados; stars; quality.
  */
-export function createUniverse(canvas, { reduced = false, onLost } = {}) {
+export function createUniverse(canvas, { onLost } = {}) {
   const override = readOverride();
   if (override === 'off') throw new Error('universo desligado (preferência)');
   const renderer = new WebGLRenderer({ canvas, alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false, powerPreference: 'low-power' });
@@ -36,13 +36,13 @@ export function createUniverse(canvas, { reduced = false, onLost } = {}) {
   field.setPixelRatio(pixelRatio);
   scene.add(field.points);
 
-  let width = 0, height = 0, active = false, isReduced = reduced, lost = false, disposed = false;
+  let width = 0, height = 0, active = false, lost = false, disposed = false;
   let raf = 0, last = 0, time = UNIVERSE.staticTime, frames = 0;
   const interval = 1000 / UNIVERSE.fps;
   canvas.dataset.stars = String(field.count); canvas.dataset.quality = level; canvas.dataset.frames = '0';
 
   const draw = () => { field.setTime(time); renderer.render(scene, camera); frames++; canvas.dataset.frames = String(frames); };
-  const canAnimate = () => !disposed && !lost && active && !isReduced && width > 0 && height > 0 && !document.hidden;
+  const canAnimate = () => !disposed && !lost && active && width > 0 && height > 0 && !document.hidden;
   const tick = (now) => {
     raf = requestAnimationFrame(tick);
     if (now - last < interval - 1) return; // deriva lenta: no máximo `fps` quadros por segundo
@@ -54,7 +54,7 @@ export function createUniverse(canvas, { reduced = false, onLost } = {}) {
     if (disposed) return;
     if (canAnimate()) { if (!raf) { last = performance.now(); raf = requestAnimationFrame(tick); } canvas.dataset.state = 'running'; return; }
     stop();
-    canvas.dataset.state = lost ? 'lost' : isReduced ? 'static' : 'paused';
+    canvas.dataset.state = lost ? 'lost' : 'paused';
   };
 
   const onVisibility = () => sync();
@@ -82,8 +82,6 @@ export function createUniverse(canvas, { reduced = false, onLost } = {}) {
     },
     /** A cena está na tela? (IntersectionObserver do componente) */
     setActive(v) { if (active === !!v) return; active = !!v; if (active && !raf && width > 0 && !lost) draw(); sync(); },
-    /** Movimento reduzido: congela num quadro estático (a cena continua visível). */
-    setReduced(v) { if (isReduced === !!v) return; isReduced = !!v; if (isReduced) time = UNIVERSE.staticTime; if (!raf && width > 0 && !lost) draw(); sync(); },
     dispose() {
       if (disposed) return; disposed = true; stop();
       document.removeEventListener('visibilitychange', onVisibility);

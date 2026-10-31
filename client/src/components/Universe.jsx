@@ -1,15 +1,13 @@
 import React, { memo, useEffect, useRef, useState } from 'react';
-import { usePrefersReduced } from './NeuralCore.jsx';
 
 /**
  * Universo espacial 3D atrás do grafo (Three.js, carregado sob demanda). Ocupa só o canvas do Cockpit, fica na camada mais baixa e não recebe eventos.
  * Não conhece a câmera, os nós nem o ChatDock: só observa o PRÓPRIO tamanho e a visibilidade. Se o WebGL não existir ou falhar, mostra um fundo estático discreto.
+ * A animação é ambiente e continua mesmo com prefers-reduced-motion (decisão de produto); só pausa com a aba oculta, fora da tela ou sem tamanho.
  * O <canvas> é criado a cada montagem (um contexto WebGL nunca é reaproveitado depois de liberado) e removido na limpeza.
  */
 function Universe() {
   const host = useRef(null), engine = useRef(null);
-  const reduced = usePrefersReduced();
-  const reducedRef = useRef(reduced); reducedRef.current = reduced;
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -22,7 +20,7 @@ function Universe() {
         canvas = document.createElement('canvas');
         canvas.className = 'universe-canvas'; canvas.setAttribute('aria-hidden', 'true');
         el.appendChild(canvas);
-        const u = createUniverse(canvas, { reduced: reducedRef.current, onLost: () => { /* o fundo CSS continua; o motor retoma sozinho quando o contexto volta */ } });
+        const u = createUniverse(canvas, { onLost: () => { /* o fundo CSS continua; o motor retoma sozinho quando o contexto volta */ } });
         engine.current = u;
         const measure = () => { const r = el.getBoundingClientRect(); u.resize(r.width, r.height); };
         ro = new ResizeObserver(measure); ro.observe(el);
@@ -40,8 +38,6 @@ function Universe() {
       canvas?.remove();
     };
   }, []);
-
-  useEffect(() => { engine.current?.setReduced(reduced); }, [reduced]);
 
   return <div className="universe" ref={host} aria-hidden="true" data-fallback={failed ? 'true' : undefined} />;
 }
