@@ -139,20 +139,28 @@ export default function Cockpit() {
       <section className="ck-main" aria-label="Missão atual">
         <header className="ck-head">
           <div className="ck-id">
-            <span className="k">Missão {mission?.demo && <DemoTag />}</span>
-            {mission ? <h2 className="ck-title">{mission.title}</h2> : <h2 className="ck-title">Nenhuma missão ativa</h2>}
-            {mission ? (
-              <div className="ck-meta">
-                {mission.tasks.length > 0 && <span className="ck-prog"><TaskSegments tasks={mission.tasks} /><span>{done} de {mission.tasks.length} concluídas</span></span>}
+            {/* linha principal: missão e progresso; a linha secundária (ciclo e tarefa atual) só existe quando há o que dizer */}
+            <div className="ck-line">
+              <span className="sr">Missão: </span>
+              <h2 className="ck-title" title={mission?.title}>{mission ? mission.title : 'Nenhuma missão ativa'}</h2>
+              {(mission?.demo || (mission && mission.tasks.length > 0)) && (
+                <span className="ck-meta">
+                  {mission.demo && <DemoTag />}
+                  {mission.tasks.length > 0 && <span className="ck-prog"><TaskSegments tasks={mission.tasks} /><span>{done} de {mission.tasks.length} concluídas</span></span>}
+                </span>
+              )}
+            </div>
+            {mission ? ((mission.cycle || current) && (
+              <div className="ck-sub">
                 {mission.cycle && <span>Ciclo {statusLabel(mission.cycle.status, true)}, rodada {mission.cycle.rounds.length} de {mission.cycle.maxIterations}</span>}
-                {current && <span>Agora: {current.title}</span>}
+                {current && <span className="ck-now" title={current.title}>Agora: {current.title}</span>}
               </div>
-            ) : <p className="dim small">Descreva o que quer construir na conversa ou crie uma missão manualmente.</p>}
+            )) : <p className="dim small">Descreva o que quer construir na conversa ou crie uma missão manualmente.</p>}
           </div>
           {pendingAll > 0 && (
-            <div className="attn" role="group" aria-label="Aprovações pendentes">
+            <div className="attn" role="group" aria-label="Aprovações pendentes" title="Nada executa até você decidir.">
               <Glyph kind="awaiting" />
-              <div className="attn-txt"><b>{pendingAll} {pendingAll === 1 ? 'aprovação pendente' : 'aprovações pendentes'}</b>Nada executa até você decidir.</div>
+              <div className="attn-txt"><b>{pendingAll} {pendingAll === 1 ? 'aprovação pendente' : 'aprovações pendentes'}</b><span className="attn-sub">Nada executa até você decidir.</span></div>
               <Btn kind="primary" onClick={review}>Revisar</Btn>
             </div>
           )}

@@ -2,7 +2,7 @@
    Referências: o composer grande e arredondado, com a barra de ferramentas embaixo; texto em coluna de leitura, sem bolhas; plano como artefato de trabalho. */
 
 /* ---------- painel recolhível ---------- */
-.chat-dock { position: relative; z-index: var(--z-dock); flex: none; min-width: 0; padding: 0 var(--sp-4) var(--sp-4); }
+.chat-dock { position: relative; z-index: var(--z-dock); flex: none; min-width: 0; padding: 0 var(--sp-2) var(--sp-2); }
 .dock-bar { display: flex; align-items: center; gap: var(--sp-3); width: 100%; min-height: 56px; padding: var(--sp-2) var(--sp-4); font: inherit; font-size: var(--fs-md); text-align: left; color: var(--dim); background: var(--raise); border: 0; border-radius: var(--r-3); cursor: pointer; transition: var(--t-color); }
 .dock-ico { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--r-2); background: var(--raise2); color: var(--text); }
 .dock-bar .ttl { color: var(--strong); font-weight: 520; white-space: nowrap; }

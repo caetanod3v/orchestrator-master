@@ -151,3 +151,8 @@ test('redimensionamento: Intenção maior que a área fica com o topo legível e
   const r = reconcileOnResize({ touched: true, view, prev: { size: { w: 1400, h: 900 }, view }, size: { w: 600, h: 300 }, rect: big });
   assert.equal(r.k, 1.5); assert.equal(r.x, 24); assert.equal(r.y, 24);
 });
+
+test('composição: o teto do enquadramento automático é 1,0 (grafo pequeno não é ampliado)', () => {
+  assert.equal(ZOOM.fitMax, 1, 'um grafo de poucos nós aparece no tamanho natural dos cartões');
+  assert.equal(fitView({ w: 100, h: 80 }, SIZE).k, 1);
+});

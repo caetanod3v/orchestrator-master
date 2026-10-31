@@ -20,7 +20,7 @@ main:focus { outline: none; }
 @keyframes scene-in { from { opacity: 0; transform: translateY(6px); } }
 
 /* ---------- barra superior ---------- */
-.topbar { flex: none; display: flex; align-items: center; gap: var(--sp-3); min-height: 56px; padding: 0 var(--sp-4) 0 var(--sp-6); }
+.topbar { flex: none; display: flex; align-items: center; gap: var(--sp-3); min-height: 48px; padding: 0 var(--sp-4) 0 var(--sp-6); }
 .topbar-title { font-size: var(--fs-md); font-weight: 560; color: var(--strong); }
 @media (max-width: 900px) { .topbar { padding-left: var(--sp-2); } .topbar .nav-toggle { margin-right: var(--sp-1); } }
 @media (max-width: 600px) { .topbar .btn .txt { display: none; } .topbar .btn { padding-inline: var(--sp-3); } }

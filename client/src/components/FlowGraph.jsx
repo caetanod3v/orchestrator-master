@@ -155,7 +155,6 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
 
   // arraste: fundo (botão esquerdo), botão do meio ou Alt + botão esquerdo; dois dedos fazem pinça
   const onPointerDown = (e) => {
-    if (e.target.closest('.cv-ctl')) return;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     suppress.current = false; // um arraste anterior nunca deve engolir este clique
     if (pointers.current.size === 2) {
@@ -210,6 +209,7 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
 
   if (!mission) return empty;
   return (
+    <>
     <div className="cv" ref={vp} role="group" aria-label="Canvas do fluxo de trabalho" aria-describedby="cv-hint" tabIndex={0}
       onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endPointer} onPointerCancel={endPointer} onClickCapture={onClickCapture} onMouseDown={onMouseDown} onKeyDown={onKeyDown} onFocus={onFocus}>
       <p id="cv-hint" className="sr">{HINT}</p>
@@ -252,14 +252,16 @@ export default function FlowGraph({ mission, selectedId, onSelect, flash, empty,
           ))}
         </div>
       </div>
-      <div className="cv-ctl" role="toolbar" aria-label="Controles do canvas" title={HINT}>
-        <button type="button" className="icon-btn" onClick={() => zoomBy(-1)} disabled={pct <= Math.round(ZOOM.min * 100)} aria-label="Diminuir o zoom"><Icon name="minus" size={16} /></button>
-        <output className="cv-pct" aria-label={`Zoom ${pct}%`}>{pct}%</output>
-        <button type="button" className="icon-btn" onClick={() => zoomBy(1)} disabled={pct >= Math.round(ZOOM.max * 100)} aria-label="Aumentar o zoom"><Icon name="plus" size={16} /></button>
-        <span className="cv-sep" aria-hidden="true" />
-        <button type="button" className="icon-btn" onClick={() => selectedId && centerTask(selectedId)} disabled={!selectedId} aria-label="Centralizar a tarefa selecionada"><Icon name="target" size={16} /></button>
-        <button type="button" className="cv-fit" onClick={fit} title="Volta ao enquadramento automático (atalho: 0)"><Icon name="fit" size={16} /><span>Ajustar ao espaço</span></button>
-      </div>
     </div>
+    {/* os controles ficam numa faixa PRÓPRIA sob a área do grafo (não flutuam sobre ela): nenhum nó, ação ou portão fica coberto, seja qual for a câmera */}
+    <div className="cv-ctl" role="toolbar" aria-label="Controles do canvas" title={HINT}>
+      <button type="button" className="icon-btn" onClick={() => zoomBy(-1)} disabled={pct <= Math.round(ZOOM.min * 100)} aria-label="Diminuir o zoom"><Icon name="minus" size={16} /></button>
+      <output className="cv-pct" aria-label={`Zoom ${pct}%`}>{pct}%</output>
+      <button type="button" className="icon-btn" onClick={() => zoomBy(1)} disabled={pct >= Math.round(ZOOM.max * 100)} aria-label="Aumentar o zoom"><Icon name="plus" size={16} /></button>
+      <span className="cv-sep" aria-hidden="true" />
+      <button type="button" className="icon-btn" onClick={() => selectedId && centerTask(selectedId)} disabled={!selectedId} aria-label="Centralizar a tarefa selecionada"><Icon name="target" size={16} /></button>
+      <button type="button" className="cv-fit" onClick={fit} title="Volta ao enquadramento automático (atalho: 0)"><Icon name="fit" size={16} /><span>Ajustar ao espaço</span></button>
+    </div>
+    </>
   );
 }

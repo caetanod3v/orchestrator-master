@@ -1,7 +1,7 @@
 // Matemática do canvas do Cockpit (funções puras, sem React nem DOM): zoom, enquadramento e navegação.
 // Convenção: a "vista" é { x, y, k }. Um ponto do mundo (wx, wy) aparece na tela em (x + wx*k, y + wy*k), em pixels do viewport.
 
-export const ZOOM = Object.freeze({ min: 0.25, max: 2.5, fitMax: 1.3, step: 1.2, readable: 0.6 });
+export const ZOOM = Object.freeze({ min: 0.25, max: 2.5, fitMax: 1.0, step: 1.2, readable: 0.6 });
 
 export const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 export const clampZoom = (k, z = ZOOM) => clamp(k, z.min, z.max);

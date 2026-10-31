@@ -6,25 +6,37 @@
 
 /* ---------- missão e fluxo ---------- */
 .ck-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.ck-head { flex: none; display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-5); padding: var(--sp-2) var(--sp-6) var(--sp-4); }
-.ck-id { min-width: 0; }
-.ck-title { margin-top: 2px; font-size: var(--fs-xl); font-weight: 580; letter-spacing: -.02em; line-height: 1.2; max-width: 38ch; }
-.ck-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-5); margin-top: var(--sp-2); font-size: var(--fs-sm); color: var(--dim); }
-.ck-prog { display: inline-flex; align-items: center; gap: var(--sp-3); flex: none; } .ck-prog .segs { width: 96px; flex: none; }
-.attn { flex: none; display: flex; align-items: center; gap: var(--sp-3); max-width: 400px; padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-4); border-radius: var(--r-3); background: var(--warn-bg); color: var(--warn-text); }
-.attn .glyph { --g: 12px; color: var(--warn); }
-.attn-txt { flex: 1; min-width: 0; font-size: var(--fs-sm); line-height: var(--lh-tight); }
-.attn-txt b { display: block; margin-bottom: 2px; color: var(--strong); font-size: var(--fs-md); font-weight: 580; }
+.ck-head { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-5); padding: var(--sp-1) var(--sp-6) var(--sp-2); }
+.ck-id { flex: 1 1 320px; min-width: 0; }
+.ck-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--sp-4); min-width: 0; }
+.ck-meta { display: inline-flex; align-items: center; gap: var(--sp-4); flex: none; } .ck-meta .demo { flex: none; margin-left: 0; }
+.ck-title { flex: 0 1 auto; min-width: 8ch; margin: 0; font-size: var(--fs-xl); font-weight: 580; letter-spacing: -.02em; line-height: 1.25; overflow: hidden; max-width: 100%; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; line-clamp: 1; }
+/* título: nunca é espremido ao lado da meta (DEMO e progresso): se não couber junto, a meta desce para uma 2ª linha e o título usa a largura toda.
+   Com altura de sobra o título MUITO longo também ocupa 2 linhas; em janelas baixas (ou com a conversa aberta numa janela média) fica numa linha só, com reticências, para o canvas não perder altura.
+   O texto completo segue no DOM e no title. */
+@media (min-height: 700px) { .ck:not(:has(.chat-dock.open)) .ck-title { -webkit-line-clamp: 2; line-clamp: 2; } }
+@media (min-height: 860px) { .ck-title { -webkit-line-clamp: 2; line-clamp: 2; } }
+.ck-prog { display: inline-flex; align-items: center; gap: var(--sp-3); flex: none; font-size: var(--fs-sm); color: var(--dim); white-space: nowrap; } .ck-prog .segs { width: 72px; flex: none; }
+.ck-sub { display: flex; align-items: baseline; gap: 0 var(--sp-4); min-width: 0; margin-top: 2px; font-size: var(--fs-sm); color: var(--dim); }
+.ck-sub > span { flex: none; white-space: nowrap; } .ck-sub > .ck-now { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
-.ck-canvas { position: relative; flex: 1; min-height: 0; margin: 0 var(--sp-4) var(--sp-4); border-radius: var(--r-3); background: var(--canvas); background-image: radial-gradient(rgba(255, 250, 240, .075) 1px, transparent 1.2px); background-size: 22px 22px; overflow: hidden; }
+.attn { flex: none; display: flex; align-items: center; gap: var(--sp-3); max-width: 100%; padding: 5px 6px 5px var(--sp-3); border-radius: var(--r-3); background: var(--warn-bg); color: var(--warn-text); }
+.attn .glyph { --g: 12px; color: var(--warn); }
+.attn-txt { min-width: 0; font-size: var(--fs-sm); line-height: var(--lh-tight); }
+.attn-txt b { color: var(--strong); font-size: var(--fs-sm); font-weight: 580; }
+.attn-sub { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.attn .btn { min-height: 28px; padding: 2px var(--sp-3); font-size: var(--fs-xs); border-radius: var(--r-1); }
+@media (min-width: 1600px) { .attn-sub { position: static; width: auto; height: auto; margin: 0 0 0 var(--sp-3); overflow: visible; clip: auto; white-space: nowrap; } }
+
+.ck-canvas { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 0 var(--sp-2) var(--sp-2); border-radius: var(--r-3); background: var(--canvas); background-image: radial-gradient(rgba(255, 250, 240, .075) 1px, transparent 1.2px); background-size: 22px 22px; overflow: hidden; }
 /* viewport do canvas: um único elemento recebe a roda, o arraste e as teclas de navegação (o inspetor, os logs e a conversa não passam por aqui) */
-.cv { position: absolute; inset: 0; overflow: clip; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; border-radius: inherit; }
+.cv { position: relative; flex: 1 1 auto; min-height: 0; overflow: clip; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; border-radius: var(--r-3) var(--r-3) 0 0; }
 .cv.panning { cursor: grabbing; }
 .cv:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .cv-world { position: absolute; left: 0; top: 0; width: max-content; transform-origin: 0 0; }
-.cv-ctl { position: absolute; z-index: 3; left: var(--sp-3); bottom: var(--sp-3); display: flex; align-items: center; gap: 2px; padding: 3px; background: var(--raise); border-radius: var(--r-2); cursor: default; }
+/* controles: faixa própria na base do canvas (fora da área do grafo), então nunca cobrem nós, ações nem portões de aprovação */
+.cv-ctl { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 3px var(--sp-3); background: var(--canvas); border-top: 1px solid var(--line); cursor: default; }
 .cv-ctl .icon-btn { width: 32px; height: 32px; }
-.cv-ctl { flex-wrap: wrap; max-width: calc(100% - 2 * var(--sp-3)); }
 .cv-fit { display: inline-flex; align-items: center; gap: var(--sp-2); height: 32px; padding: 0 var(--sp-3); font: inherit; font-size: var(--fs-sm); color: var(--dim); background: transparent; border: 0; border-radius: var(--r-2); cursor: pointer; white-space: nowrap; }
 .cv-fit:active { transform: scale(.97); }
 @media (hover: hover) and (pointer: fine) { .cv-fit:hover { background: var(--raise2); color: var(--strong); } }
@@ -33,9 +45,9 @@
 .ck-empty { margin: var(--sp-6); max-width: 46ch; } .ck-empty p { line-height: var(--lh-read); }
 
 .flow { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 52px; padding: var(--sp-6); }
-.flow-row { position: relative; z-index: 1; display: flex; flex-wrap: nowrap; justify-content: center; gap: var(--sp-5); width: max-content; min-width: 100%; margin-inline: auto; }
+.flow-row { position: relative; z-index: 1; display: flex; flex-wrap: nowrap; justify-content: center; gap: var(--sp-6); width: max-content; min-width: 100%; margin-inline: auto; }
 .flow-edges { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.edge { fill: none; stroke: var(--line-strong); stroke-width: 1.25; stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw var(--dur-scene) var(--ease) calc(var(--i) * 70ms + 160ms) forwards; }
+.edge { fill: none; stroke: var(--edge); stroke-width: 1.25; stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw var(--dur-scene) var(--ease) calc(var(--i) * 70ms + 160ms) forwards; }
 .edge.done { stroke: rgba(98, 196, 143, .55); }
 .edge.live { stroke: var(--run); stroke-width: 1.75; }
 .edge.next { stroke: var(--run); stroke-dasharray: .03 .022; stroke-dashoffset: 0; opacity: .55; animation: fade-in var(--dur-3) ease both; }
@@ -56,7 +68,7 @@
 .fnode.task::before, .fnode.gate::before, .fnode::after { content: ''; position: absolute; left: 50%; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%; background: var(--canvas); box-shadow: 0 0 0 1.5px var(--line-strong); z-index: 2; }
 .fnode.task::before, .fnode.gate::before { top: -4.5px; } .fnode::after { bottom: -4.5px; } .fnode.ghost::after { display: none; }
 /* estado do nó: só indicadores (filete à esquerda, porta, texto do estado). O cartão continua grafite. Seleção (contorno claro) e execução (filete azul) são coisas diferentes. */
-.fnode.task { --tone: var(--muted); --port: var(--line-strong); }
+.fnode.task { --tone: var(--muted); --port: var(--edge); }
 .fnode.tone-run { --tone: var(--run); --port: var(--run); } .fnode.tone-ok { --tone: var(--ok); --port: rgba(98, 196, 143, .7); } .fnode.tone-wait { --tone: var(--warn); --port: var(--warn); }
 .fnode.tone-stop { --tone: var(--interrupted); --port: var(--interrupted); } .fnode.tone-err { --tone: var(--err); --port: var(--err); }
 .fnode.tone-run, .fnode.tone-wait, .fnode.tone-stop, .fnode.tone-err { box-shadow: inset 3px 0 0 var(--tone); }
@@ -65,6 +77,8 @@
 .fnode.gate { --port: var(--warn); box-shadow: inset 3px 0 0 var(--warn); cursor: default; }
 .fnode.gate::before, .fnode.gate::after { box-shadow: 0 0 0 1.5px var(--port); }
 .gate-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-top: var(--sp-3); }
+/* janelas baixas (ex.: 1280x720 com a conversa aberta): o portão se compacta para caber INTEIRO na área do grafo; título, meta e os 3 botões (alvo ≥ 28 px) ficam como estão */
+@media (max-height: 760px) { .fnode.gate .fn-head { padding-block: 4px; } .fnode.gate .fn-body { gap: 2px; padding: var(--sp-2) var(--sp-4) var(--sp-3); } .fnode.gate .gate-actions { margin-top: var(--sp-2); } .fnode.gate .gate-actions .btn { min-height: 28px; } }
 .fnode.tone-run { background: var(--raise2); }
 .fnode.tone-ok .fn-title { color: var(--text); font-weight: 450; } /* concluídas: reconhecíveis (check verde), sem competir com a tarefa atual */
 .fnode.sel { outline: 1.5px solid var(--strong); outline-offset: 2px; }
@@ -91,7 +105,7 @@
 .path { word-break: break-all; margin: 2px 0 var(--sp-2); }
 .kv { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: var(--sp-3); padding: 5px 0; font-size: var(--fs-sm); }
 .kv > span:first-child { color: var(--dim); } .kv > span:last-child { color: var(--text); overflow-wrap: anywhere; }
-.agent-row { margin-bottom: var(--sp-2); background: var(--raise); border-radius: var(--r-2); }
+.agent-row { margin-bottom: var(--sp-2); background: var(--raise-quiet); border-radius: var(--r-2); }
 .agent-row > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); list-style: none; border-radius: var(--r-2); }
 .agent-row > summary::-webkit-details-marker { display: none; }
 .agent-row > summary::after { content: ''; flex: none; width: 7px; height: 7px; margin-left: var(--sp-1); border-right: 1.5px solid var(--dim); border-bottom: 1.5px solid var(--dim); transform: rotate(45deg) translateY(-2px); transition: transform var(--dur-2) var(--ease); }
@@ -138,10 +152,12 @@
 .ll-warn { box-shadow: inset 2px 0 0 var(--warn); } .ll-warn .lt { color: var(--warn-text); }
 
 /* ---------- largura ---------- */
-@media (max-width: 1180px) { :root { --w-inspector: 320px; } .ck-head { flex-direction: column; gap: var(--sp-3); } .attn { max-width: none; width: 100%; } }
+@media (max-width: 1180px) { :root { --w-inspector: 320px; } }
 @media (max-width: 900px) {
   .ck { display: block; overflow: auto; }
   .ck-head { padding-inline: var(--sp-4); }
+  .ck-line { gap: 2px var(--sp-3); }
+  .ck-sub { flex-wrap: wrap; } .ck-sub > span { white-space: normal; }
   .ck-canvas { min-height: 420px; margin-inline: var(--sp-3); }
   .ck-side { border-left: 0; border-top: 1px solid var(--line); margin-top: var(--sp-2); }
   .ck-panel { overflow: visible; }

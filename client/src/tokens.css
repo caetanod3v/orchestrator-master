@@ -1,13 +1,17 @@
 /* AI Dev Orchestrator — tokens do sistema visual.
    Fonte única de cor, tipografia, espaço, forma e movimento. Os demais .css só consomem estes valores.
    Linguagem (derivada de /referencia): grafite quente em camadas tonais (chassi < folha < superfície), cantos generosos, quase nenhum contorno,
-   ação primária em bone (branco quente) e cor só para estado. Sem gradiente, brilho, vidro ou acento de marca. */
+   ação primária em bone (branco quente) e cor só para estado. Sem acento de marca, e sem gradiente, brilho ou vidro como enfeite dos componentes.
+   Exceção prevista: o PALCO do Cockpit (o canvas do grafo) é o único lugar que admite um fundo atmosférico em camadas (tons de profundidade e, em incremento futuro,
+   um campo de estrelas discreto). Esse fundo nunca compete com texto, cartões ou conexões: cartões são opacos e o movimento respeita prefers-reduced-motion. */
 
 :root {
   color-scheme: dark; /* controles nativos no tema escuro */
 
   /* camadas: --bg é o chassi (atrás da sidebar); --surface é a folha de conteúdo; --raise é qualquer coisa elevada dentro dela; --raise2 é hover/selecionado/pressionado. */
-  --bg: #121211; --surface: #1a1a19; --raise: #232321; --raise2: #2d2d2a; --raise3: #383835; --canvas: #161615; --term-bg: #0f0f0e;
+  --bg: #121211; --surface: #1a1a19; --raise: #232321; --raise2: #2d2d2a; --raise3: #383835; --canvas: #0f0f0e; --term-bg: #0f0f0e;
+  /* --raise-quiet: fundo de linhas secundárias (inspetor), mais leve que --raise, para o grafo ter mais peso que os painéis. --edge: conexões do grafo (≥ 3:1 sobre o canvas). */
+  --raise-quiet: rgba(255, 250, 240, .03); --edge: rgba(255, 250, 240, .36);
   /* separadores: raros. --line divide listas; --line-strong contorna o que precisa de limite; --line-control contorna campos (≥ 3:1). */
   --line: rgba(255, 250, 240, .08); --line-strong: rgba(255, 250, 240, .26); --line-control: rgba(255, 250, 240, .4);
 
@@ -36,7 +40,7 @@
   /* forma */
   --r-1: 8px; --r-2: 12px; --r-3: 16px; --r-4: 20px;
   /* larguras */
-  --w-side: 248px; --w-side-min: 64px; --w-inspector: 360px; --w-read: 720px; --w-page: 1080px;
+  --w-side: 248px; --w-side-min: 64px; --w-inspector: 336px; --w-read: 720px; --w-page: 1080px;
 
   /* movimento: ações de teclado e de alta frequência não animam; o resto fica entre 120 e 240 ms. Só transform, opacity e cor.
      --dur-scene (≤ 480 ms) é só para cenas raras: entrada da página e o desenho do grafo ao carregar uma missão. */
