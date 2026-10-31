@@ -44,21 +44,20 @@ main:focus { outline: none; }
 .side-mission .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .side-mission.active { background: var(--raise); color: var(--strong); }
 .side-foot { list-style: none; margin: auto 0 0; padding: var(--sp-3) var(--sp-2) 0; display: flex; flex-direction: column; gap: var(--sp-2); border-top: 1px solid var(--line); }
-.side-foot li { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-sm); }
-.side-agent { display: flex; justify-content: space-between; gap: var(--sp-3); flex: 1; min-width: 0; }
-.side-agent b { font-weight: 500; color: var(--text); } .side-state { color: inherit; }
-.side-foot .status { gap: var(--sp-3); }
+.side-foot li { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); font-size: var(--fs-sm); }
+.side-name { font-weight: 500; color: var(--text); }
 @media (hover: hover) and (pointer: fine) {
   .side-link:hover:not(.active), .side-mission:hover:not(.active) { background: var(--raise); color: var(--strong); text-decoration: none; }
 }
 
 /* recolhida: só ícones. O texto continua nos atributos title/aria-label. */
 .side.collapsed { width: var(--w-side-min); align-items: stretch; }
-.side.collapsed .brand-name, .side.collapsed .side-label, .side.collapsed .side-recent, .side.collapsed .side-count, .side.collapsed .side-state, .side.collapsed .ws-text { display: none; }
+.side.collapsed .brand-name, .side.collapsed .side-label, .side.collapsed .side-recent, .side.collapsed .side-count, .side.collapsed .ws-text { display: none; }
 .side.collapsed .side-head { flex-direction: column; gap: var(--sp-2); padding: var(--sp-1) 0; }
 .side.collapsed .side-link, .side.collapsed .side-new, .side.collapsed .ws-btn { justify-content: center; padding-inline: 0; }
-.side.collapsed .side-foot { padding-inline: 0; align-items: center; }
-.side.collapsed .side-agent b { display: none; }
+.side.collapsed .side-foot { padding-inline: 0; }
+.side.collapsed .side-foot li { justify-content: center; }
+.side.collapsed .side-name, .side.collapsed .ag-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; } /* só a marca; o texto continua para leitores de tela */
 
 /* gaveta modal (telas estreitas) */
 .side.modal { position: fixed; z-index: var(--z-nav); inset: 0 auto 0 0; width: min(320px, 88vw); background: var(--bg); box-shadow: 0 0 0 1px var(--line); animation: drawer-in var(--dur-3) var(--ease); }

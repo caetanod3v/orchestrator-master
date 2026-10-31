@@ -19,6 +19,8 @@
   /* estados (cor + glifo + texto, nunca só a cor), com o MESMO significado em todo o produto, dessaturados para não competir com o conteúdo:
      --muted cinza = ocioso, na fila, desconectado | --run azul discreto = executando | --ok verde = concluído | --warn âmbar = aguardando decisão humana | --interrupted cinza-azulado = interrompido | --err vermelho suave = erro */
   --run: #7ea6d8; --ok: #62c48f; --warn: #e2b052; --err: #ee6f66; --muted: #a09e97; --interrupted: #94a3b8;
+  /* agentes (Planner e Executor): inativo = cinza, executando = âmbar com pulsação suave, erro = vermelho. O verde é só de tarefas concluídas. */
+  --ag-idle: var(--muted); --ag-run: var(--warn); --ag-err: var(--err);
   --ok-bg: rgba(98, 196, 143, .1); --warn-bg: rgba(226, 176, 82, .1); --err-bg: rgba(238, 111, 102, .1);
   --ok-text: #8bd8ae; --warn-text: #ecc77d; --danger-text: #f6aaa3;
 

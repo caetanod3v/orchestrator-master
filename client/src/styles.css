@@ -97,6 +97,19 @@ details > summary { cursor: pointer; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .demo { margin-left: var(--sp-2); font-size: var(--fs-xs); font-weight: 600; padding: 1px 7px; background: var(--warn-bg); color: var(--warn-text); border-radius: 6px; vertical-align: 1px; }
 
+/* ---------- marca de estado compartilhada (agentes e orquestrador) ---------- */
+.ag { --tone: var(--ag-idle); display: inline-flex; align-items: center; gap: 7px; min-width: 0; font-size: var(--fs-sm); line-height: var(--lh-tight); color: var(--tone); white-space: nowrap; }
+.ag[data-tone="running"] { --tone: var(--ag-run); } .ag[data-tone="error"] { --tone: var(--ag-err); }
+.ag[data-tone="orch-run"] { --tone: var(--run); } .ag[data-tone="wait"] { --tone: var(--warn); } /* tons do ORQUESTRADOR: não são estados de agente */
+.mark { flex: none; display: inline-block; width: 10px; height: 10px; background: currentColor; border-radius: 50%; }
+.m-ring { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+.m-dash { height: 2px; border-radius: 1px; }
+.m-tri { border-radius: 0; clip-path: polygon(50% 4%, 100% 96%, 0 96%); }
+.m-diamond { border-radius: 0; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+.m-half { background: conic-gradient(currentColor 0 50%, transparent 0); box-shadow: inset 0 0 0 1.5px currentColor; animation: spin 1.6s linear infinite; }
+.ag[data-tone="running"] .m-disc { animation: ag-pulse 1.8s ease-in-out infinite; } /* pulsação discreta: só opacidade, só neste estado */
+@keyframes ag-pulse { 50% { opacity: .4; } }
+
 /* ---------- abas ---------- */
 .tabs { display: flex; gap: var(--sp-4); border-bottom: 1px solid var(--line); }
 .tab { position: relative; padding: var(--sp-2) 0 var(--sp-3); font: inherit; font-size: var(--fs-sm); font-weight: 520; color: var(--dim); background: none; border: 0; cursor: pointer; transition: color var(--dur-1) ease; }
@@ -143,6 +156,6 @@ details > summary { cursor: pointer; }
 .t-approval { color: var(--ok); } .t-rejection { color: var(--err); }
 
 @media (prefers-reduced-motion: reduce) {
-  .s-running i, .s-planning i, .glyph.g-run { animation: none; }
+  .s-running i, .s-planning i, .glyph.g-run, .m-half, .ag[data-tone="running"] .m-disc { animation: none; }
   .btn:active:not(:disabled), .icon-btn:active:not(:disabled) { transform: none; }
 }

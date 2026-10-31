@@ -151,3 +151,31 @@ export function summarizeTask(task, { mission = null, busy = false } = {}) {
   if (task.id) d.push({ k: 'Identificador', v: task.id, mono: true });
   return out;
 }
+
+// ---------- marca visual dos agentes e do orquestrador ----------
+/**
+ * Visual de um AGENTE (Planner ou Executor) a partir do estado ATUAL que o servidor informa (/api/agents) e, só para o Executor, da falha mais recente.
+ * Quatro tons no máximo: inativo (cinza), executando (âmbar), erro (vermelho). Não existe "concluído" para agentes: o verde é só de tarefas concluídas, e um
+ * agente ocioso nunca parece concluído por causa de uma execução anterior. `failed` só é considerado quando o agente não está executando nem desconectado.
+ */
+export function agentVisual(agent, { failed = false } = {}) {
+  const s = agentState(agent);
+  if (s === 'active') return { tone: 'running', shape: 'disc', label: 'executando' };
+  if (!agent) return { tone: 'inactive', shape: 'dash', label: 'sem dados' };
+  if (s === 'disconnected') return { tone: 'inactive', shape: 'dash', label: 'desconectado' };
+  if (s === 'unavailable') return { tone: 'inactive', shape: 'dash', label: 'indisponível' };
+  if (failed) return { tone: 'error', shape: 'tri', label: 'erro' };
+  return { tone: 'inactive', shape: 'ring', label: 'inativo' };
+}
+
+/**
+ * Visual do ORQUESTRADOR (o modo de coreMode). É outra coisa que os agentes: usa tons próprios e os rótulos de sempre, em especial
+ * "Aguardando decisão humana" em âmbar com losango quando há decisão pendente. Só a marca (forma + cor + texto) é compartilhada com os agentes.
+ */
+export function orchestratorVisual(mode) {
+  const label = CORE_LABEL[mode] ?? CORE_LABEL.idle;
+  if (mode === 'planning' || mode === 'executing') return { tone: 'orch-run', shape: 'half', label };
+  if (mode === 'awaiting') return { tone: 'wait', shape: 'diamond', label };
+  if (mode === 'error') return { tone: 'error', shape: 'tri', label };
+  return { tone: 'inactive', shape: 'ring', label };
+}

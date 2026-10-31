@@ -8,13 +8,9 @@ import FlowGraph from '../components/FlowGraph.jsx';
 import CyclePanel from '../components/CyclePanel.jsx';
 import ChatDock from '../components/ChatDock.jsx';
 import { agentTokens } from '../usage-view.js';
-import { agentState, latestExecutionFailed, coreMode, CORE_LABEL } from '../op-state.js';
+import { latestExecutionFailed, coreMode, orchestratorVisual } from '../op-state.js';
+import AgentStatus, { StateMark } from '../components/AgentStatus.jsx';
 
-const STATE_LABEL = {
-  active: 'ativo', idle: 'ocioso', live: 'disponível', awaiting: 'aguardando aprovação',
-  disconnected: 'desconectado', unavailable: 'indisponível', error: 'erro',
-};
-const CORE_GLYPH = { idle: 'idle', planning: 'active', executing: 'active', awaiting: 'awaiting', error: 'error' };
 
 // Eventos NOVOS desde que a tela carregou (o histórico inicial nunca gera reação).
 function useFresh(events, ready) {
@@ -85,8 +81,6 @@ export default function Cockpit() {
   const done = mission ? mission.tasks.filter((t) => t.status === 'completed').length : 0;
   // erro do executor = a execução MAIS RECENTE falhou (e não foi rejeição humana); uma execução posterior bem-sucedida o supera
   const execError = latestExecutionFailed(missions.flatMap((m) => m.tasks));
-  const plannerSt = agentState(planner);
-  const executorSt = execError ? 'error' : agentState(executor);
   const pendingAll = awaiting + cycleApprovals.length;
   // o núcleo reflete o estado REAL (executor ocupado, planner ocupado, falha, decisão pendente), sem temporizadores nem simulação
   const mode = coreMode({ executorBusy: execBusy, runningTasks: state?.counts.running ?? 0, plannerBusy: !!state?.planner?.busy || planner?.status === 'running', pending: pendingAll, failed: execError });
@@ -159,11 +153,11 @@ export default function Cockpit() {
       </section>
 
       <aside className="ck-side" aria-label="Inspetor">
-        <div className={`orch st-${mode}`}>
+        <div className="orch">
           <NeuralCore mode={mode} size={112} />
           <div className="orch-text">
             <b>Orquestrador</b>
-            <span className="status"><Glyph kind={CORE_GLYPH[mode]} />{CORE_LABEL[mode]}</span>
+            <StateMark {...orchestratorVisual(mode)} />
             <span className="dim small">{coreLine}</span>
           </div>
         </div>
@@ -176,7 +170,7 @@ export default function Cockpit() {
               <h3 className="blk-h">Agentes</h3>
               {planner && (
                 <details className="agent-row">
-                  <summary><span className="ar-name">Planner</span><span className={`status st-${plannerSt}`}><Glyph kind={plannerSt} />{STATE_LABEL[plannerSt]}</span></summary>
+                  <summary><span className="ar-name">Planner</span><AgentStatus agent={planner} /></summary>
                   <div className="ar-body">
                     <p className="dim small">{planner.detail}</p>
                     <Kv k="Função">{planner.role}</Kv>
@@ -188,7 +182,7 @@ export default function Cockpit() {
               )}
               {executor && (
                 <details className="agent-row">
-                  <summary><span className="ar-name">Executor</span><span className={`status st-${executorSt}`}><Glyph kind={executorSt} />{STATE_LABEL[executorSt]}</span></summary>
+                  <summary><span className="ar-name">Executor</span><AgentStatus agent={executor} failed={execError} /></summary>
                   <div className="ar-body">
                     <p className="dim small">{execBusy ? `Executando: ${runningTask?.title ?? '…'}` : executor.available ? `Claude Code ${executor.version?.split(' ')[0] ?? ''} pronto` : 'CLI não detectada no PATH'}</p>
                     <Kv k="Função">{executor.role}</Kv>

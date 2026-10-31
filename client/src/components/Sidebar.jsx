@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
 import { Glyph, Icon, statusLabel, cycleApprovalPending, TASK_GLYPH } from './ui.jsx';
-import { agentState } from '../op-state.js';
+import AgentStatus from './AgentStatus.jsx';
+import { latestExecutionFailed } from '../op-state.js';
 
 export const NAV = [
   ['cockpit', 'Cockpit', 'cockpit'], ['chat', 'Conversa', 'chat'], ['missions', 'Missões', 'missions'], ['agents', 'Agentes', 'agents'],
@@ -66,9 +67,6 @@ function WorkspaceMenu({ collapsed }) {
   );
 }
 
-const AGENT_TONE = agentState;
-const TONE_CLASS = { active: 's-running', idle: 's-idle', disconnected: 's-not_connected', unavailable: 's-not_connected' };
-
 /** Navegação. No desktop é um trilho fixo (recolhível); em telas estreitas é uma gaveta modal: foco preso, Esc ou clique fora fecham e o foco volta ao botão que a abriu. */
 export default function Sidebar({ page, modal = false, collapsed = false, onToggle, onClose }) {
   const { missions, mission, selectMission, state, agents } = useStore();
@@ -92,11 +90,7 @@ export default function Sidebar({ page, modal = false, collapsed = false, onTogg
   const go = () => { if (modal) onClose(); };
   const planner = agents.find((a) => a.id === 'planner'), executor = agents.find((a) => a.id === 'executor');
   const system = state?.system;
-  const Agent = ({ a, name }) => (
-    <li className={`status ${TONE_CLASS[AGENT_TONE(a)]}`} title={a?.detail || undefined}>
-      <Glyph kind={AGENT_TONE(a)} /><span className="side-agent"><b>{name}</b><span className="side-state">{a ? statusLabel(a.status) : 'sem dados'}</span></span>
-    </li>
-  );
+  const execFailed = latestExecutionFailed(missions.flatMap((m) => m.tasks));
   const cls = `side${collapsed && !modal ? ' collapsed' : ''}${modal ? ' modal' : ''}`;
   return (
     <aside id="nav-drawer" ref={box} className={cls} {...(modal ? { role: 'dialog', 'aria-modal': true, 'aria-label': 'Navegação' } : { 'aria-label': 'Navegação lateral' })}>
@@ -126,9 +120,9 @@ export default function Sidebar({ page, modal = false, collapsed = false, onTogg
         ))}
       </div>
       <ul className="side-foot" aria-label="Estado do sistema">
-        <Agent a={planner} name="Planner" />
-        <Agent a={executor} name="Executor" />
-        <li className={`status s-${system === 'running' ? 'running' : system === 'degraded' ? 'degraded' : 'idle'}`} role="status"><i aria-hidden="true" /><span className="side-agent"><b>Sistema</b><span className="side-state">{state ? statusLabel(system) : '…'}</span></span></li>
+        <li title={planner?.detail || undefined}><span className="side-name">Planner</span><AgentStatus agent={planner} /></li>
+        <li title={executor?.detail || undefined}><span className="side-name">Executor</span><AgentStatus agent={executor} failed={execFailed} /></li>
+        <li role="status"><span className="side-name">Sistema</span><span className={`status s-${system === 'running' ? 'running' : system === 'degraded' ? 'degraded' : 'idle'}`}><i aria-hidden="true" /><span className="ag-text">{state ? statusLabel(system) : '…'}</span></span></li>
       </ul>
     </aside>
   );

@@ -71,8 +71,7 @@
 .orb { flex: none; display: block; }
 .orch-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .orch-text b { font-size: var(--fs-lg); font-weight: 580; letter-spacing: -.01em; color: var(--strong); }
-.orch .status { white-space: normal; }
-.orch.st-awaiting .status { color: var(--warn); } .orch.st-error .status { color: var(--err); } .orch.st-planning .status, .orch.st-executing .status { color: var(--run); } .orch.st-idle .status { color: var(--muted); }
+.orch .ag { white-space: normal; }
 .ck-side .tabs { flex: none; margin: 0 var(--sp-5); }
 .ck-panel { flex: 1; min-height: 0; overflow: auto; padding: var(--sp-4) var(--sp-5) var(--sp-6); animation: fade-in var(--dur-2) ease; }
 .ck-panel:focus { outline: none; }
@@ -89,12 +88,10 @@
 .agent-row > summary::-webkit-details-marker { display: none; }
 .agent-row > summary::after { content: ''; flex: none; width: 7px; height: 7px; margin-left: var(--sp-1); border-right: 1.5px solid var(--dim); border-bottom: 1.5px solid var(--dim); transform: rotate(45deg) translateY(-2px); transition: transform var(--dur-2) var(--ease); }
 .agent-row[open] > summary::after { transform: rotate(-135deg); }
-.agent-row > summary .status { margin-left: auto; }
+.agent-row > summary .ag { margin-left: auto; }
 .ar-name { font-weight: 560; color: var(--strong); }
 .ar-body { padding: 0 var(--sp-4) var(--sp-4); }
 .ar-body p:first-child { margin-top: 0; }
-.st-active { color: var(--run); } .st-idle { color: var(--muted); } .st-live { color: var(--muted); } .st-awaiting { color: var(--warn); }
-.st-disconnected { color: var(--warn); } .st-unavailable { color: var(--muted); } .st-error { color: var(--err); }
 .events { list-style: none; margin: 0; padding: 0; }
 .events li { padding: var(--sp-3) 0; border-top: 1px solid var(--line); } .events li:first-child { border-top: 0; padding-top: 0; }
 .ev-meta { display: flex; gap: var(--sp-2); align-items: baseline; font-size: var(--fs-xs); color: var(--dim); }
