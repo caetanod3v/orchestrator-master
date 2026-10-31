@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { Panel, Btn, Status, DemoTag, Progress, Empty, fmtTime } from '../components/ui.jsx';
+import { Panel, Btn, Status, DemoTag, TaskSegments, Empty, Icon, fmtTime } from '../components/ui.jsx';
 import { TaskQueue } from '../components/Widgets.jsx';
 import CyclePanel from '../components/CyclePanel.jsx';
 
@@ -57,9 +57,8 @@ export default function Missions() {
             <tbody>
               {missions.map((m) => (
                 <tr key={m.id} className={`click${mission?.id === m.id ? ' sel' : ''}`} onClick={() => selectMission(m.id)}>
-                  <td><div><button type="button" className="rowlink" data-mission-id={m.id} aria-current={mission?.id === m.id ? 'true' : undefined}>{m.title}</button> {m.demo && <DemoTag />}</div><div className="dim small">{wsName(m.workspaceId)} · {fmtTime(m.createdAt)}</div></td>
-                  <td><Status value={m.status} /></td>
-                  <td><Btn onClick={(e) => { e.stopPropagation(); remove(m); }} title="Remover missão" aria-label={`Remover missão ${m.title}`}>✕</Btn></td>
+                  <td><div><button type="button" className="rowlink" data-mission-id={m.id} aria-current={mission?.id === m.id ? 'true' : undefined}>{m.title}</button> {m.demo && <DemoTag />}</div><div className="m-meta"><Status value={m.status} /><span className="dim small">{wsName(m.workspaceId)} · {fmtTime(m.createdAt)}</span></div></td>
+                  <td><button type="button" className="icon-btn" onClick={(e) => { e.stopPropagation(); remove(m); }} title="Remover missão" aria-label={`Remover missão ${m.title}`}><Icon name="close" size={16} /></button></td>
                 </tr>
               ))}
             </tbody>
@@ -68,12 +67,11 @@ export default function Missions() {
       </div>
       <div className="col">
         {mission ? (
-          <Panel title={`Detalhe: ${mission.title}`} demo={mission.demo}>
-            {mission.objective && <p>{mission.objective}</p>}
-            <Progress done={mission.tasks.filter((t) => t.status === 'completed').length} total={mission.tasks.length} />
-            <div className="gap" />
+          <Panel title={mission.title} demo={mission.demo} right={<Status value={mission.status} />}>
+            {mission.objective && <p className="m-obj">{mission.objective}</p>}
+            {mission.tasks.length > 0 && <div className="m-prog"><TaskSegments tasks={mission.tasks} /><span className="dim small">{mission.tasks.filter((t) => t.status === 'completed').length} de {mission.tasks.length} concluídas</span></div>}
             <CyclePanel mission={mission} />
-            <div className="gap" />
+            <h4 className="sec-h">Tarefas</h4>
             <TaskQueue mission={mission} />
             <form onSubmit={addTask} className="form inline">
               <input placeholder="Nova tarefa (manual)" value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} maxLength={200} required />
@@ -83,7 +81,7 @@ export default function Missions() {
               </select>
               <Btn type="submit">Adicionar</Btn>
             </form>
-            <div className="actions"><a className="btn" href="#/cockpit">Abrir no Cockpit →</a></div>
+            <div className="actions"><a className="btn" href="#/cockpit">Abrir no Cockpit <Icon name="arrowRight" size={15} /></a></div>
           </Panel>
         ) : <Empty>Selecione ou crie uma missão.</Empty>}
       </div>

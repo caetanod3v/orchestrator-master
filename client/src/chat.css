@@ -1,0 +1,96 @@
+/* Conversa: painel recolhível do Cockpit e página Conversa (o mesmo ChatView).
+   Referências: o composer grande e arredondado, com a barra de ferramentas embaixo; texto em coluna de leitura, sem bolhas; plano como artefato de trabalho. */
+
+/* ---------- painel recolhível ---------- */
+.chat-dock { position: relative; z-index: var(--z-dock); flex: none; min-width: 0; padding: 0 var(--sp-4) var(--sp-4); }
+.dock-bar { display: flex; align-items: center; gap: var(--sp-3); width: 100%; min-height: 56px; padding: var(--sp-2) var(--sp-4); font: inherit; font-size: var(--fs-md); text-align: left; color: var(--dim); background: var(--raise); border: 0; border-radius: var(--r-3); cursor: pointer; transition: var(--t-color); }
+.dock-ico { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--r-2); background: var(--raise2); color: var(--text); }
+.dock-bar .ttl { color: var(--strong); font-weight: 520; white-space: nowrap; }
+.chat-dock:not(.open) .dock-bar .ttl { color: var(--dim); font-weight: 450; }
+.dock-bar .hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: var(--fs-sm); }
+.dock-bar .status { min-width: 0; }
+.dock-bar .tog { flex: none; display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--dim); font-size: var(--fs-sm); white-space: nowrap; }
+.chat-dock.open .dock-bar { border-radius: var(--r-3) var(--r-3) 0 0; background: var(--raise); }
+.dock-body { height: clamp(280px, 36vh, 420px); display: flex; flex-direction: column; min-height: 0; background: var(--raise); border-radius: 0 0 var(--r-3) var(--r-3); overflow: hidden; }
+.dock-body[hidden] { display: none; }
+@media (hover: hover) and (pointer: fine) { .dock-bar:hover { background: var(--raise2); color: var(--strong); } .chat-dock.open .dock-bar:hover { background: var(--raise); } .dock-bar:hover .tog { color: var(--strong); } }
+@media (max-width: 900px) {
+  .chat-dock { padding: 0 var(--sp-3) var(--sp-3); } .dock-bar .tog .txt, .dock-bar .hint, .dock-bar .status { display: none; }
+  .chat-dock.open { flex: 1; display: flex; flex-direction: column; min-height: 0; } .chat-dock.open .dock-body { height: auto; flex: 1; }
+}
+
+/* ---------- página e rolagem ---------- */
+.content.chatpage { padding: 0 var(--sp-4) var(--sp-4); }
+.chat-page { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.chat-top { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-5); min-height: 44px; }
+.chat-page.embedded .chat-top { min-height: 0; padding: var(--sp-2) var(--sp-4) 0; justify-content: flex-end; }
+.chat-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-4) var(--sp-5); scroll-behavior: smooth; }
+.chat-col { max-width: var(--w-read); min-height: 100%; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-5); }
+.chat-col.is-empty { justify-content: center; }
+.chat-hello { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-3); padding: var(--sp-5) 0; }
+.chat-hello h2 { font-size: var(--fs-2xl); font-weight: 560; letter-spacing: -.025em; line-height: 1.15; }
+.chat-hello p { margin: 0; max-width: 56ch; line-height: var(--lh-read); }
+.chat-page.embedded .chat-hello { padding: 0; } .chat-page.embedded .chat-hello h2 { font-size: var(--fs-xl); }
+
+/* ---------- mensagens: o papel em cima, o texto em coluna de leitura ---------- */
+.msg { display: flex; flex-direction: column; gap: 6px; max-width: 100%; animation: msg-in var(--dur-3) var(--ease) both; }
+.msg-role { font-size: var(--fs-xs); font-weight: 560; color: var(--dim); }
+.msg-body { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: var(--lh-read); color: var(--text); }
+.msg.user .msg-role { color: var(--faint); }
+.msg.user .msg-body { color: var(--strong); padding: var(--sp-3) var(--sp-4); background: var(--raise); border-radius: var(--r-3); width: fit-content; max-width: 100%; }
+.msg ul { margin: var(--sp-2) 0 0; padding-left: var(--sp-5); white-space: normal; }
+.msg.clarify .msg-body { padding-left: var(--sp-4); box-shadow: inset 2px 0 0 var(--warn); }
+.msg-ask { display: block; margin-bottom: var(--sp-1); font-size: var(--fs-sm); font-weight: 560; color: var(--warn-text); }
+@keyframes msg-in { from { opacity: 0; transform: translateY(6px); } }
+.typing { display: inline-flex; gap: 4px; margin-left: var(--sp-2); vertical-align: middle; }
+.typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--dim); animation: blink 1.2s ease-in-out infinite; } .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 50% { opacity: .25; } }
+.brief { padding: var(--sp-3) var(--sp-4); background: var(--raise); border-radius: var(--r-2); color: var(--text); }
+.brief summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); } .brief .k { display: inline; } .brief summary b { color: var(--strong); font-weight: 520; }
+@media (max-width: 900px) { .chat-scroll { padding-inline: var(--sp-3); } .content.chatpage { padding-inline: var(--sp-2); } }
+
+/* ---------- plano preparado: artefato de trabalho ---------- */
+.plan { background: var(--raise); border-radius: var(--r-3); animation: msg-in var(--dur-3) var(--ease) both; }
+.plan-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); padding: var(--sp-3) var(--sp-4); font-size: var(--fs-sm); background: rgba(0, 0, 0, .18); border-radius: var(--r-3) var(--r-3) 0 0; }
+.plan-kicker { display: inline-flex; align-items: center; gap: var(--sp-2); color: var(--strong); font-weight: 560; }
+.plan-state { display: inline-flex; align-items: center; gap: 7px; color: var(--warn); font-weight: 520; }
+.plan-body { padding: var(--sp-4) var(--sp-5) var(--sp-5); }
+.plan-title { font-size: 18px; font-weight: 580; }
+.plan-obj { margin: var(--sp-2) 0 0; color: var(--text); line-height: var(--lh-read); }
+.plan-note { margin: var(--sp-1) 0 var(--sp-3); font-size: var(--fs-sm); color: var(--dim); }
+.plan-steps { list-style: none; margin: var(--sp-4) 0 var(--sp-3); padding: 0; }
+.plan-steps li { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: var(--sp-2); padding: var(--sp-3) 0; border-top: 1px solid var(--line); animation: msg-in var(--dur-3) var(--ease) both; animation-delay: calc(var(--i, 0) * 50ms + 80ms); }
+.plan-steps li.step-warn, .plan-steps li.step-bad { margin-inline: calc(var(--sp-3) * -1); padding-inline: var(--sp-3); border-radius: var(--r-2); border-top-color: transparent; }
+.plan-steps li.step-warn { background: var(--warn-bg); } .plan-steps li.step-bad { background: var(--err-bg); }
+.step-n { font-family: var(--mono); font-size: var(--fs-sm); color: var(--dim); padding-top: 1px; font-variant-numeric: tabular-nums; }
+.step-main { min-width: 0; line-height: var(--lh); } .step-main > b { color: var(--strong); font-weight: 560; }
+.step-flag { display: flex; align-items: center; gap: 7px; margin-top: var(--sp-1); font-size: var(--fs-sm); font-weight: 520; }
+.step-flag.warn { color: var(--warn-text); } .step-flag.bad { color: var(--danger-text); }
+.step-why { margin: 2px 0 0; font-size: var(--fs-sm); color: var(--dim); }
+.plan-actions { border-top: 1px solid var(--line); padding-top: var(--sp-4); margin-top: var(--sp-2); }
+.plan-rounds { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3); font-size: var(--fs-sm); color: var(--dim); }
+.plan-rounds input { width: 72px; flex: none; }
+
+/* ---------- entrada: campo grande + barra de ferramentas ---------- */
+.composer-wrap { flex: none; padding: var(--sp-2) var(--sp-5) var(--sp-4); }
+.composer-col { max-width: var(--w-read); margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-2); }
+.composer { display: flex; flex-direction: column; background: var(--raise); border-radius: var(--r-4); padding: var(--sp-3) var(--sp-3) var(--sp-2) var(--sp-4); transition: background-color var(--dur-2) ease, box-shadow var(--dur-2) ease; }
+.composer:focus-within { background: var(--raise2); box-shadow: 0 0 0 1.5px var(--line-control); }
+.composer textarea { width: 100%; resize: none; border: 0; outline: 0; background: transparent; color: var(--strong); padding: var(--sp-1) 0; border-radius: 0; font-size: 15px; line-height: 1.55; min-height: 28px; max-height: 200px; overflow-y: auto; }
+.composer textarea:focus { outline: 0; box-shadow: none; }
+.composer-bar { display: flex; align-items: center; gap: var(--sp-2); padding-top: var(--sp-2); }
+.composer-bar .attach { width: 34px; height: 34px; background: var(--raise2); border-radius: 10px; }
+.composer-ws { display: inline-flex; align-items: center; gap: 6px; max-width: 50%; font-size: var(--fs-sm); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer .send { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 50%; background: var(--bone); color: var(--ink); cursor: pointer; transition: var(--t-color), transform var(--dur-1) var(--ease); }
+.composer .send:active:not(:disabled) { transform: scale(.94); }
+.composer .send:disabled { background: var(--raise2); color: var(--faint); cursor: not-allowed; }
+.composer-hint { margin: 0; text-align: center; font-size: var(--fs-xs); }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px var(--sp-3); background: var(--raise); border-radius: var(--r-1); font-size: var(--fs-xs); color: var(--text); }
+.chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.chip-x { border: 0; background: transparent; color: var(--dim); cursor: pointer; display: grid; place-items: center; padding: 2px; border-radius: 6px; }
+@media (hover: hover) and (pointer: fine) { .chip-x:hover { color: var(--strong); } .composer .send:hover:not(:disabled) { background: var(--bone-hover); } .composer-bar .attach:hover:not(:disabled) { background: var(--raise); } }
+@media (max-width: 900px) { .composer-wrap { padding-inline: var(--sp-2); } .composer-hint { display: none; } }
+.dock-body .composer-wrap { padding-bottom: var(--sp-3); } .dock-body .composer { background: var(--raise2); } .dock-body .composer:focus-within { background: var(--bg); }
+
+@media (prefers-reduced-motion: reduce) { .msg, .plan, .plan-steps li { animation: none; } .typing i { animation: none; } .chat-scroll { scroll-behavior: auto; } }

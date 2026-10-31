@@ -29,11 +29,11 @@ export default function VerificationPanel({ workspace }) {
       <div className="row"><b className="sub">Verificações reais</b><span className="dim small">{workspace.name}</span></div>
       <p className="dim small">
         O orquestrador roda <span className="mono">npm run &lt;script&gt;</span> neste espaço de trabalho depois de cada rodada bem-sucedida do ciclo e registra comando, código de saída e duração.
-        ⚠ Isso executa código do projeto, inclusive arquivos que o Executor editou; aprove somente scripts em que você confia.
+        Atenção: isso executa código do projeto, inclusive arquivos que o Executor editou; aprove somente scripts em que você confia.
         O texto do script fica fixado: se o <span className="mono">package.json</span> mudar, a verificação não roda até você aprovar de novo.
       </p>
-      {info.error && <p className="s-failed small">{info.error}</p>}
-      {!info.npmAvailable && <p className="s-failed small">npm não encontrado junto ao Node: nenhuma verificação poderá rodar.</p>}
+      {info.error && <p className="stale err">{info.error}</p>}
+      {!info.npmAvailable && <p className="stale err">npm não encontrado junto ao Node: nenhuma verificação poderá rodar.</p>}
       {!info.error && info.detected.length === 0 && <p className="dim small">Nenhum script permitido ({info.allowed?.join(', ')}) no package.json.</p>}
       {info.detected.map((d) => (
         <div key={d.script} className="vrow">
@@ -46,7 +46,7 @@ export default function VerificationPanel({ workspace }) {
             obrigatória para concluir
           </label>
           <div className="mono small dim">{d.command}</div>
-          {d.changedSinceApproval && <div className="s-blocked small">⚠ o script mudou desde a aprovação: salve para aprovar o texto atual (até lá ele não roda)</div>}
+          {d.changedSinceApproval && <div className="stale small">O script mudou desde a aprovação: salve para aprovar o texto atual (até lá ele não roda)</div>}
         </div>
       ))}
       <div className="actions"><Btn kind="primary" onClick={save} disabled={!info.npmAvailable}>Salvar aprovação</Btn><Btn onClick={load}>Reler package.json</Btn></div>

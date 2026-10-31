@@ -1,0 +1,48 @@
+/* Páginas internas: Missões, Agentes, Espaços de trabalho, Atividade e Configurações, mais o ciclo autônomo (rodadas) que aparece em Missões e no Cockpit. */
+
+svg { vertical-align: -3px; }
+.stale.err { background: var(--err-bg); color: var(--danger-text); } .stale.ok { background: var(--ok-bg); color: var(--ok-text); }
+.sec-h { margin: var(--sp-5) 0 var(--sp-2); font-size: var(--fs-xs); font-weight: 500; letter-spacing: 0; color: var(--dim); }
+
+/* Missões */
+.m-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin-top: 3px; }
+.tbl tr.sel .btn { background: var(--raise3); }
+.tbl.mono td:last-child { font-family: var(--sans); font-size: var(--fs-md); }
+.m-obj { margin: 0 0 var(--sp-3); color: var(--text); line-height: var(--lh-read); max-width: 70ch; }
+.m-prog { display: flex; align-items: center; gap: var(--sp-3); } .m-prog .segs { width: 120px; flex: none; }
+.tbl .dim.small { margin-top: 2px; }
+
+/* Agentes */
+.agent-list { display: flex; flex-direction: column; gap: var(--sp-3); }
+.agent { background: var(--bg); }
+.agent-name { font-size: var(--fs-lg); }
+.agent-role { margin: var(--sp-2) 0 var(--sp-1); color: var(--text); line-height: var(--lh-read); }
+.pipe-wrap { margin-bottom: var(--sp-5); } .pipe-wrap h4 { margin-bottom: var(--sp-2); font-size: var(--fs-xs); font-weight: 500; color: var(--dim); }
+.pipe { list-style: none; margin: 0; padding: 0; }
+.pipe li { position: relative; padding: 0 0 var(--sp-3) var(--sp-5); color: var(--text); font-size: var(--fs-sm); line-height: var(--lh-tight); }
+.pipe li::before { content: ''; position: absolute; left: 0; top: 3px; width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--line-strong); background: var(--raise); }
+.pipe li:not(:last-child)::after { content: ''; position: absolute; left: 4px; top: 15px; bottom: 3px; width: 1.5px; background: var(--line-strong); }
+.pipe li b { color: var(--strong); font-weight: 600; } .pipe li:has(b)::before { background: var(--strong); box-shadow: none; }
+.lead-p { line-height: var(--lh-read); }
+
+/* Espaços de trabalho */
+.ws-on { margin-left: var(--sp-2); font-size: var(--fs-xs); font-weight: 560; }
+.tbl .mono.dim.small { margin: 2px 0 var(--sp-1); }
+
+/* Configurações */
+.rules li { line-height: var(--lh-read); }
+
+/* Ciclo autônomo: rodadas como linha do tempo, cada fase com seu rótulo e ícone */
+.cycle { display: flex; flex-direction: column; gap: var(--sp-2); }
+.cycle .form { margin-top: var(--sp-2); }
+.rounds { margin-top: var(--sp-3); }
+.round { position: relative; margin-left: var(--sp-2); padding-left: var(--sp-5); border-left: 1.5px solid var(--line-strong); }
+.round > summary { display: flex; align-items: center; gap: var(--sp-3); min-height: 38px; padding: var(--sp-2) 0; border: 0; list-style: none; }
+.round > summary::-webkit-details-marker { display: none; }
+.round > summary::before { content: ''; position: absolute; left: -5.5px; top: 15px; width: 9px; height: 9px; border-radius: 50%; background: var(--raise); box-shadow: 0 0 0 1.5px var(--line-strong); }
+.round[open] > summary::before { background: var(--strong); box-shadow: none; }
+.round > div { padding: 0 0 var(--sp-4); }
+.round .k.ph { display: flex; align-items: center; gap: 6px; margin-top: var(--sp-4); color: var(--text); font-weight: 560; } .round .k.ph:first-child { margin-top: var(--sp-1); }
+.round .k.ph svg { color: var(--dim); }
+.round pre.vout { margin-top: var(--sp-2); }
+.round [data-testid="evidence"] .stale { margin-top: var(--sp-1); }

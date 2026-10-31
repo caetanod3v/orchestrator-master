@@ -1,0 +1,48 @@
+/* AI Dev Orchestrator — tokens do sistema visual.
+   Fonte única de cor, tipografia, espaço, forma e movimento. Os demais .css só consomem estes valores.
+   Linguagem (derivada de /referencia): grafite quente em camadas tonais (chassi < folha < superfície), cantos generosos, quase nenhum contorno,
+   ação primária em bone (branco quente) e cor só para estado. Sem gradiente, brilho, vidro ou acento de marca. */
+
+:root {
+  color-scheme: dark; /* controles nativos no tema escuro */
+
+  /* camadas: --bg é o chassi (atrás da sidebar); --surface é a folha de conteúdo; --raise é qualquer coisa elevada dentro dela; --raise2 é hover/selecionado/pressionado. */
+  --bg: #121211; --surface: #1a1a19; --raise: #232321; --raise2: #2d2d2a; --raise3: #383835; --canvas: #161615; --term-bg: #0f0f0e;
+  /* separadores: raros. --line divide listas; --line-strong contorna o que precisa de limite; --line-control contorna campos (≥ 3:1). */
+  --line: rgba(255, 250, 240, .08); --line-strong: rgba(255, 250, 240, .26); --line-control: rgba(255, 250, 240, .4);
+
+  /* texto: --strong títulos e valores; --text corpo; --dim apoio; --faint só placeholder e metadado (todos ≥ 4,5:1 sobre --raise2) */
+  --strong: #f4f3ef; --text: #dddbd5; --dim: #a8a6a0; --faint: #96948d;
+  /* ação primária e foco: bone. É a identidade: nenhuma cor de marca. */
+  --bone: #ecebe7; --bone-hover: #ffffff; --ink: #121211; --focus: #f4f3ef;
+
+  /* estados (cor + glifo + texto, nunca só a cor), com o MESMO significado em todo o produto, dessaturados para não competir com o conteúdo:
+     --muted cinza = ocioso, na fila, desconectado | --run azul discreto = executando | --ok verde = concluído | --warn âmbar = aguardando decisão humana | --interrupted cinza-azulado = interrompido | --err vermelho suave = erro */
+  --run: #7ea6d8; --ok: #62c48f; --warn: #e2b052; --err: #ee6f66; --muted: #a09e97; --interrupted: #94a3b8;
+  --ok-bg: rgba(98, 196, 143, .1); --warn-bg: rgba(226, 176, 82, .1); --err-bg: rgba(238, 111, 102, .1);
+  --ok-text: #8bd8ae; --warn-text: #ecc77d; --danger-text: #f6aaa3;
+
+  /* tipografia: fontes do sistema (nada externo; o produto roda offline). Mono só para hora, caminho e comando. */
+  --sans: 'Inter Variable', Inter, 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  /* escala (mínimo de 12px): xs metadado | sm apoio e controles | md corpo | lg subtítulo | xl título de página | 2xl título da conversa */
+  --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-xl: 22px; --fs-2xl: 30px;
+  --lh: 1.5; --lh-tight: 1.3; --lh-read: 1.65;
+
+  /* espaço (base 4) */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
+  /* forma */
+  --r-1: 8px; --r-2: 12px; --r-3: 16px; --r-4: 20px;
+  /* larguras */
+  --w-side: 248px; --w-side-min: 64px; --w-inspector: 360px; --w-read: 720px; --w-page: 1080px;
+
+  /* movimento: ações de teclado e de alta frequência não animam; o resto fica entre 120 e 240 ms. Só transform, opacity e cor.
+     --dur-scene (≤ 480 ms) é só para cenas raras: entrada da página e o desenho do grafo ao carregar uma missão. */
+  --dur-1: 120ms; --dur-2: 180ms; --dur-3: 240ms; --dur-scene: 480ms;
+  --ease: cubic-bezier(.23, 1, .32, 1); --ease-io: cubic-bezier(.77, 0, .175, 1);
+  --t-color: background-color var(--dur-1) ease, border-color var(--dur-1) ease, color var(--dur-1) ease, opacity var(--dur-1) ease;
+
+  /* camadas z */
+  --z-dock: 6; --z-pop: 50; --z-scrim: 40; --z-nav: 41; --z-toast: 60;
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, .5), 0 0 0 1px var(--line-strong);
+}

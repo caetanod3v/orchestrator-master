@@ -1,34 +1,20 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { Progress, DemoTag, Empty, Btn, Icon, fmtTime, statusLabel, typeLabel, cycleApprovalPending } from '../components/ui.jsx';
-import { AgentCard, TaskQueue, Terminal, ReviewPanel } from '../components/Widgets.jsx';
-import NeuralCore, { reactionFor, usePrefersReduced } from '../components/NeuralCore.jsx';
+import { TaskSegments, DemoTag, Btn, Glyph, fmtTime, statusLabel, typeLabel, cycleApprovalPending } from '../components/ui.jsx';
+import TaskInspector from '../components/TaskInspector.jsx';
+import NeuralCore from '../components/NeuralCore.jsx';
+import FlowGraph from '../components/FlowGraph.jsx';
 import CyclePanel from '../components/CyclePanel.jsx';
 import ChatDock from '../components/ChatDock.jsx';
 import { agentTokens } from '../usage-view.js';
+import { agentState, latestExecutionFailed, coreMode, CORE_LABEL } from '../op-state.js';
 
-// Posição de cada nó (fração da área) e conexões justificadas pela arquitetura:
-// planner propõe -> portão humano aprova -> executor executa no workspace; a fila alimenta o núcleo.
-// Uma conexão desenhada indica relação, não comunicação em andamento.
-const POS = { planner: [0.17, 0.3], executor: [0.83, 0.3], queue: [0.1, 0.66], workspace: [0.9, 0.66], gate: [0.5, 0.9] };
-const LINKS = [
-  ['core', 'planner'], ['core', 'executor'], ['core', 'gate'], ['core', 'workspace'], ['core', 'queue'],
-  ['planner', 'gate'], ['gate', 'executor'], ['executor', 'workspace'],
-];
-const LABEL = { planner: 'Planner', executor: 'Executor', gate: 'Aprovação humana', queue: 'Fila de tarefas', workspace: 'Espaço de trabalho' };
-const ICON = { planner: 'planner', executor: 'executor', gate: 'gate', queue: 'queue', workspace: 'workspace' };
-// Descrição fixa do papel de cada elemento na arquitetura (não é dado de execução).
-const ROLE = { planner: 'Decide a próxima etapa', executor: 'Lê e edita arquivos', gate: 'Decisão humana', queue: 'Tarefas da missão', workspace: 'Repositório autorizado' };
-const KIND = { planner: 'agent', executor: 'agent', gate: 'gate', queue: 'res', workspace: 'res' };
 const STATE_LABEL = {
   active: 'ativo', idle: 'ocioso', live: 'disponível', awaiting: 'aguardando aprovação',
   disconnected: 'desconectado', unavailable: 'indisponível', error: 'erro',
 };
-const KIND_LABEL = { agent: 'agente', gate: 'portão humano', res: 'recurso' };
-
-const agentState = (a) => (a.status === 'running' ? 'active' : a.status === 'idle' ? 'idle'
-  : a.availability === 'disconnected' ? 'disconnected' : 'unavailable');
+const CORE_GLYPH = { idle: 'idle', planning: 'active', executing: 'active', awaiting: 'awaiting', error: 'error' };
 
 // Eventos NOVOS desde que a tela carregou (o histórico inicial nunca gera reação).
 function useFresh(events, ready) {
@@ -45,134 +31,68 @@ function useFresh(events, ready) {
   return fresh;
 }
 
-function Node({ id, line, tokens, state, selected, flash, onClick }) {
-  const kind = KIND[id];
-  return (
-    <button id={`node-${id}`} type="button" aria-pressed={selected}
-      aria-label={`${LABEL[id]}, ${KIND_LABEL[kind]}, estado: ${STATE_LABEL[state]}${line ? `, ${line}` : ''}${tokens ? `, tokens: ${tokens.text}${tokens.partial ? ' (parcial)' : ''}` : ''}`}
-      className={`nc-node k-${kind} st-${state}${selected ? ' sel' : ''}${flash ? ' flash' : ''}${POS[id][0] > 0.7 ? ' shiftable' : ''}`}
-      style={{ '--x': `${POS[id][0] * 100}%`, '--y': `${POS[id][1] * 100}%` }} onClick={onClick}>
-      <span className="ico" aria-hidden="true"><Icon name={ICON[id]} size={18} /></span>
-      <span className="body">
-        <span className="kind">{KIND_LABEL[kind]}</span>
-        <b>{LABEL[id]}</b>
-        <span className="role">{ROLE[id]}</span>
-        <span className="st"><i />{STATE_LABEL[state]}</span>
-        {line && <span className="line">{line}</span>}
-        {tokens && (
-          <span className="tokens" title="Tokens reportados pela CLI do Claude Code nesta missão. Parcial: ainda sem o total final da execução.">
-            Tokens: {tokens.text}{tokens.partial && <em> parcial</em>}
-          </span>
-        )}
-      </span>
-    </button>
-  );
-}
-
-// Tom visual do evento (só reforça o tipo, que sempre aparece em texto): aprovação = verde; rejeição = vermelho; o resto, neutro.
+// Tom do evento (só reforça o tipo, que sempre aparece em texto): aprovação = verde; rejeição = vermelho; o resto, neutro.
 const EVENT_TONE = { approval: 'ok', rejection: 'bad' };
 function Events({ items, empty }) {
-  if (!items.length) return <div className="dim small">{empty}</div>;
+  if (!items.length) return <p className="dim small">{empty}</p>;
   return (
     <ul className="events">
       {items.map((a) => (
         <li key={a.id} className={`ev-${EVENT_TONE[a.type] || 'n'}`}>
-          <time className="ev-time mono" dateTime={a.at}>{fmtTime(a.at).split(' ')[1]}</time>
-          <span className={`ev-type t-${a.type}`}>{typeLabel(a.type)}</span>
-          <span className="ev-msg">{a.message}</span>
+          <div className="ev-meta"><time className="ev-time" dateTime={a.at}>{fmtTime(a.at).split(' ')[1]}</time><span className="ev-type">{typeLabel(a.type)}</span></div>
+          <div className="ev-msg">{a.message}</div>
         </li>
       ))}
     </ul>
   );
 }
-const Row = ({ k, children }) => <div className="row small"><span className="dim">{k}</span><span className="val">{children}</span></div>;
+const Kv = ({ k, children }) => <div className="kv"><span>{k}</span><span>{children}</span></div>;
 
 export default function Cockpit() {
   const { mission, missions, agents, activity, state, act, notify, selectMission } = useStore();
-  const [taskId, setTaskId] = useState(null);
-  const [sel, setSel] = useState(null);       // nó selecionado (alvo)
-  const [panel, setPanel] = useState(null);   // painel renderizado (permanece montado durante a saída)
-  const [flash, setFlash] = useState({});
+  const [sel, setSel] = useState(null);       // tarefa selecionada no grafo (id)
+  const [tab, setTab] = useState('overview'); // overview | events | task | cycle
   const [git, setGit] = useState(null);
   const panelRef = useRef(null);
   const fresh = useFresh(activity, !!state);
-  const prefersReduced = usePrefersReduced();
-  const [force, setForce] = useState(() => { try { return localStorage.getItem('core-motion') === 'on'; } catch { return false; } });
-  const toggleForce = () => setForce((f) => { try { localStorage.setItem('core-motion', f ? 'off' : 'on'); } catch { /* sem armazenamento */ } return !f; });
+  const flash = useMemo(() => new Set(fresh.events.map((e) => e.taskId).filter(Boolean)), [fresh.batch]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [locate, setLocate] = useState(null); // pedido de centralizar uma tarefa no canvas
 
-  useEffect(() => {
-    if (!mission) return;
-    const pending = mission.tasks.find((t) => t.status === 'awaiting_approval');
-    setTaskId((cur) => (mission.tasks.some((t) => t.id === cur) ? cur : (pending || mission.tasks[0])?.id ?? null));
-  }, [mission?.id]);
+  // ao trocar de missão a seleção só sobrevive se a tarefa pertence à nova missão
+  useEffect(() => { setSel((cur) => (mission?.tasks.some((t) => t.id === cur) ? cur : null)); }, [mission?.id]);
+  useEffect(() => { if (!sel && tab === 'task') setTab('overview'); }, [sel, tab]);
 
-  // painel: monta ao selecionar, desmonta 200 ms depois de desselecionar (animação de saída)
-  useEffect(() => {
-    if (sel) { setPanel(sel); return undefined; }
-    const t = setTimeout(() => setPanel(null), 200);
-    return () => clearTimeout(t);
-  }, [sel]);
-  useEffect(() => { if (sel && sel !== 'queue') panelRef.current?.focus(); }, [panel]);
-
-  const close = useCallback(() => {
-    setSel((cur) => { if (cur) setTimeout(() => document.getElementById(`node-${cur}`)?.focus(), 0); return null; });
+  const select = useCallback((id) => { setSel(id); setTab('task'); setTimeout(() => panelRef.current?.focus(), 0); }, []);
+  const clear = useCallback(() => {
+    setSel((cur) => { if (cur) setTimeout(() => document.querySelector(`[data-node="${cur}"]`)?.focus(), 0); return null; });
   }, []);
   useEffect(() => {
-    const k = (e) => { if (e.key === 'Escape') close(); };
+    const k = (e) => { if (e.key === 'Escape' && !document.querySelector('.menu')) clear(); };
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
-  }, [close]);
-
-  // reação dos nós a eventos reais novos
-  useEffect(() => {
-    const ids = fresh.events.map((e) => reactionFor(e).node).filter(Boolean);
-    if (!ids.length) return undefined;
-    setFlash((f) => Object.fromEntries([...Object.entries(f), ...ids.map((i) => [i, fresh.batch])]));
-    const t = setTimeout(() => setFlash({}), 1500);
-    return () => clearTimeout(t);
-  }, [fresh.batch]);
+  }, [clear]);
 
   const planner = agents.find((a) => a.id === 'planner');
   const executor = agents.find((a) => a.id === 'executor');
   const awaiting = state?.counts.awaitingApproval ?? 0;
   const cycleApprovals = missions.filter(cycleApprovalPending); // M9: ações do ciclo esperando aprovação (dado real do servidor)
-  const running = (state?.counts.running ?? 0) > 0;
   const ws = state?.activeWorkspace;
   const execBusy = !!state?.executor.busy;
   const runningTask = missions.flatMap((m) => m.tasks).find((t) => t.id === state?.executor.current?.taskId);
-  const task = mission?.tasks.find((t) => t.id === taskId);
-  const pendingTasks = mission?.tasks.filter((t) => t.status === 'awaiting_approval') ?? [];
-  const current = mission?.tasks.find((t) => t.status === 'running') || pendingTasks[0] || mission?.tasks.find((t) => t.status === 'queued');
+  const task = mission?.tasks.find((t) => t.id === sel);
+  const pendingFirst = missions.flatMap((m) => m.tasks.filter((t) => t.status === 'awaiting_approval').map((t) => ({ m, t })))[0];
+  const current = mission?.tasks.find((t) => t.status === 'running') || mission?.tasks.find((t) => t.status === 'awaiting_approval') || mission?.tasks.find((t) => t.status === 'queued');
   const done = mission ? mission.tasks.filter((t) => t.status === 'completed').length : 0;
   // erro do executor = a execução MAIS RECENTE falhou (e não foi rejeição humana); uma execução posterior bem-sucedida o supera
-  const execError = (() => {
-    const all = missions.flatMap((m) => m.tasks);
-    const t = (x) => x.finishedAt || '';
-    const failed = all.filter((x) => x.status === 'failed' && !x.rejected).map(t).sort().at(-1);
-    const other = all.filter((x) => x.status !== 'failed' && x.finishedAt).map(t).sort().at(-1) ?? '';
-    return failed !== undefined && failed >= other;
-  })();
-
-  const st = {
-    planner: planner ? agentState(planner) : 'unavailable',
-    executor: execError ? 'error' : executor ? agentState(executor) : 'unavailable',
-    gate: awaiting > 0 ? 'awaiting' : 'live', queue: 'live', workspace: ws ? 'live' : 'disconnected',
-  };
-  const nodes = Object.keys(POS).map((id) => ({ id, x: POS[id][0], y: POS[id][1], state: st[id] }));
-  const lines = {
-    planner: planner?.detail, executor: execBusy ? `executando: ${runningTask?.title ?? '…'}` : executor?.available ? `Claude Code ${executor.version?.split(' ')[0] ?? ''}` : 'CLI não detectada',
-    gate: awaiting > 0 ? `${awaiting} pendente${awaiting > 1 ? 's' : ''}` : 'sem pendências',
-    queue: `${state?.counts.pending ?? 0} ${state?.counts.pending === 1 ? 'pendente' : 'pendentes'}`, workspace: ws ? ws.name : 'nenhum ativo',
-  };
-
-  // Tokens desta missão por agente (/api/state.usage, já deduplicado pelo servidor); só os nós dos agentes mostram.
+  const execError = latestExecutionFailed(missions.flatMap((m) => m.tasks));
+  const plannerSt = agentState(planner);
+  const executorSt = execError ? 'error' : agentState(executor);
+  const pendingAll = awaiting + cycleApprovals.length;
+  // o núcleo reflete o estado REAL (executor ocupado, planner ocupado, falha, decisão pendente), sem temporizadores nem simulação
+  const mode = coreMode({ executorBusy: execBusy, runningTasks: state?.counts.running ?? 0, plannerBusy: !!state?.planner?.busy || planner?.status === 'running', pending: pendingAll, failed: execError });
+  const coreLine = { executing: `Executando: ${runningTask?.title ?? 'uma tarefa'}`, planning: 'O Planner está decidindo a próxima etapa.', awaiting: 'Nada executa até você decidir.', error: 'A última execução falhou; veja a tarefa com erro.', idle: 'Sem execução ativa.' }[mode];
   const tokens = { planner: agentTokens(state?.usage, mission?.id, 'planner'), executor: agentTokens(state?.usage, mission?.id, 'executor') };
 
-  const choose = (id) => {
-    if (sel === id) { close(); return; }
-    if (id === 'gate' && pendingTasks[0]) setTaskId(pendingTasks[0].id);
-    setSel(id);
-  };
   // Cada ação chama a API; o servidor revalida tudo e devolve o motivo em caso de bloqueio.
   const post = async (path, ok) => {
     const r = await act(() => api.post(`/api/missions/${mission.id}/tasks/${task.id}/${path}`));
@@ -187,133 +107,127 @@ export default function Cockpit() {
     approve: () => post('approve', 'Resultado aprovado.'),
     reject: () => post('reject', 'Resultado rejeitado.'),
   };
-
+  const review = () => {
+    if (!pendingFirst && cycleApprovals.length) { selectMission(cycleApprovals[0].id); setTab('cycle'); return; }
+    if (!pendingFirst) return;
+    if (pendingFirst.m.id !== mission?.id) selectMission(pendingFirst.m.id);
+    select(pendingFirst.t.id);
+  };
 
   useEffect(() => {
-    if (panel !== 'workspace' || !ws) return undefined;
+    if (tab !== 'overview' || !ws) return undefined;
     let alive = true;
     setGit(null);
     api.get(`/api/workspaces/${ws.id}/git`).then((g) => alive && setGit(g)).catch((e) => alive && setGit({ error: e.message }));
     return () => { alive = false; };
-  }, [panel, ws?.id]);
+  }, [tab, ws?.id]);
 
-  const closing = !sel && panel;
-  const shifted = !!panel && panel !== 'queue' && !closing;
-  const closeBtn = <button type="button" className="btn" onClick={close} aria-label="Esc: fechar painel">Esc ✕</button>;
+  const tabs = [['overview', 'Visão geral'], ['events', 'Eventos'], ...(task ? [['task', 'Tarefa']] : []), ...(mission && !mission.demo ? [['cycle', 'Ciclo']] : [])];
+  const onTabKey = (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const i = tabs.findIndex(([id]) => id === tab), n = tabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length][0];
+    setTab(n); document.getElementById(`tab-${n}`)?.focus();
+  };
 
   return (
-    <div className="cockpit-shell">
-    <div className={`stage${shifted ? ' panel-open' : ''}`}>
-      <NeuralCore running={running} awaiting={awaiting + cycleApprovals.length} nodes={nodes} links={LINKS} fresh={fresh} selected={sel} forceMotion={force} layout={shifted ? 'shifted' : 'full'} />
-
-      <div className="nc-mission" aria-label="Missão atual">
-        <div className="nc-m-main">
-          <span className="k">missão {mission?.demo && <DemoTag />}</span>
-          <b className="nc-m-title">{mission ? mission.title : <>nenhuma — <a href="#/missions?new">criar</a></>}</b>
-        </div>
-        {mission?.cycle && <div className="nc-m-cell"><span className="k">ciclo</span><b>{statusLabel(mission.cycle.status, true)} · rodada {mission.cycle.rounds.length}/{mission.cycle.maxIterations}</b></div>}
-        <div className="nc-m-cell"><span className="k">tarefa</span><b>{current ? current.title : '—'}</b></div>
-        {mission && mission.tasks.length > 0 && <div className="nc-m-cell mini"><Progress done={done} total={mission.tasks.length} /><span className="dim small">{done}/{mission.tasks.length}</span></div>}
-      </div>
-      <div className="nc-actions">
-        {prefersReduced && <button type="button" className="btn motion" onClick={toggleForce} aria-pressed={force}>{force ? 'Animação forçada · voltar à preferência do sistema' : 'Movimento reduzido pelo sistema · animar mesmo assim'}</button>}
-        {cycleApprovals.length > 0 && (
-          <button className="alert" onClick={() => { selectMission(cycleApprovals[0].id); setSel('planner'); }}><Icon name="gate" size={14} /> {cycleApprovals.length} {cycleApprovals.length === 1 ? 'ação do ciclo aguarda' : 'ações do ciclo aguardam'} sua aprovação — revisar</button>
-        )}
-        {awaiting > 0
-          ? <button className="alert" onClick={() => choose('gate')}><Icon name="gate" size={14} /> {awaiting} {awaiting === 1 ? 'aprovação pendente' : 'aprovações pendentes'} — revisar</button>
-          : cycleApprovals.length === 0 && <span className="dim small">nenhuma aprovação pendente</span>}
-      </div>
-      <section className="nc-events" aria-label="Eventos recentes">
-        <header><span className="k">eventos recentes</span><a href="#/activity">ver atividade →</a></header>
-        <Events items={activity.slice(0, 4)} empty="Sem eventos ainda." />
-      </section>
-      <div className="nc-foot">
-        <div className="legend">
-          {['active', 'idle', 'awaiting', 'disconnected', 'unavailable', 'error'].map((s) => <span key={s} className={`st-${s}`}><i />{STATE_LABEL[s]}</span>)}
-        </div>
-        <button type="button" className="btn" aria-pressed={sel === 'queue'} onClick={() => choose('queue')}><Icon name={sel === 'queue' ? 'chevronDown' : 'chevronUp'} size={14} /> Fila e terminal</button>
-      </div>
-
-      {Object.keys(POS).filter((id) => (id !== 'planner' || planner) && (id !== 'executor' || executor)).map((id) => (
-        <Node key={id} id={id} state={st[id]} line={lines[id]} tokens={tokens[id]} selected={sel === id} flash={flash[id] !== undefined} onClick={() => choose(id)} />
-      ))}
-
-      {panel && panel !== 'queue' && (
-        <aside className={`nc-overlay${closing ? ' out' : ''}`} ref={panelRef} tabIndex={-1} role="dialog" aria-label={`Detalhes: ${LABEL[panel]}`}>
-          <header><h3>{LABEL[panel]} {panel === 'gate' && mission?.demo && <DemoTag />}</h3>{closeBtn}</header>
-          <div className="rowline"><span className={`st-${st[panel]}`}><i className="dot" />{STATE_LABEL[st[panel]]}</span><span className="dim small">{KIND_LABEL[KIND[panel]]}</span></div>
-
-          {panel === 'planner' && planner && <>
-            <p>{planner.role}</p>
-            <Row k="disponibilidade">{planner.availability === 'connected' ? 'conectado (Claude Code, sem ferramentas)' : 'indisponível'}</Row>
-            <Row k="planejando agora">{planner.status === 'running' ? 'sim' : 'não'}</Row>
-            <Row k="ciclo desta missão">{mission?.cycle ? `${statusLabel(mission.cycle.status, true)} · rodada ${mission.cycle.rounds.length}/${mission.cycle.maxIterations}` : 'nenhum'}</Row>
-            <p className="dim small">O Planner só devolve uma decisão (<span className="mono">continue</span>, <span className="mono">complete</span> ou <span className="mono">blocked</span>), validada pelo servidor. Não executa nada nem altera permissões.</p>
-            {mission && !mission.demo && <CyclePanel mission={mission} />}
-            {mission?.demo && <p className="dim small">Missão demonstrativa: o ciclo real está desabilitado.</p>}
-          </>}
-
-          {panel === 'executor' && executor && <>
-            <p>{executor.role}</p>
-            <Row k="CLI Claude Code">{executor.available ? `detectada (${executor.version})` : 'não detectada no PATH'}</Row>
-            <Row k="integração">{executor.available ? 'conectada: executa uma tarefa por vez, autorizada por um humano (manualmente ou ao iniciar o ciclo autônomo)' : 'indisponível'}</Row>
-            <Row k="execução ativa">{execBusy ? 'sim' : 'não'}</Row>
-            {execBusy && <Row k="tarefa em execução">{runningTask?.title ?? '…'}</Row>}
-            <Row k="permissões">leitura e edição de arquivos; sem shell nem rede; pedidos extras são negados</Row>
-            {execBusy && <div className="actions"><Btn kind="danger" onClick={stopRun}>■ Interromper execução</Btn></div>}
-            {execError && <p className="s-failed small">Há tarefa com falha de execução (não rejeitada por humano).</p>}
-            <p className="dim small">Detectar a CLI não significa execução ativa; o estado acima vem do servidor.</p>
-          </>}
-
-          {panel === 'gate' && <>
-            <p className="dim small">Portão de decisão humana das tarefas manuais: autorizar a execução e revisar o resultado. Tarefas do ciclo autônomo não passam por ele (o humano inicia o ciclo). Não é um agente.</p>
-            {mission && mission.tasks.length > 1 && (
-              <label className="small dim">Tarefa
-                <select value={taskId ?? ''} onChange={(e) => setTaskId(e.target.value)}>
-                  {mission.tasks.map((t, i) => <option key={t.id} value={t.id}>{String(i + 1).padStart(2, '0')} · {t.title} ({statusLabel(t.status)})</option>)}
-                </select>
-              </label>
-            )}
-            {mission ? <ReviewPanel mission={mission} task={task} actions={actions} busy={execBusy} /> : <Empty>Sem missão.</Empty>}
-          </>}
-
-          {panel === 'workspace' && <>
-            {ws ? <>
-              <Row k="nome">{ws.name}</Row>
-              <div className="mono small path">{ws.path}</div>
-              <Row k="Git">{!git ? 'consultando…' : git.error ? <span className="s-failed">{git.error}</span> : !git.isRepo ? 'não é repositório Git' : `${git.branch} · ${git.dirty ? `${git.changeCount} ${git.changeCount === 1 ? 'alteração' : 'alterações'}` : 'limpo'}`}</Row>
-              <Row k="package.json">{ws.hasPackageJson ? 'sim' : 'não'}</Row>
-            </> : <p className="dim">Nenhum espaço de trabalho ativo.</p>}
-            <p><a href="#/workspaces">Gerenciar espaços de trabalho →</a></p>
-          </>}
-
-          <div className="k sec">atividades</div>
-          <Events
-            items={activity.filter((a) => ({
-              planner: a.type === 'cycle',
-              executor: a.type === 'system' || a.type === 'execution',
-              gate: a.type === 'approval' || a.type === 'rejection',
-              workspace: a.type === 'workspace',
-            })[panel]).slice(0, 6)}
-            empty="Nenhuma atividade registrada."
-          />
-        </aside>
-      )}
-
-      {panel === 'queue' && (
-        <section className={`nc-drawer${closing ? ' out' : ''}`} ref={panelRef} role="dialog" aria-label="Fila de tarefas e terminal">
-          <header><h3>Fila e terminal {mission?.demo && <DemoTag />}</h3>{closeBtn}</header>
-          {mission ? (
-            <div className="drawer-body">
-              <TaskQueue mission={mission} selectedId={taskId} onSelect={setTaskId} />
-              <Terminal mission={mission} task={task} />
+    <div className="ck">
+      <section className="ck-main" aria-label="Missão atual">
+        <header className="ck-head">
+          <div className="ck-id">
+            <span className="k">Missão {mission?.demo && <DemoTag />}</span>
+            {mission ? <h2 className="ck-title">{mission.title}</h2> : <h2 className="ck-title">Nenhuma missão ativa</h2>}
+            {mission ? (
+              <div className="ck-meta">
+                {mission.tasks.length > 0 && <span className="ck-prog"><TaskSegments tasks={mission.tasks} /><span>{done} de {mission.tasks.length} concluídas</span></span>}
+                {mission.cycle && <span>Ciclo {statusLabel(mission.cycle.status, true)}, rodada {mission.cycle.rounds.length} de {mission.cycle.maxIterations}</span>}
+                {current && <span>Agora: {current.title}</span>}
+              </div>
+            ) : <p className="dim small">Descreva o que quer construir na conversa ou crie uma missão manualmente.</p>}
+          </div>
+          {pendingAll > 0 && (
+            <div className="attn" role="group" aria-label="Aprovações pendentes">
+              <Glyph kind="awaiting" />
+              <div className="attn-txt"><b>{pendingAll} {pendingAll === 1 ? 'aprovação pendente' : 'aprovações pendentes'}</b>Nada executa até você decidir.</div>
+              <Btn kind="primary" onClick={review}>Revisar</Btn>
             </div>
-          ) : <div className="dim">Nenhuma missão.</div>}
-        </section>
-      )}
-    </div>
-    <ChatDock />
+          )}
+        </header>
+        <div className="ck-canvas">
+          <FlowGraph mission={mission} selectedId={sel} onSelect={select} flash={flash} locate={locate}
+            empty={<div className="ck-empty"><h3>Comece por aqui</h3><p className="dim">O grafo do trabalho aparece quando há uma missão: a intenção no topo e as tarefas ligadas por suas dependências.</p><div className="actions"><a className="btn primary" href="#/chat">Conversar com o orquestrador</a><a className="btn" href="#/missions?new">Criar missão manualmente</a></div></div>} />
+        </div>
+      </section>
+
+      <aside className="ck-side" aria-label="Inspetor">
+        <div className={`orch st-${mode}`}>
+          <NeuralCore mode={mode} size={112} />
+          <div className="orch-text">
+            <b>Orquestrador</b>
+            <span className="status"><Glyph kind={CORE_GLYPH[mode]} />{CORE_LABEL[mode]}</span>
+            <span className="dim small">{coreLine}</span>
+          </div>
+        </div>
+        <div className="tabs" role="tablist" aria-label="Inspetor" onKeyDown={onTabKey}>
+          {tabs.map(([id, label]) => <button key={id} id={`tab-${id}`} type="button" role="tab" className="tab" aria-selected={tab === id} aria-controls="ck-panel" tabIndex={tab === id ? 0 : -1} onClick={() => setTab(id)}>{label}</button>)}
+        </div>
+        <div id="ck-panel" className="ck-panel" role="tabpanel" aria-labelledby={`tab-${tab}`} tabIndex={-1} ref={panelRef} key={tab}>
+          {tab === 'overview' && <>
+            <section className="blk">
+              <h3 className="blk-h">Agentes</h3>
+              {planner && (
+                <details className="agent-row">
+                  <summary><span className="ar-name">Planner</span><span className={`status st-${plannerSt}`}><Glyph kind={plannerSt} />{STATE_LABEL[plannerSt]}</span></summary>
+                  <div className="ar-body">
+                    <p className="dim small">{planner.detail}</p>
+                    <Kv k="Função">{planner.role}</Kv>
+                    <Kv k="Disponibilidade">{planner.availability === 'connected' ? 'Claude Code, sem ferramentas' : 'indisponível'}</Kv>
+                    <Kv k="Tokens nesta missão">{tokens.planner.text}{tokens.planner.partial && ' (parcial)'}</Kv>
+                    <p className="dim small">Só devolve uma decisão (<span className="mono">continue</span>, <span className="mono">complete</span> ou <span className="mono">blocked</span>), validada pelo servidor. Não executa nada nem altera permissões.</p>
+                  </div>
+                </details>
+              )}
+              {executor && (
+                <details className="agent-row">
+                  <summary><span className="ar-name">Executor</span><span className={`status st-${executorSt}`}><Glyph kind={executorSt} />{STATE_LABEL[executorSt]}</span></summary>
+                  <div className="ar-body">
+                    <p className="dim small">{execBusy ? `Executando: ${runningTask?.title ?? '…'}` : executor.available ? `Claude Code ${executor.version?.split(' ')[0] ?? ''} pronto` : 'CLI não detectada no PATH'}</p>
+                    <Kv k="Função">{executor.role}</Kv>
+                    <Kv k="Execução ativa">{execBusy ? 'sim' : 'não'}</Kv>
+                    <Kv k="Permissões">leitura e edição de arquivos; sem shell nem rede</Kv>
+                    <Kv k="Tokens nesta missão">{tokens.executor.text}{tokens.executor.partial && ' (parcial)'}</Kv>
+                    {execError && <p className="s-failed small">Há tarefa com falha de execução (não rejeitada por humano).</p>}
+                    {execBusy && <div className="actions"><Btn kind="danger" onClick={stopRun}>Interromper execução</Btn></div>}
+                  </div>
+                </details>
+              )}
+            </section>
+            <section className="blk">
+              <h3 className="blk-h">Espaço de trabalho</h3>
+              {ws ? <>
+                <div className="blk-main">{ws.name}</div>
+                <div className="mono small dim path">{ws.path}</div>
+                <Kv k="Git">{!git ? 'consultando…' : git.error ? <span className="s-failed">{git.error}</span> : !git.isRepo ? 'não é repositório Git' : `${git.branch}, ${git.dirty ? `${git.changeCount} ${git.changeCount === 1 ? 'alteração' : 'alterações'}` : 'limpo'}`}</Kv>
+                <Kv k="package.json">{ws.hasPackageJson ? 'sim' : 'não'}</Kv>
+              </> : <p className="dim small">Nenhum espaço ativo. <a href="#/workspaces">Cadastrar um</a></p>}
+            </section>
+            <section className="blk">
+              <h3 className="blk-h">Fila</h3>
+              <p className="small">{state?.counts.pending ?? 0} {state?.counts.pending === 1 ? 'tarefa pendente' : 'tarefas pendentes'} em todas as missões.</p>
+            </section>
+          </>}
+
+          {tab === 'events' && <>
+            <Events items={activity.slice(0, 40)} empty="Sem eventos ainda. Missões, aprovações e execuções aparecem aqui assim que acontecem." />
+            <p className="small"><a href="#/activity">Ver toda a atividade</a></p>
+          </>}
+
+          {tab === 'task' && task && <TaskInspector mission={mission} task={task} actions={actions} busy={execBusy} onClose={clear} onLocate={() => setLocate((l) => ({ id: task.id, n: (l?.n || 0) + 1 }))} />}
+
+          {tab === 'cycle' && mission && <CyclePanel mission={mission} />}
+        </div>
+      </aside>
+
+      <ChatDock />
     </div>
   );
 }

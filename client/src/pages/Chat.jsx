@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { Btn, Empty, Icon } from '../components/ui.jsx';
+import { Btn, Empty, Glyph, Icon } from '../components/ui.jsx';
 
 const EXAMPLE = 'Quero criar uma landing page para uma barbearia, com agendamento pelo WhatsApp e visual moderno.';
 const MAX_COMPOSER_PX = 200; // o campo cresce com o texto até esta altura; depois rola por dentro
@@ -37,45 +37,47 @@ function Proposal({ p, chat, stale, rounds, setRounds, busy, onApprove, onDiscar
   const value = rounds ?? Math.min(chat.hardMax, need);
   return (
     <section className="plan" aria-label="Plano preparado">
-      <div className="plan-head">
-        <span className="plan-kicker"><Icon name="gate" size={14} /> Plano preparado</span>
-        <span className="chip warn">Aguardando a sua aprovação</span>
-        <span className="dim small">ainda não executado</span>
-      </div>
-      {stale && <p className="s-blocked small">⚠ Este plano é do objetivo anterior{p.context?.goal ? ` ("${p.context.goal}")` : ''}; agora a conversa é sobre "{chat.brief.goal}". Aprovar executa ESTE plano; para preparar o novo, continue a conversa.</p>}
-      <h4 className="plan-title">{p.title}</h4>
-      <p>{p.objective}</p>
-      {p.revision > 1 && <p className="small"><b>Revisão {p.revision}</b>{p.changes ? `: ${p.changes}` : ''}. Esta versão precisa ser aprovada de novo.</p>}
-      {p.context?.assumptions?.length > 0 && <div className="small"><div className="k">suposições deste plano (você não confirmou)</div><ul className="plain">{p.context.assumptions.map((a) => <li key={a}>{a}</li>)}</ul></div>}
-      {steps.length > 0 ? (
-        <ol className="plan-steps">
-          {steps.map((s, i) => {
-            const pl = pol(s.id);
-            return (
-              <li key={s.id} className={pl?.decision === 'approval_required' ? 'step-warn' : pl?.decision === 'deny' ? 'step-bad' : ''}>
-                <span className="step-n">{i + 1}</span>
-                <div className="step-main">
-                  <b>{s.title}</b>{s.dependsOn.length > 0 && <span className="dim small"> · depois de: {s.dependsOn.map(title).join(', ')}</span>}
-                  {pl?.decision === 'approval_required' && <div><span className="chip warn"><Icon name="gate" size={12} /> exigirá a sua aprovação antes de executar</span><p className="step-why">{pl.why.join(' ')}</p></div>}
-                  {pl?.decision === 'deny' && <div><span className="chip bad"><Icon name="alert" size={12} /> será bloqueada pela política</span><p className="step-why">{pl.why.join(' ')}</p></div>}
-                  <details className="small"><summary className="dim">detalhes</summary>
-                    <p>{s.instructions}</p>
-                    <ul className="plain">{s.acceptance.map((a) => <li key={a}>{a}</li>)}</ul>
-                  </details>
-                </div>
-              </li>
-            );
-          })}
-        </ol>
-      ) : <p className="dim small">O ciclo decidirá as tarefas uma rodada por vez, com o Planner, depois da aprovação (o modo de plano em etapas, ORCH_CYCLE_PLAN, está desligado no servidor).</p>}
-      <div className="form plan-actions">
-        <label>Limite de rodadas (1 a {chat.hardMax}){steps.length > 0 && ` · o plano tem ${steps.length} etapas, uma por rodada`}
-          <input type="number" min={1} max={chat.hardMax} value={value} onChange={(e) => setRounds(Number(e.target.value))} />
-        </label>
-        <p className="dim small">Aprovar cria uma missão nova e inicia o ciclo. O Executor só lê e edita arquivos no espaço de trabalho, e cada etapa passa pelas verificações reais configuradas. Etapas marcadas como sensíveis ainda pedem a sua aprovação separada na hora de executar. Para mudar algo, descreva o ajuste na conversa: um novo plano substitui este.</p>
-        <div className="actions">
-          <Btn kind="primary" disabled={busy} onClick={() => onApprove(value)}><Icon name="check" size={15} /> Aprovar e executar</Btn>
-          <Btn disabled={busy} onClick={onDiscard}>Descartar plano</Btn>
+      <header className="plan-head">
+        <span className="plan-kicker"><Icon name="task" size={16} /> Plano preparado</span>
+        <span className="plan-state"><Glyph kind="awaiting" /> Aguardando a sua aprovação</span>
+      </header>
+      <div className="plan-body">
+        {stale && <p className="stale">Este plano é do objetivo anterior{p.context?.goal ? ` ("${p.context.goal}")` : ''}; agora a conversa é sobre "{chat.brief.goal}". Aprovar executa ESTE plano; para preparar o novo, continue a conversa.</p>}
+        <h3 className="plan-title">{p.title}</h3>
+        <p className="plan-obj">{p.objective}</p>
+        <p className="plan-note">Ainda não foi executado.</p>
+        {p.revision > 1 && <p className="small"><b>Revisão {p.revision}</b>{p.changes ? `: ${p.changes}` : ''}. Esta versão precisa ser aprovada de novo.</p>}
+        {p.context?.assumptions?.length > 0 && <div className="small"><div className="k">Suposições deste plano (você não confirmou)</div><ul className="plain">{p.context.assumptions.map((a) => <li key={a}>{a}</li>)}</ul></div>}
+        {steps.length > 0 ? (
+          <ol className="plan-steps">
+            {steps.map((s, i) => {
+              const pl = pol(s.id);
+              return (
+                <li key={s.id} className={pl?.decision === 'approval_required' ? 'step-warn' : pl?.decision === 'deny' ? 'step-bad' : ''} style={{ '--i': i }}>
+                  <span className="step-n">{String(i + 1).padStart(2, '0')}</span>
+                  <div className="step-main">
+                    <b>{s.title}</b>{s.dependsOn.length > 0 && <span className="dim small"> · depois de: {s.dependsOn.map(title).join(', ')}</span>}
+                    {pl?.decision === 'approval_required' && <div><div className="step-flag warn"><Glyph kind="awaiting" /> Exigirá a sua aprovação antes de executar</div><p className="step-why">{pl.why.join(' ')}</p></div>}
+                    {pl?.decision === 'deny' && <div><div className="step-flag bad"><Glyph kind="error" /> Será bloqueada pela política</div><p className="step-why">{pl.why.join(' ')}</p></div>}
+                    <details className="small"><summary className="dim">Detalhes da etapa</summary>
+                      <p>{s.instructions}</p>
+                      <ul className="plain">{s.acceptance.map((a) => <li key={a}>{a}</li>)}</ul>
+                    </details>
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+        ) : <p className="dim small">O ciclo decidirá as tarefas uma rodada por vez, com o Planner, depois da aprovação (o modo de plano em etapas, ORCH_CYCLE_PLAN, está desligado no servidor).</p>}
+        <div className="plan-actions">
+          <label className="plan-rounds">Limite de rodadas (1 a {chat.hardMax}){steps.length > 0 && ` · o plano tem ${steps.length} etapas, uma por rodada`}
+            <input type="number" min={1} max={chat.hardMax} value={value} onChange={(e) => setRounds(Number(e.target.value))} />
+          </label>
+          <p className="dim small">Aprovar cria uma missão nova e inicia o ciclo. O Executor só lê e edita arquivos no espaço de trabalho, e cada etapa passa pelas verificações reais configuradas. Etapas marcadas como sensíveis ainda pedem a sua aprovação separada na hora de executar. Para mudar algo, descreva o ajuste na conversa: um novo plano substitui este.</p>
+          <div className="actions">
+            <Btn kind="primary" disabled={busy} onClick={() => onApprove(value)}><Icon name="check" size={15} /> Aprovar e executar</Btn>
+            <Btn disabled={busy} onClick={onDiscard}>Descartar plano</Btn>
+          </div>
         </div>
       </div>
     </section>
@@ -94,6 +96,11 @@ export function ChatView({ embedded = false, visible = true, onPhase = null }) {
   const scroller = useRef(null), box = useRef(null), picker = useRef(null);
   const [files, setFiles] = useState([]); // só seleção LOCAL (nome e tamanho): nada é lido nem enviado ao Planner
 
+  const firstRun = useRef(true);
+  useEffect(() => { // painel do Cockpit aberto pelo usuário: o foco vai direto para o campo de escrita
+    if (firstRun.current) { firstRun.current = false; return; }
+    if (embedded && visible) setTimeout(() => box.current?.focus(), 0);
+  }, [visible]);
   const status0 = PHASE[chat?.phase];
   useEffect(() => { onPhase?.(status0 ? { label: status0[1], tone: status0[0] } : null); }, [chat?.phase]);
   const load = async () => { try { setChat(await api.get('/api/chat')); setLoadError(null); } catch (e) { setLoadError(e.message); } };
@@ -148,7 +155,6 @@ export function ChatView({ embedded = false, visible = true, onPhase = null }) {
   const status = PHASE[chat.phase];
   return (
     <div className={`chat-page${embedded ? ' embedded' : ''}`}>
-      {!embedded && <h1 className="sr">Conversa</h1>}
       <div className="chat-top">
         {status && !embedded ? <span className={`status s-${status[0]}`}><i />{status[1]}</span> : <span />}
         <Btn onClick={reset} disabled={!!working || chat.messages.length === 0}>Nova conversa</Btn>
@@ -158,28 +164,28 @@ export function ChatView({ embedded = false, visible = true, onPhase = null }) {
           {empty && (
             <div className="chat-hello">
               <h2>O que vamos construir?</h2>
-              <p className="dim">Descreva em linguagem livre. Eu pergunto o que faltar e preparo um plano para você aprovar; nada é executado sem a sua aprovação.</p>
-              <Btn onClick={() => { setText(EXAMPLE); box.current?.focus(); }} disabled={blocked}>Usar um exemplo</Btn>
+              <p className="dim">Descreva em linguagem livre. Pergunto o que faltar e preparo um plano para você aprovar; nada é executado sem a sua aprovação.</p>
+              <Btn kind="quiet" onClick={() => { setText(EXAMPLE); box.current?.focus(); }} disabled={blocked}>Usar um exemplo</Btn>
             </div>
           )}
           {chat.messages.map((m) => (
-            <div key={m.id} className={`msg ${m.role}`}>
-              {m.role === 'assistant' && <span className="avatar" aria-hidden="true"><Icon name="cockpit" size={15} /></span>}
+            <div key={m.id} className={`msg ${m.role}${m.kind === 'clarify' ? ' clarify' : ''}`}>
+              <span className="msg-role">{m.role === 'user' ? 'Você' : 'Orquestrador'}</span>
               <div className="msg-body">
-                <span className={m.kind === 'clarify' ? 'who' : 'sr'}>{m.role === 'user' ? 'Você' : 'Assistente'}{m.kind === 'clarify' ? ' · preciso de mais informações' : ''}</span>
+                {m.kind === 'clarify' && <span className="msg-ask">Preciso de mais informações</span>}
                 {m.text}
                 {m.questions?.length > 0 && <ul>{m.questions.map((q) => <li key={q}>{q}</li>)}</ul>}
               </div>
             </div>
           ))}
-          {working === 'send' && <div className="msg assistant" role="status"><span className="avatar" aria-hidden="true"><Icon name="cockpit" size={15} /></span><div className="msg-body dim">{p ? 'Atualizando o plano com o que você disse…' : chat.brief ? 'Considerando o que já combinamos…' : 'Interpretando o pedido…'}<span className="typing" aria-hidden="true"><i /><i /><i /></span></div></div>}
+          {working === 'send' && <div className="msg assistant" role="status"><span className="msg-role">Orquestrador</span><div className="msg-body dim">{p ? 'Atualizando o plano com o que você disse…' : chat.brief ? 'Considerando o que já combinamos…' : 'Interpretando o pedido…'}<span className="typing" aria-hidden="true"><i /><i /><i /></span></div></div>}
           <Brief b={chat.brief} />
           {p && <Proposal p={p} chat={chat} stale={chat.phase === 'new_goal'} rounds={rounds} setRounds={setRounds} busy={!!working || blocked} onApprove={approve} onDiscard={discard} />}
         </div>
       </div>
       <form className="composer-wrap" onSubmit={send}>
         <div className="composer-col">
-          {unavailable && <p className="s-blocked small">⚠ {unavailable} {chat.workspaceProblem && <a href="#/workspaces">Espaços de trabalho →</a>}</p>}
+          {unavailable && <p className="stale">{unavailable} {chat.workspaceProblem && <a href="#/workspaces">Espaços de trabalho →</a>}</p>}
           {files.length > 0 && (
             <div className="chips" aria-label="Arquivos selecionados">
               {files.map((f) => (
@@ -193,13 +199,17 @@ export function ChatView({ embedded = false, visible = true, onPhase = null }) {
           )}
           <div className="composer">
             <input ref={picker} type="file" multiple hidden onChange={pick} tabIndex={-1} />
-            <button type="button" className="icon-btn" aria-label="Selecionar arquivos (ainda não são enviados ao Planner)" title="Selecionar arquivos (ainda não são enviados ao Planner)" disabled={blocked || !!working} onClick={() => picker.current?.click()}><Icon name="plus" /></button>
-            <textarea ref={box} rows={1} value={text} maxLength={2000} disabled={blocked || !!working} aria-label="Sua mensagem" placeholder="Escreva o que você quer construir…"
+            <textarea ref={box} rows={1} value={text} maxLength={2000} disabled={blocked || !!working} aria-label="Sua mensagem" placeholder="Descreva o que você quer construir…"
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
-            <button type="submit" className="icon-btn send" aria-label={working === 'send' ? 'Enviando' : 'Enviar mensagem'} title="Enviar (Enter)" disabled={blocked || !!working || !text.trim()}><Icon name="send" /></button>
+            <div className="composer-bar">
+              <button type="button" className="icon-btn attach" aria-label="Selecionar arquivos (ainda não são enviados ao Planner)" title="Selecionar arquivos (ainda não são enviados ao Planner)" disabled={blocked || !!working} onClick={() => picker.current?.click()}><Icon name="paperclip" size={18} /></button>
+              {chat.workspace && <span className="composer-ws"><Icon name="workspace" size={14} />{chat.workspace.name}</span>}
+              <span className="grow" />
+              <button type="submit" className="send" aria-label={working === 'send' ? 'Enviando' : 'Enviar mensagem'} title="Enviar (Enter)" disabled={blocked || !!working || !text.trim()}><Icon name="send" size={18} /></button>
+            </div>
           </div>
-          <p className="dim small composer-hint">{chat.workspace ? `Espaço de trabalho: ${chat.workspace.name} · ` : ''}Enter envia · Shift+Enter quebra a linha · conversar não executa nada</p>
+          <p className="dim small composer-hint">Enter envia · Shift+Enter quebra a linha · conversar não executa nada</p>
         </div>
       </form>
     </div>

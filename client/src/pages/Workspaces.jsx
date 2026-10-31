@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { Panel, Btn, Empty } from '../components/ui.jsx';
+import { Panel, Btn, Empty, Glyph } from '../components/ui.jsx';
 import VerificationPanel from '../components/VerificationPanel.jsx';
 
 function GitInfo({ id }) {
@@ -34,8 +34,8 @@ export default function Workspaces() {
           <label>Caminho absoluto<input className="mono" value={path} onChange={(e) => { setPath(e.target.value); setCheck(null); }} placeholder="C:\projetos\meu-repo" required /></label>
           <label>Nome (opcional)<input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} /></label>
           {check && (check.ok
-            ? <div className="s-completed small">✓ Diretório válido · {check.hasGit ? 'Git' : 'sem Git'} · {check.hasPackageJson ? 'package.json' : 'sem package.json'}</div>
-            : <div className="s-failed small">✕ {check.error}</div>)}
+            ? <div className="stale ok">Diretório válido · {check.hasGit ? 'Git' : 'sem Git'} · {check.hasPackageJson ? 'package.json' : 'sem package.json'}</div>
+            : <div className="stale err">{check.error}</div>)}
           <div className="actions"><Btn type="button" onClick={validate}>Validar</Btn><Btn kind="primary" type="submit">Cadastrar</Btn></div>
         </form>
         <p className="dim small">Cadastrar autoriza o caminho: é nele que o Executor (Claude Code) lê e edita arquivos nas tarefas autorizadas, e o orquestrador consulta o Git (somente leitura). Comandos npm só rodam nos scripts que você aprovar em Verificações reais.</p>
@@ -46,7 +46,7 @@ export default function Workspaces() {
           <tbody>
             {workspaces.map((w) => (
               <tr key={w.id} className={w.id === activeId ? 'sel' : ''}>
-                <td><div>{w.name} {w.id === activeId && <b className="s-completed small">● ativo</b>}</div><div className="mono dim small">{w.path}</div><GitInfo id={w.id} /></td>
+                <td><div>{w.name} {w.id === activeId && <span className="status s-completed ws-on"><Glyph kind="done" />Ativo</span>}</div><div className="mono dim small">{w.path}</div><GitInfo id={w.id} /></td>
                 <td><div className="actions nomargin">
                   <Btn disabled={w.id === activeId} onClick={() => act(() => api.post(`/api/workspaces/${w.id}/activate`))}>Ativar</Btn>
                   <Btn onClick={() => confirm('Remover do cadastro? Os arquivos não são alterados.') && act(() => api.del(`/api/workspaces/${w.id}`))}>Remover</Btn>

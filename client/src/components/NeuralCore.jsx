@@ -1,35 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-
-const GREEN = '63,207,142', RED = '239,106,98', GREY = '150,205,255'; // GREY: pulso neutro (azul-claro do tema)
-
-// Evento real do backend -> reação visual. `node` = nó que acende; `link` = [origem, destino]
-// percorrido por pontos de tráfego; `ring` = onda para fora; `inward` = onda de parada.
-// Eventos de agentes (e.agent) só existirão quando a API os registrar; hoje nenhum é emitido.
-export function reactionFor(e) {
-  if (e.agent === 'planner' || e.agent === 'executor') return { node: e.agent, link: [e.agent, 'core'], color: GREY };
-  switch (e.type) {
-    case 'approval': return { node: 'gate', link: ['gate', 'core'], ring: true, color: GREEN };
-    case 'rejection': return { node: 'gate', link: ['gate', 'core'], ring: true, color: RED };
-    case 'mission':
-    case 'task': return { node: 'queue', link: ['queue', 'core'], ring: true, soft: true, color: GREY };
-    case 'workspace': return { node: 'workspace', link: ['workspace', 'core'], color: GREY };
-    case 'system': // interrupção: só destaca o executor se a API confirmou que parou algo
-      return e.stopped ? { node: 'executor', inward: true, color: RED } : { inward: true, soft: true, color: GREY };
-    default: return { ring: true, soft: true, color: GREY };
-  }
-}
-
-const N = 14000, SPARKS = 700; // SPARKS: partículas internas, tênues, que dão sensação de atividade
-const base = (() => {
-  const x = new Float32Array(N), y = new Float32Array(N), z = new Float32Array(N), s = new Float32Array(N), ph = new Float32Array(N);
-  for (let i = 0; i < N; i++) {
-    const u = Math.random() * 2 - 1, a = Math.random() * Math.PI * 2, r = Math.sqrt(1 - u * u);
-    x[i] = r * Math.cos(a); y[i] = u; z[i] = r * Math.sin(a);
-    s[i] = i < SPARKS ? 0.25 + 0.55 * Math.random() : 0.9 + 0.1 * Math.pow(Math.random(), 0.3);
-    ph[i] = Math.random() * Math.PI * 2;
-  }
-  return { x, y, z, s, ph };
-})();
+import { createCore, setMode, stepCore, isSettled, frameInterval, snapCore, errTint } from '../core-model.js';
 
 const mq = () => window.matchMedia?.('(prefers-reduced-motion: reduce)');
 // Preferência do sistema por menos movimento (reativa a mudanças).
@@ -43,237 +13,93 @@ export function usePrefersReduced() {
   }, []);
   return v;
 }
-const LIVE = new Set(['active', 'idle', 'live', 'awaiting']);
-const TIERS = [1, 0.7, 0.5, 0.35]; // qualidade em degraus (adaptar de forma contínua faz o brilho oscilar)
-const BUCKETS = 16; // níveis de alfa: quanto mais, menos saltos visíveis entre quadros
-const approach = (cur, target, rate, dt) => cur + (target - cur) * (1 - Math.exp(-rate * dt));
+
+// A nuvem da referência (videoframe): partículas brancas finas numa casca irregular, mais densas no limbo e rarefeitas no centro.
+const N = 1500, BUCKETS = 5;
+const BONE = [244, 243, 239], WARN = [226, 176, 82], ERR = [238, 111, 102];
+const base = (() => {
+  const x = new Float32Array(N), y = new Float32Array(N), z = new Float32Array(N), s = new Float32Array(N);
+  const ga = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < N; i++) {
+    const yy = 1 - ((i + 0.5) * 2) / N, r = Math.sqrt(1 - yy * yy), j = (Math.random() - 0.5) * 0.06;
+    x[i] = Math.cos(ga * i + j) * r; y[i] = yy; z[i] = Math.sin(ga * i + j) * r; s[i] = 0.84 + 0.16 * Math.random(); // espessura da casca
+  }
+  return { x, y, z, s };
+})();
 
 /**
- * Esfera de partículas + rede de conexões, em tela cheia.
- * nodes: [{id, x, y, state}] (x,y em fração da área); links: [[a,b]]; `core` é implícito.
- * fresh: {batch, events} com eventos NOVOS do backend (nunca o histórico). Só eles geram tráfego.
- * selected: id do nó selecionado (realça as conexões e provoca uma onda no núcleo).
+ * Indicador do orquestrador (Canvas 2D). Não desenha dados: o movimento e o tom seguem o MODO operacional real (ver coreMode em op-state.js):
+ * ocioso quase parado; Planner trabalhando, movimento suave; Executor executando, movimento mais perceptível; aguardando decisão, desacelera com tom âmbar;
+ * erro, um clarão breve. O texto ao lado diz o estado (a cor só reforça).
+ * Sem loop quando a página está oculta ou o movimento é reduzido (nesse caso desenha só o estado estático).
+ * mode: 'idle' | 'planning' | 'executing' | 'awaiting' | 'error'.
  */
-export default function NeuralCore({ running, awaiting, nodes, links, fresh, selected, layout, forceMotion, center = { x: 0.5, y: 0.46 } }) {
+export default function NeuralCore({ mode = 'idle', size = 112 }) {
   const canvas = useRef(null);
-  const live = useRef({});
-  const pulses = useRef([]);
-  const kick = useRef(0);
-  const redraw = useRef(null);
-  const still = usePrefersReduced() && !forceMotion;
-  live.current = { running, awaiting, nodes, links, center, selected };
+  const model = useRef(null);
+  const control = useRef({ start: () => {}, drawNow: () => {} });
+  const reduced = usePrefersReduced();
+  if (!model.current) model.current = createCore(mode);
 
-  // eventos reais novos -> pulsos
   useEffect(() => {
-    if (!fresh?.events.length) return;
-    for (const e of fresh.events) {
-      pulses.current.push({ ...reactionFor(e), t0: performance.now() });
-      kick.current = Math.min(1, kick.current + 0.4);
-    }
-  }, [fresh?.batch]);
-
-  // seleção -> onda breve no núcleo
-  const firstSel = useRef(true);
-  useEffect(() => {
-    if (firstSel.current) { firstSel.current = false; return; }
-    if (selected) { pulses.current.push({ ring: true, soft: true, color: GREY, t0: performance.now() }); kick.current = Math.min(1, kick.current + 0.3); }
-    redraw.current?.();
-  }, [selected]);
-  useEffect(() => { redraw.current?.(); const t = setTimeout(() => redraw.current?.(), 320); return () => clearTimeout(t); }, [nodes, awaiting, layout]);
+    const s = model.current;
+    setMode(s, mode);
+    if (reduced) { snapCore(s); control.current.drawNow(); } else control.current.start();
+  }, [mode, reduced]);
 
   useEffect(() => {
     const cv = canvas.current, ctx = cv.getContext('2d');
-    let w = 0, h = 0, dpr = 1, raf = 0, rot = 0, last = performance.now(), time = 0, glow = 0, frames = 0;
-    let tiltX = 0, tiltY = 0, tx = 0, ty = 0, q = 1, ema = 16, tier = 0, lastAdapt = 0; // q: fração das partículas da casca
-    const hi = {}; // intensidade de destaque por conexão (suavizada)
-    const px = new Float32Array(N), py = new Float32Array(N), pb = new Uint8Array(N);
-    const order = new Uint16Array(N), cnt = new Uint32Array(BUCKETS + 1);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = Math.round(size * dpr); cv.height = Math.round(size * dpr);
+    const s = model.current;
+    const px = new Float32Array(N), py = new Float32Array(N), pb = new Uint8Array(N); // reutilizados em todos os quadros
+    let raf = 0, last = 0, lastDraw = 0, frames = 0;
 
-    const resize = () => {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      w = cv.clientWidth; h = cv.clientHeight;
-      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
-      if (still) frame(performance.now());
-    };
-
-    function frame(now) {
-      const t0 = performance.now();
-      const dt = Math.min(0.05, Math.max(0, (now - last) / 1000)); const raw = (now - last) * 1000 / 1000; last = now; frames++;
-      if (!still && frames > 3 && raw < 250) { // mantém ~30+ fps trocando de nível (com espera) se a máquina não acompanhar
-        ema += (raw - ema) * 0.1;
-        if (ema > 32 && tier < TIERS.length - 1 && now - lastAdapt > 1500) { tier++; lastAdapt = now; }
-        else if (ema < 20 && tier > 0 && now - lastAdapt > 4000) { tier--; lastAdapt = now; }
-        q = TIERS[tier];
-      }
-      const { running: run, awaiting: wait, nodes: nds, links: lks, center: c, selected: sel } = live.current;
-      if (!still) { time += dt; rot += dt * (run ? 0.3 : 0.09); }
-      // respostas suavizadas (independentes de taxa de quadros)
-      glow = approach(glow, (sel ? 0.45 : 0) + kick.current * 0.55, 2.2, dt);
-      kick.current = approach(kick.current, 0, 1.4, dt);
-      tiltX = approach(tiltX, tx, 3, dt); tiltY = approach(tiltY, ty, 3, dt);
-
-      const cx = w * c.x, cy = h * c.y;
-      const R0 = Math.min(w * 0.25, h * 0.285);
-      const R = R0 * (1 + (0.03 + 0.01 * glow) * Math.sin(time * 0.8) + 0.012 * Math.sin(time * 1.9 + 1.3));
-      const bright = 0.93 + 0.07 * Math.sin(time * 0.8 + 0.5) + 0.08 * glow;
+    const draw = () => {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, w, h);
-
-      const errNow = nds.some((n) => n.state === 'error'), tone = errNow ? '239,106,98' : '76,141,255'; // o tom só muda com estado real (erro)
-      const g0 = ctx.createRadialGradient(cx, cy, R * 0.15, cx, cy, R * 2);
-      g0.addColorStop(0, `rgba(${tone},${(0.17 + 0.08 * glow + (run ? 0.06 : 0)) * bright})`);
-      g0.addColorStop(0.5, `rgba(${errNow ? tone : '110,96,235'},${0.07 * bright})`);
-      g0.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g0; ctx.fillRect(cx - R * 2.1, cy - R * 2.1, R * 4.2, R * 4.2);
-      const g = ctx.createRadialGradient(cx, cy, R * 0.78, cx, cy, R * 1.4);
-      g.addColorStop(0, 'rgba(120,220,255,0)');
-      g.addColorStop(0.5, `rgba(120,220,255,${(0.07 + 0.06 * glow) * bright})`);
-      g.addColorStop(1, 'rgba(120,220,255,0)');
-      ctx.fillStyle = g; ctx.fillRect(cx - R * 1.5, cy - R * 1.5, R * 3, R * 3);
-
-      // conexões (estáticas: a relação existe; tráfego só aparece nos pulsos de eventos reais)
-      const pos = {}; const cr = cv.getBoundingClientRect(); // posição real dos nós no DOM (acompanha transições)
-      nds.forEach((n) => { const el = document.getElementById(`node-${n.id}`); if (!el) return; const r = el.getBoundingClientRect(); pos[n.id] = { x: r.left + r.width / 2 - cr.left, y: r.top + r.height / 2 - cr.top, s: n.state }; });
-      pos.core = { x: cx, y: cy, s: 'live' };
-      const geom = (a, b) => {
-        const A = pos[a], B = pos[b];
-        if (a === 'core' || b === 'core') {
-          const o = a === 'core' ? B : A, dx = o.x - cx, dy = o.y - cy, d = Math.hypot(dx, dy) || 1;
-          const p0 = { x: cx + (dx / d) * R * 1.05, y: cy + (dy / d) * R * 1.05 };
-          return a === 'core' ? [p0, null, B] : [A, null, p0];
-        }
-        const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2;
-        return [A, { x: mx + (mx - cx) * 0.55, y: my + (my - cy) * 0.55 }, B];
-      };
-      const at = ([p, q, r], t) => (q
-        ? { x: (1 - t) * (1 - t) * p.x + 2 * (1 - t) * t * q.x + t * t * r.x, y: (1 - t) * (1 - t) * p.y + 2 * (1 - t) * t * q.y + t * t * r.y }
-        : { x: p.x + (r.x - p.x) * t, y: p.y + (r.y - p.y) * t });
-      for (const [a, b] of lks) {
-        if (!pos[a] || !pos[b]) continue;
-        const key = `${a}-${b}`;
-        hi[key] = approach(hi[key] || 0, sel && (a === sel || b === sel) ? 1 : 0, 8, dt);
-        const gm = geom(a, b), H = hi[key];
-        const err = pos[a].s === 'error' || pos[b].s === 'error';
-        const isLive = LIVE.has(pos[a].s) && LIVE.has(pos[b].s);
-        const pending = wait > 0 && (a === 'gate' || b === 'gate') && (a === 'core' || b === 'core');
-        const p0 = gm[0], p2 = gm[2];
-        let c0, c1;
-        if (err) { c0 = c1 = '239,106,98'; } else if (pending) { c0 = c1 = '227,181,59'; } else if (isLive) { c0 = '58,214,242'; c1 = '139,108,255'; } else { c0 = c1 = '118,134,170'; }
-        const al = err ? 0.6 + 0.35 * H : pending ? 0.7 + 0.25 * H : isLive ? 0.34 + 0.5 * H : 0.24 + 0.4 * H;
-        const lg = ctx.createLinearGradient(p0.x, p0.y, p2.x, p2.y);
-        lg.addColorStop(0, `rgba(${c0},${al})`); lg.addColorStop(1, `rgba(${c1},${al})`);
-        const path = new Path2D(); path.moveTo(p0.x, p0.y);
-        if (gm[1]) path.quadraticCurveTo(gm[1].x, gm[1].y, p2.x, p2.y); else path.lineTo(p2.x, p2.y);
-        ctx.save();
-        ctx.strokeStyle = lg;
-        if (isLive || err || pending) { ctx.globalAlpha = 0.14; ctx.lineWidth = 5 + 3 * H; ctx.stroke(path); ctx.globalAlpha = 1; } // brilho suave sob o traço
-        ctx.lineWidth = 1.2 + 0.9 * H;
-        if (!isLive && !err) ctx.setLineDash([3, 6]); // tracejada = relação existe, mas o destino não está ativo
-        ctx.stroke(path);
-        ctx.setLineDash([]);
-        ctx.fillStyle = `rgba(${c0},${Math.min(1, al + 0.25)})`; ctx.beginPath(); ctx.arc(p0.x, p0.y, 2.6, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = `rgba(${c1},${Math.min(1, al + 0.25)})`; ctx.beginPath(); ctx.arc(p2.x, p2.y, 2.6, 0, Math.PI * 2); ctx.fill();
-        ctx.restore();
-      }
-
-      // partículas
-      const ca = Math.cos(rot), sa = Math.sin(rot), tilt = 0.35 + tiltY, ct = Math.cos(tilt), st = Math.sin(tilt);
-      const amp = run ? 0.2 : 0.14, n = SPARKS + Math.max(1500, Math.floor(Math.min(N - SPARKS, Math.max(4500, R0 * R0 * 0.2)) * q)); // faíscas internas sempre; só a casca escala com a qualidade
-      cnt.fill(0);
-      for (let i = 0; i < n; i++) {
+      ctx.clearRect(0, 0, size, size);
+      const c = size / 2, R = size * 0.4;
+      const ca = Math.cos(s.angle), sa = Math.sin(s.angle), ct = Math.cos(0.4), st = Math.sin(0.4);
+      const amp = s.amp, t = s.time;
+      for (let i = 0; i < N; i++) {
         const x = base.x[i], y = base.y[i], z = base.z[i];
-        const d = 1 + amp * (Math.sin(2.3 * x + 1.7 * y + time * 0.35) + 0.8 * Math.sin(3.1 * y - 2.1 * z + time * 0.3) + 0.6 * Math.sin(2.7 * z + 1.3 * x - time * 0.24)) / 2.4;
-        let r = d * base.s[i];
-        const spark = i < SPARKS;
-        if (spark) r *= 1 + 0.12 * Math.sin(time * 0.7 + base.ph[i]); // deriva interna lenta
+        // deformação orgânica: poucas ondas lentas, em vez de ruído por partícula
+        const d = 1 + amp * (Math.sin(2.1 * x + 1.4 * y + t * 0.5) + 0.7 * Math.sin(2.9 * y - 1.9 * z + t * 0.42) + 0.5 * Math.sin(2.4 * z + 1.1 * x - t * 0.35)) / 2.2;
+        const r = d * base.s[i];
         const X = x * r, Y = y * r, Z = z * r;
         const x1 = X * ca + Z * sa, z1 = -X * sa + Z * ca;
-        const x2 = x1 * Math.cos(tiltX) + z1 * Math.sin(tiltX), z2a = -x1 * Math.sin(tiltX) + z1 * Math.cos(tiltX);
-        const y2 = Y * ct - z2a * st, z2 = Y * st + z2a * ct;
-        const k = 3 / (3 - z2 * 0.8);
-        px[i] = cx + x2 * R * k; py[i] = cy + y2 * R * k;
-        let b;
-        if (spark) b = Math.floor(BUCKETS * (0.38 + 0.14 * (0.5 + 0.5 * Math.sin(time * 1.1 + base.ph[i])))); // cintilar contínuo
-        else {
-          const rho = Math.hypot(x2, y2); // limbo mais brilhante, centro escuro
-          const wave = 0.22 * Math.sin(1.6 * x + 1.2 * y - time * 0.5);
-          b = Math.max(0, Math.min(BUCKETS - 1, Math.floor((rho * 3.6 - 1 + wave + 0.55 * z2) * (BUCKETS / 4)))); // + z2: a face voltada para o observador é mais clara (volume)
-        }
-        pb[i] = b; cnt[b + 1]++;
+        const y2 = Y * ct - z1 * st, z2 = Y * st + z1 * ct;
+        px[i] = c + x1 * R; py[i] = c - y2 * R;
+        const limb = Math.min(1, Math.hypot(x1, y2)); // mais claro no limbo, rarefeito no centro
+        pb[i] = Math.max(0, Math.min(BUCKETS - 1, Math.floor((limb * 0.75 + (z2 + 1) * 0.125) * BUCKETS * 1.05)));
       }
-      for (let b = 0; b < BUCKETS; b++) cnt[b + 1] += cnt[b];
-      const fill = cnt.slice(0, BUCKETS);
-      for (let i = 0; i < n; i++) order[fill[pb[i]]++] = i;
-      const sz = (1.0 + R / 420) * (1 + (1 - q) * 0.3); // menos partículas: um pouco maiores e mais brilhantes
-      const comp = Math.min(1.3, Math.pow(1 / q, 0.3));
-      for (let b = 0, s = 0; b < BUCKETS; b++) {
-        const e = cnt[b + 1];
-        const tt = b / (BUCKETS - 1);
-        ctx.fillStyle = `rgb(${(124 + 56 * tt) | 0},${(112 + 124 * tt + (run ? 12 : 0)) | 0},255)`;
-        ctx.globalAlpha = Math.min(1, (0.12 + tt * 0.78 + (run ? 0.06 : 0)) * bright * comp);
-        for (; s < e; s++) { const i = order[s]; ctx.fillRect(px[i], py[i], sz, sz); }
+      const w = s.warm, e = errTint(s);
+      const r0 = BONE[0] + (WARN[0] - BONE[0]) * w, g0 = BONE[1] + (WARN[1] - BONE[1]) * w, b0 = BONE[2] + (WARN[2] - BONE[2]) * w;
+      ctx.fillStyle = `rgb(${(r0 + (ERR[0] - r0) * e) | 0},${(g0 + (ERR[1] - g0) * e) | 0},${(b0 + (ERR[2] - b0) * e) | 0})`;
+      const sz = size > 100 ? 1.25 : 1;
+      for (let b = 0; b < BUCKETS; b++) {
+        ctx.globalAlpha = 0.1 + 0.7 * (b / (BUCKETS - 1));
+        for (let i = 0; i < N; i++) if (pb[i] === b) ctx.fillRect(px[i], py[i], sz, sz);
       }
       ctx.globalAlpha = 1;
-
-      ctx.save(); ctx.lineWidth = 1; // órbitas: só dão profundidade; giram devagar e não indicam atividade
-      ctx.strokeStyle = `rgba(58,214,242,${0.13 + 0.05 * glow})`; ctx.beginPath(); ctx.ellipse(cx, cy, R * 1.42, R * 0.48, -0.35 + rot * 0.15, 0, Math.PI * 2); ctx.stroke();
-      ctx.strokeStyle = 'rgba(139,108,255,.13)'; ctx.beginPath(); ctx.ellipse(cx, cy, R * 1.2, R * 0.42, 0.5 - rot * 0.1, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
-
-      if (wait > 0 || run) {
-        ctx.strokeStyle = wait > 0 ? 'rgba(227,181,59,.55)' : 'rgba(58,214,242,.55)';
-        ctx.setLineDash([2, 7]); ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(cx, cy, R * 1.3, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
-      }
-
-      // pulsos de eventos reais
-      const list = pulses.current;
-      for (let i = list.length - 1; i >= 0; i--) {
-        const p = list[i], t = (now - p.t0) / (p.ring || p.inward ? 2000 : 1800);
-        if (t >= 1 || still) { list.splice(i, 1); continue; }
-        const e = t * t * (3 - 2 * t);
-        const a = (p.soft ? 0.35 : 0.65) * (1 - t);
-        if (p.ring || p.inward) {
-          ctx.strokeStyle = `rgba(${p.color},${a})`; ctx.lineWidth = p.inward ? 1.6 : 1;
-          ctx.beginPath(); ctx.arc(cx, cy, R * (p.inward ? 1.5 - 0.45 * e : 1.05 + 0.4 * e), 0, Math.PI * 2); ctx.stroke();
-        }
-        if (p.link && pos[p.link[0]] && pos[p.link[1]]) {
-          const gm = geom(p.link[0], p.link[1]);
-          for (let d = 0; d < 3; d++) { // três pontos em fila, cada um com rastro curto
-            const head = e - d * 0.11;
-            if (head < 0 || head > 1) continue;
-            for (let k = 0; k < 3; k++) {
-              const q = at(gm, Math.max(0, head - k * 0.025));
-              ctx.fillStyle = `rgba(${p.color},${(1 - t * 0.6) * (1 - k * 0.3)})`;
-              ctx.beginPath(); ctx.arc(q.x, q.y, 2.8 - k * 0.7, 0, Math.PI * 2); ctx.fill();
-            }
-          }
-        }
-      }
-      cv.dataset.pulses = String(list.length); cv.dataset.frames = String(frames); cv.dataset.ms = (performance.now() - t0).toFixed(1); cv.dataset.q = q.toFixed(2); cv.dataset.n = String(n);
-      if (!still) raf = requestAnimationFrame(frame);
-    }
-    redraw.current = still ? () => frame(performance.now()) : null;
-
-    const onMove = (ev) => {
-      const r = cv.getBoundingClientRect();
-      tx = ((ev.clientX - r.left) / r.width - 0.5) * 0.5; ty = ((ev.clientY - r.top) / r.height - 0.5) * 0.3;
+      cv.dataset.frames = String(++frames); cv.dataset.mode = s.mode; cv.dataset.rot = s.rot.toFixed(3); cv.dataset.wave = s.wave.toFixed(2);
     };
-    const onLeave = () => { tx = 0; ty = 0; };
-    const onDown = () => { pulses.current.push({ ring: true, soft: true, color: GREY, t0: performance.now() }); };
-    const onVis = () => { last = performance.now(); }; // evita salto de tempo ao voltar para a aba
-    resize();
-    const ro = new ResizeObserver(resize); ro.observe(cv);
-    if (!still) {
-      cv.addEventListener('pointermove', onMove); cv.addEventListener('pointerleave', onLeave); cv.addEventListener('pointerdown', onDown);
-      document.addEventListener('visibilitychange', onVis);
-      raf = requestAnimationFrame(frame);
-    }
-    return () => {
-      cancelAnimationFrame(raf); ro.disconnect(); redraw.current = null;
-      cv.removeEventListener('pointermove', onMove); cv.removeEventListener('pointerleave', onLeave); cv.removeEventListener('pointerdown', onDown);
-      document.removeEventListener('visibilitychange', onVis);
-    };
-  }, [still]);
 
-  return <canvas ref={canvas} className="core-canvas" aria-hidden="true" />;
+    const stop = () => { if (raf) cancelAnimationFrame(raf); raf = 0; };
+    const loop = (now) => {
+      raf = 0;
+      if (document.hidden || mq()?.matches) return; // oculta ou movimento reduzido: sem loop (o retorno à visibilidade religa)
+      const every = frameInterval({ settled: isSettled(s), mode: s.mode });
+      if (now - lastDraw >= every) { stepCore(s, Math.min(0.1, (now - last) / 1000)); last = now; lastDraw = now; draw(); }
+      raf = requestAnimationFrame(loop);
+    };
+    const start = () => { if (raf || document.hidden || mq()?.matches) return; last = performance.now(); lastDraw = 0; raf = requestAnimationFrame(loop); };
+    const onVis = () => { if (document.hidden) stop(); else if (!mq()?.matches) start(); };
+    control.current = { start, drawNow: () => { stop(); draw(); } };
+    document.addEventListener('visibilitychange', onVis);
+    if (reduced) { snapCore(s); draw(); } else start();
+    return () => { stop(); document.removeEventListener('visibilitychange', onVis); control.current = { start: () => {}, drawNow: () => {} }; };
+  }, [size, reduced]);
+
+  return <canvas ref={canvas} className="orb" style={{ width: size, height: size }} aria-hidden="true" />;
 }
