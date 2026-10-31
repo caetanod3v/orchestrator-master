@@ -5,6 +5,7 @@ import { TaskSegments, DemoTag, Btn, Glyph, fmtTime, statusLabel, typeLabel, cyc
 import TaskInspector from '../components/TaskInspector.jsx';
 import NeuralCore from '../components/NeuralCore.jsx';
 import FlowGraph from '../components/FlowGraph.jsx';
+import Universe from '../components/Universe.jsx';
 import CyclePanel from '../components/CyclePanel.jsx';
 import ChatDock from '../components/ChatDock.jsx';
 import { useCycleActions } from '../cycle-actions.js';
@@ -166,6 +167,7 @@ export default function Cockpit() {
           )}
         </header>
         <div className="ck-canvas">
+          <Universe />
           <FlowGraph mission={mission} selectedId={sel} onSelect={select} flash={flash} locate={locate} gateActions={gateActions}
             empty={<div className="ck-empty"><h3>Comece por aqui</h3><p className="dim">O grafo do trabalho aparece quando há uma missão: a intenção no topo e as tarefas ligadas por suas dependências.</p><div className="actions"><a className="btn primary" href="#/chat">Conversar com o orquestrador</a><a className="btn" href="#/missions?new">Criar missão manualmente</a></div></div>} />
         </div>

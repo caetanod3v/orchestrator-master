@@ -28,21 +28,30 @@
 .attn .btn { min-height: 28px; padding: 2px var(--sp-3); font-size: var(--fs-xs); border-radius: var(--r-1); }
 @media (min-width: 1600px) { .attn-sub { position: static; width: auto; height: auto; margin: 0 0 0 var(--sp-3); overflow: visible; clip: auto; white-space: nowrap; } }
 
-.ck-canvas { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 0 var(--sp-2) var(--sp-2); border-radius: var(--r-3); background: var(--canvas); background-image: radial-gradient(rgba(255, 250, 240, .075) 1px, transparent 1.2px); background-size: 22px 22px; overflow: hidden; }
+.ck-canvas { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; margin: 0 var(--sp-2) var(--sp-2); border-radius: var(--r-3); background: var(--canvas); overflow: hidden; }
+/* universo espacial (WebGL) atrás do grafo: camada 0, só dentro do canvas, nunca recebe eventos; grafo, controles e estado vazio ficam na camada 1 */
+.universe { position: absolute; inset: 0; z-index: 0; overflow: hidden; border-radius: inherit; pointer-events: none;
+  background: radial-gradient(120% 90% at 50% 36%, rgba(255, 250, 240, .05), transparent 62%), radial-gradient(90% 70% at 88% 100%, rgba(170, 190, 220, .03), transparent 70%); }
+.universe-canvas { display: block; width: 100%; height: 100%; }
+/* sem WebGL: poucas estrelas estáticas, em três tamanhos de ladrilho, para o fundo continuar vivo sem ruído */
+.universe[data-fallback] { background-image: radial-gradient(circle at 18% 32%, rgba(255, 250, 240, .5) 0 .6px, transparent 1.1px), radial-gradient(circle at 71% 64%, rgba(255, 250, 240, .38) 0 .6px, transparent 1.1px), radial-gradient(circle at 43% 81%, rgba(205, 225, 255, .3) 0 .5px, transparent 1px),
+  radial-gradient(circle at 87% 23%, rgba(255, 250, 240, .34) 0 .5px, transparent 1px), radial-gradient(circle at 29% 57%, rgba(255, 250, 240, .26) 0 .5px, transparent 1px), radial-gradient(circle at 62% 9%, rgba(205, 225, 255, .3) 0 .5px, transparent 1px),
+  radial-gradient(120% 90% at 50% 36%, rgba(255, 250, 240, .05), transparent 62%);
+  background-size: 311px 283px, 457px 419px, 197px 229px, 613px 541px, 281px 337px, 379px 241px, auto; }
 /* viewport do canvas: um único elemento recebe a roda, o arraste e as teclas de navegação (o inspetor, os logs e a conversa não passam por aqui) */
-.cv { position: relative; flex: 1 1 auto; min-height: 0; overflow: clip; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; border-radius: var(--r-3) var(--r-3) 0 0; }
+.cv { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; overflow: clip; touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; border-radius: var(--r-3) var(--r-3) 0 0; }
 .cv.panning { cursor: grabbing; }
 .cv:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
 .cv-world { position: absolute; left: 0; top: 0; width: max-content; transform-origin: 0 0; }
-/* controles: faixa própria na base do canvas (fora da área do grafo), então nunca cobrem nós, ações nem portões de aprovação */
-.cv-ctl { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 3px var(--sp-3); background: var(--canvas); border-top: 1px solid var(--line); cursor: default; }
+/* controles: faixa própria e OPACA na base do canvas (fora da área do grafo): nunca cobre nós, ações nem portões, e as estrelas não aparecem atrás dela */
+.cv-ctl { position: relative; z-index: 1; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 3px var(--sp-3); background: var(--canvas); border-top: 1px solid var(--line); cursor: default; }
 .cv-ctl .icon-btn { width: 32px; height: 32px; }
 .cv-fit { display: inline-flex; align-items: center; gap: var(--sp-2); height: 32px; padding: 0 var(--sp-3); font: inherit; font-size: var(--fs-sm); color: var(--dim); background: transparent; border: 0; border-radius: var(--r-2); cursor: pointer; white-space: nowrap; }
 .cv-fit:active { transform: scale(.97); }
 @media (hover: hover) and (pointer: fine) { .cv-fit:hover { background: var(--raise2); color: var(--strong); } }
 .cv-pct { min-width: 46px; text-align: center; font-family: var(--mono); font-size: var(--fs-xs); color: var(--dim); font-variant-numeric: tabular-nums; }
 .cv-sep { width: 1px; height: 18px; margin: 0 var(--sp-1); background: var(--line-strong); }
-.ck-empty { margin: var(--sp-6); max-width: 46ch; } .ck-empty p { line-height: var(--lh-read); }
+.ck-empty { position: relative; z-index: 1; margin: var(--sp-6); max-width: 46ch; } .ck-empty p { line-height: var(--lh-read); }
 
 .flow { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 52px; padding: var(--sp-6); }
 .flow-row { position: relative; z-index: 1; display: flex; flex-wrap: nowrap; justify-content: center; gap: var(--sp-6); width: max-content; min-width: 100%; margin-inline: auto; }
