@@ -30,7 +30,7 @@
   --lh: 1.5; --lh-tight: 1.3; --lh-read: 1.65;
 
   /* espaço (base 4) */
-  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px; --sp-7: 48px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
   /* forma */
   --r-1: 8px; --r-2: 12px; --r-3: 16px; --r-4: 20px;
   /* larguras */
@@ -39,7 +39,7 @@
   /* movimento: ações de teclado e de alta frequência não animam; o resto fica entre 120 e 240 ms. Só transform, opacity e cor.
      --dur-scene (≤ 480 ms) é só para cenas raras: entrada da página e o desenho do grafo ao carregar uma missão. */
   --dur-1: 120ms; --dur-2: 180ms; --dur-3: 240ms; --dur-scene: 480ms;
-  --ease: cubic-bezier(.23, 1, .32, 1); --ease-io: cubic-bezier(.77, 0, .175, 1);
+  --ease: cubic-bezier(.23, 1, .32, 1);
   --t-color: background-color var(--dur-1) ease, border-color var(--dur-1) ease, color var(--dur-1) ease, opacity var(--dur-1) ease;
 
   /* camadas z */

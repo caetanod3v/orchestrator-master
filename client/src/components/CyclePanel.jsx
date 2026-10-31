@@ -73,7 +73,7 @@ function Round({ r }) {
             <div data-testid="evidence">
               <div className="k ph"><Icon name="gate" size={14} /> Evidência do sistema: <Status value={rep.evidence.level} /> <span className="dim">({EVIDENCE_BASIS[rep.evidence.basis] || rep.evidence.basis})</span></div>
               <div className="dim">o Executor relatou: {rep.evidence.executorClaim.status === 'success' ? 'sucesso' : rep.evidence.executorClaim.status} <b>(declarado, não é prova)</b> · verificado pelo sistema: verificações reais = {rep.evidence.system.verification}{rep.evidence.system.expectedFiles ? ` · arquivos esperados = ${rep.evidence.system.expectedFiles.map((x) => `${x.path}: ${x.ok ? 'ok' : 'falhou'}`).join(', ')}` : ''} · integridade dos testes = {rep.evidence.system.integrity}</div>
-              {rep.evidence.reasons.map((x, i) => <div key={i} className="s-blocked">{x}</div>)}
+              {rep.evidence.reasons.map((x, i) => <div key={i} className="s-blocked"><Icon name="alert" size={14} /> {x}</div>)}
             </div>
           )}
           <div className="dim">verificações autodeclaradas pelo Executor (confiança menor): {rep.checks.length ? rep.checks.map((c) => `${c.name}=${c.result}`).join('; ') : rep.checksReported ? 'nenhuma' : 'não reportadas'}</div>

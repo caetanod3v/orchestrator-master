@@ -1,6 +1,6 @@
 import React from 'react';
 import { useStore } from '../store.jsx';
-import { Panel, Icon } from '../components/ui.jsx';
+import { Panel } from '../components/ui.jsx';
 import { AgentCard } from '../components/Widgets.jsx';
 
 const Pipe = ({ title, steps }) => (

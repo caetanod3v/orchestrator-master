@@ -50,12 +50,6 @@ export const TaskSegments = ({ tasks }) => (
   </div>
 );
 
-export const Progress = ({ done, total }) => (
-  <div className="progress" title={`${done}/${total}`} role="progressbar" aria-label="Progresso das tarefas" aria-valuemin={0} aria-valuemax={Math.max(total, 1)} aria-valuenow={done}>
-    <div style={{ transform: `scaleX(${total ? done / total : 0})` }} />
-  </div>
-);
-
 export const fmtTime = (iso) => new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'medium' });
 
 /** Último incidente de gravação do servidor (/api/state.persistenceIncident): só o código do erro, quando começou, quantas falhas e se a gravação já voltou. */
