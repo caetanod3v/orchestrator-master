@@ -39,7 +39,7 @@ function roundLevel(round) {
   if (isObj(ev) && ['verified', 'inconclusive', 'failed'].includes(ev.level)) return { level: ev.level, basis: `parecer do sistema (${clip(ev.basis, 60) || 'sem base informada'})` };
   // rodada anterior ao parecer de evidência (dados históricos): vale só o resultado das verificações reais gravado
   const v = safeVerification(round);
-  if (v === 'passed') return { level: 'verified', basis: 'rodada sem parecer de evidência (dado histórico): apenas as verificações reais gravadas' };
+  if (v === 'passed') return { level: 'inconclusive', basis: 'rodada sem parecer de evidência (dado histórico): as verificações reais gravadas passaram, mas o sistema não gravou parecer; nada é presumido como verificado' };
   if (v === 'failed' || v === 'blocked') return { level: 'failed', basis: `verificações reais: ${v}` };
   if (v === 'skipped') return { level: 'inconclusive', basis: 'verificações reais configuradas, mas não concluídas' };
   return { level: 'absent', basis: 'nenhuma verificação real nem parecer de evidência gravados para esta rodada' };

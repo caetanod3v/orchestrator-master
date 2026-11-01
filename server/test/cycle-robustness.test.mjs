@@ -32,7 +32,7 @@ before(() => { db = store.load(); db.missions = []; db.workspaces = [{ id: 'ws',
 after(async () => { process.off('unhandledRejection', onUnhandled); server?.close(); server?.closeAllConnections?.(); await sleep(800); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 const mkMission = (id) => { const m = { id, demo: false, title: id, objective: 'obj', workspaceId: 'ws', createdAt: store.now(), tasks: [] }; db.missions.push(m); return m; };
-const cont = (title, mode = 'check') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} ${title}`, acceptance: ['conferir'] } });
+const cont = (title, mode = 'check') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'verificações reais aprovadas', evidence: ['test=pass refeito pelo orquestrador'] });
 const scripted = (answers) => { const calls = []; return { calls, busy: () => false, cancel: async () => {}, decide: async ({ prompt }) => { calls.push(prompt); const a = answers.shift(); return a === undefined ? { error: 'roteiro acabou' } : { text: a }; } }; };
 const coldExecutor = () => { const executor = createExecutor({ command: process.execPath, prefixArgs: [FAKE], args: [] }); return { executor, ...setupExecution(express(), { db, executor }) }; };
@@ -235,7 +235,7 @@ test('queda durante a verificação: recover() marca como INTERROMPIDA; retomar 
   assert.match(prompt, /verificação anterior SUBSTITUÍDA/); assert.match(prompt, /é HISTÓRICO, não é a situação atual/);
   const last = prompt.slice(prompt.indexOf('ÚLTIMO RELATÓRIO'));
   assert.ok(!last.includes('PARCIAL-ANTIGO') && !last.includes('previousVerifications'), 'o JSON do relatório atual não carrega o histórico');
-  assert.equal(c.status, 'completed'); assert.equal(c.assurance, 'verified');
+  assert.equal(c.status, 'completed'); assert.equal(c.assurance, 'self-declared', 'rodada histórica sem parecer do sistema: nenhuma evidência é inventada, então a garantia não é "verified"'); assert.equal(c.rounds[0].report.evidence, undefined);
 });
 
 test('rodada que terminou mas nem chegou a iniciar a verificação (phase ausente) também não vale como sucesso', async () => {

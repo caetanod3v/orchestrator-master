@@ -26,7 +26,7 @@ const { createCycle } = await import('../cycle.js');
 let server;
 after(async () => { server?.close(); server?.closeAllConnections?.(); await new Promise((r) => setTimeout(r, 800)); fs.rmSync(tmp, { recursive: true, force: true }); });
 
-const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:write ${title}`, acceptance: ['conferir'] } });
+const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:write EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'verificações reais aprovadas', evidence: ['test=pass refeito pelo orquestrador'] });
 const section = (p, a, b) => p.slice(p.indexOf(a), p.indexOf(b, p.indexOf(a)));
 

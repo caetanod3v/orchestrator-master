@@ -9,6 +9,7 @@ import { gitInfo } from './git.js';
 import { validateDir, setupWorkspaceRemoval } from './workspaces.js';
 import { setupExecution, blockedReason } from './execution.js';
 import { missionStatus } from './mission-status.js';
+import { deliveryOf } from './delivery.js';
 import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle.js';
 import { createClaudePlanner, plannerConfigFromEnv } from './planner.js';
 import { routingFromEnv, createRouter } from './routing.js';
@@ -134,6 +135,15 @@ app.get('/api/missions/:id', (req, res) => {
   const m = find(db.missions, req.params.id);
   if (!m) return bad(res, 'Missão não encontrada.', 404);
   res.json(withStatus(m));
+});
+
+// Relatório de entrega: somente leitura, derivado dos registros gravados (delivery.js). Nunca grava nem altera o estado da missão.
+app.get('/api/missions/:id/delivery', (req, res) => {
+  const m = find(db.missions, req.params.id);
+  if (!m) return bad(res, 'Missão não encontrada.', 404);
+  const r = deliveryOf(m, find(db.workspaces, m.workspaceId) || null);
+  if (!r.ok) return bad(res, r.error, 500);
+  res.json(r.report);
 });
 
 app.post('/api/missions', (req, res) => {

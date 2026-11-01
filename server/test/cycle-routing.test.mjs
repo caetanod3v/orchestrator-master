@@ -30,7 +30,7 @@ before(() => {
 });
 after(async () => { await new Promise((r) => setTimeout(r, 800)); fs.rmSync(tmp, { recursive: true, force: true }); });
 
-const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:check ${title}`, acceptance: ['conferir'] } });
+const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:check EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['out.txt conferido'] });
 const metrics = (cost) => { const t = { input: 2, output: 100, cacheCreation: 50, cacheRead: 20 }; return { final: { tokens: t, tokensAllModels: t, costUsd: cost, models: { 'modelo-sintetico': { ...t, thinking: 0, costUsd: cost } } }, live: null, rateLimit: null }; };
 /** Planner simulado: guarda os argumentos de CADA chamada a decide(); com `tiers`, também implementa describeTier. */
@@ -41,7 +41,7 @@ const scripted = (answers, { tiers = true } = {}) => {
 };
 const mkMission = () => { const m = { id: `r${++seq}`, demo: false, title: 'Missão R', objective: 'Objetivo R', workspaceId: 'ws', createdAt: 'T0', tasks: [] }; db.missions.push(m); return m; };
 async function runCycle(answers, { router = null, planner = scripted(answers) } = {}) {
-  const m = mkMission(), cy = createCycle({ db, executor, planner, startTaskRun, listFiles: () => ['LEIAME.md'], router });
+  for (const f of ['out.txt', 'evid.txt']) fs.rmSync(path.join(wsDir, f), { force: true }); const m = mkMission(), cy = createCycle({ db, executor, planner, startTaskRun, listFiles: () => ['LEIAME.md'], router });
   const events = []; const on = (e) => events.push(e); bus.on('usage', on);
   assert.equal((await cy.start(m.id, 3)).status, 202); await cy.idle(); bus.off('usage', on);
   return { m, c: m.cycle, planner, events: events.filter((e) => e.agent === 'planner' && e.missionId === m.id) };

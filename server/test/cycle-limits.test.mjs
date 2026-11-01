@@ -33,7 +33,7 @@ before(() => {
 after(async () => { await new Promise((r) => setTimeout(r, 800)); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 const SIMPLE = 'No arquivo config.json, alterar o valor de timeoutMs de 1000 para 5000, sem modificar nenhuma outra chave. Critério de aceitação: a verificação obrigatória npm test passa.';
-const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:check ${title}`, acceptance: ['conferir'] } });
+const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:check EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['verificação real aprovada'] });
 const metrics = (cost) => { const t = { input: 2, output: 100, cacheCreation: 50, cacheRead: 20 }; return { final: { tokens: t, tokensAllModels: t, costUsd: cost, models: { m: { ...t, thinking: 0, costUsd: cost } } }, live: null, rateLimit: null }; };
 const APPLIED = { lite: { tier: 'lite', model: 'claude-haiku-5-5', effort: 'low' }, standard: { tier: 'standard', model: null, effort: null } };
@@ -50,7 +50,7 @@ const verifier = (status = 'pass') => ({ isBusy: () => false, stop: async () => 
 const mkMission = () => { const m = { id: `d${++seq}`, demo: false, title: `Missão D${seq}`, objective: SIMPLE, workspaceId: 'ws', createdAt: 'T0', tasks: [] }; db.missions.push(m); return m; };
 const cycleOf = (m, planner, { limits = null, router = null, ver = verifier() } = {}) => createCycle({ db, executor, planner, startTaskRun, verifier: ver, listFiles: () => ['config.json'], router, limits });
 async function run(answers, { limits = null, router = null, ver, max = 5, plannerOpts } = {}) {
-  fs.rmSync(path.join(wsDir, 'out.txt'), { force: true });
+  fs.rmSync(path.join(wsDir, 'out.txt'), { force: true }); fs.rmSync(path.join(wsDir, 'evid.txt'), { force: true });
   const m = mkMission(), planner = scripted(answers, plannerOpts), cy = cycleOf(m, planner, { limits, router, ver }), s0 = execStarts;
   assert.equal((await cy.start(m.id, max)).status, 202); await cy.idle();
   return { m, c: m.cycle, cy, planner, answers, starts: () => execStarts - s0 };

@@ -42,7 +42,8 @@ const mk = (planner, multiStep = true) => createCycle({ db, executor, planner, s
 const mkMission = (ws, over = {}) => { const m = { id: `d${++seq}`, demo: false, title: `Missão D${seq}`, objective: 'objetivo', workspaceId: ws, createdAt: 'T0', tasks: [], ...over }; db.missions.push(m); return m; };
 const step = (id, deps = [], mode = 'produce', file = `${id}.txt`) => ({ id, title: `Etapa ${id}`, instructions: `MODE:${mode} FILE:${file} ${id}`, acceptance: [`${file} existe e foi gerado nesta etapa`], expectedFiles: [file], dependsOn: deps });
 const plan = (steps) => JSON.stringify({ decision: 'plan', rationale: 'dividir', steps });
-const cont = (title, file = 'x.txt') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:produce FILE:${file} ${title}`, acceptance: [`${file} existe com o conteúdo gerado`] } });
+const cont = (title, file = 'x.txt') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:produce FILE:${file} ${title}`, acceptance: [`${file} existe com o conteúdo gerado`], expectedFiles: [file] } });
+const contBare = (title, file = 'x.txt') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:produce FILE:${file} ${title}`, acceptance: [`${file} existe com o conteúdo gerado`] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'Tudo certo, segundo o Planner.', evidence: ['o Planner afirma que x.txt existe'] });
 const blockedAns = () => JSON.stringify({ decision: 'blocked', rationale: 'preciso de ajuda', blockedReason: 'decisão humana' });
 const quiet = async (fn) => { const e = console.error; console.error = () => {}; try { return await fn(); } finally { console.error = e; } };
@@ -149,7 +150,7 @@ test('arquivos: são os registrados nas rodadas, com origem e limitações; nunc
 test('dados históricos: rodadas sem parecer de evidência (antes do M8) e registros incompletos ou malformados não quebram nem inventam', () => {
   const legacy = (verification, verifications) => rnd(1, { report: rep({ verifications }), verification });
   const ok = buildDelivery(mis(cyc('completed', [legacy('passed', [REAL_PASS])], { finalSummary: 's', evidence: ['e'] })), W);
-  assert.equal(ok.assurance.level, 'verified'); assert.match(ok.assurance.basis, /histórico/); assert.equal(ok.verified.evidence[0].recordedByEvidenceModule, false);
+  assert.equal(ok.assurance.level, 'unverified', 'sem parecer do sistema nada é presumido como verificado'); assert.match(ok.assurance.basis, /histórico/); assert.equal(ok.verified.evidence[0].level, 'inconclusive'); assert.equal(ok.verified.evidence[0].recordedByEvidenceModule, false);
   const none = buildDelivery(mis(cyc('completed', [legacy('none', [])])), { id: 'w', name: 'w', verifications: [] }); assert.equal(none.assurance.level, 'unverified'); assert.equal(none.verified.evidence[0].level, 'absent');
   const bad = [undefined, null, {}, { cycle: 'x' }, { id: 'a', tasks: 'não', cycle: { rounds: 'não', status: 'completed' } }, { id: 'b', tasks: [null, 3], cycle: { status: 'completed', rounds: [null, 1, { n: 1, report: 'texto' }, { n: 2, report: { filesChanged: 'x', verifications: 'y', checks: [null] } }] } }];
   for (const m of bad) { const r = buildDelivery(m, null); assert.equal(r.schemaVersion, 1); assert.ok(Array.isArray(r.limitations)); assert.notEqual(r.assurance.level, 'verified', JSON.stringify(m)); }
@@ -247,13 +248,18 @@ test('ciclo concluído com arquivos esperados conferidos: registro gravado ao te
   const raw = JSON.stringify(onDisk.cycle); assert.ok(!raw.includes('legend') && !raw.includes('"declared"') && !raw.includes('Declarações de agentes'), 'sem cópia do relatório no banco'); assert.ok(JSON.stringify(onDisk.cycle.deliveryContext).length < 300);
 });
 
-test('ciclo concluído sem verificação real nem arquivos esperados (fluxo de sempre): estado "completed", mas a garantia é UNVERIFIED (inconclusiva não vira positiva)', async () => {
-  const { m, c } = await run([cont('criar x'), done()], { multiStep: false });
-  assert.equal(c.status, 'completed'); assert.equal(c.assurance, 'self-declared'); // a política de conclusão não mudou
+test('sem verificação real nem arquivos esperados (fluxo avulso): "complete" é rejeitado, o ciclo NÃO conclui e o relatório mostra a evidência inconclusiva e a missão não entregue', async () => {
+  const { m, c } = await run([contBare('criar x'), done(), blockedAns()], { multiStep: false });
+  assert.notEqual(c.status, 'completed'); assert.equal(c.blockedCode, 'planner_blocked'); assert.match(c.rejections[0].problem, /evidência do sistema para a última rodada é "inconclusive"/);
   const r = deliveryOf(m, db.workspaces.find((w) => w.id === 'ws0')).report;
-  assert.equal(r.state.code, 'completed'); assert.equal(r.assurance.level, 'unverified'); assert.equal(r.verified.evidence[0].level, 'inconclusive');
-  assert.match(r.assurance.reasons.join(' '), /inconclusiva/); assert.equal(r.declared.cycleAssuranceLabel, 'self-declared');
-  assert.equal(r.declared.executorReports[0].checks.length >= 0, true);
+  assert.equal(r.state.code, 'blocked'); assert.equal(r.state.delivered, false); assert.equal(r.assurance.level, 'not_applicable'); assert.equal(r.verified.evidence[0].level, 'inconclusive');
+});
+
+test('coerência: todo ciclo concluído com evidência verified tem assurance "verified" no ciclo E no relatório de entrega', async () => {
+  const { m, c } = await run([cont('criar x'), done()], { multiStep: false });
+  assert.equal(c.status, 'completed', c.blockedReason); assert.equal(c.assurance, 'verified');
+  const r = deliveryOf(m, db.workspaces.find((w) => w.id === 'ws0')).report;
+  assert.equal(r.assurance.level, 'verified'); assert.equal(r.declared.cycleAssuranceLabel, 'verified'); assert.equal(r.verified.evidence[0].level, 'verified');
 });
 
 test('ciclo com verificação real obrigatória aprovada: verifications registradas e garantia verified; verificação reprovada deixa a missão NÃO entregue', async () => {
@@ -283,6 +289,21 @@ test('falha ao gravar a conclusão: o ciclo NÃO fica concluído, o registro de 
   const { m, c } = await quiet(() => run([plan([step('a')]), done()], { hook: (left) => { if (left === 1) fs.mkdirSync(BLOCK_TMP, { recursive: true }); } })).finally(() => fs.rmSync(BLOCK_TMP, { recursive: true, force: true }));
   assert.equal(c.status, 'blocked'); assert.equal(c.blockedCode, 'persistence_failed'); assert.equal(c.delivery, undefined); assert.equal(c.deliveryContext, undefined, 'nada de contexto de encerramento sem a conclusão gravada');
   const r = deliveryOf(m, db.workspaces[1]).report; assert.equal(r.state.delivered, false); assert.equal(r.state.code, 'blocked'); assert.equal(r.declared.plannerSummary, null);
+});
+
+test('falha ao gravar a conclusão COM valores anteriores: o rollback de end() restaura status, finishedAt, deliveryContext e delivery exatamente como estavam', async () => {
+  const priorCtx = { v: 1, cycleId: 'anterior', status: 'limit_reached', finishedAt: 'T-ANTES', workspace: null, verifications: [] }, priorOld = { schemaVersion: 1, source: 'recorded', marca: 'formato-anterior' };
+  let before = null;
+  const { c } = await quiet(() => run([plan([step('a')]), done()], { hook: (left) => {
+    if (left !== 1) return;
+    const cy = db.missions.at(-1).cycle; cy.deliveryContext = priorCtx; cy.delivery = priorOld; cy.finishedAt = 'T-ANTES'; // estado anterior ao fim, como num ciclo retomado
+    before = { status: cy.status, finishedAt: cy.finishedAt }; fs.mkdirSync(BLOCK_TMP, { recursive: true });
+  } })).finally(() => fs.rmSync(BLOCK_TMP, { recursive: true, force: true }));
+  assert.ok(before, 'a falha de gravação foi armada antes da decisão "complete"');
+  assert.equal(c.blockedCode, 'persistence_failed'); assert.equal(c.status, 'blocked'); // nunca 'completed': o rollback desfez a conclusão e o ciclo bloqueou por persistência
+  assert.equal(c.finishedAt, before.finishedAt, 'finishedAt voltou ao valor anterior (não ficou o instante do fim abortado)');
+  assert.strictEqual(c.deliveryContext, priorCtx, 'o contexto anterior foi restaurado (não removido nem substituído)'); assert.deepEqual(c.deliveryContext, { v: 1, cycleId: 'anterior', status: 'limit_reached', finishedAt: 'T-ANTES', workspace: null, verifications: [] });
+  assert.strictEqual(c.delivery, priorOld, 'o relatório no formato anterior foi restaurado (recordDeliveryContext o havia apagado)'); assert.equal(c.delivery.marca, 'formato-anterior');
 });
 
 test('falha ao montar o CONTEXTO ao concluir: o ciclo conclui do mesmo jeito (sem transição indevida), sem contexto, e a consulta diz que usa a configuração atual', async () => {
@@ -363,7 +384,7 @@ test('GET /api/missions/:id/delivery: 200 com o contrato, 404 para missão inexi
     assert.deepEqual(ctx.body.verified.configured, [{ script: 'test', required: true }]); assert.deepEqual(ctx.body.currentWorkspace, { exists: true, verificationsChanged: true, source: 'current' });
     const gone = await get('mis_gone'); assert.equal(gone.body.state.code, 'cancelled'); assert.equal(gone.body.mission.workspace.name, 'Removido'); assert.equal(gone.body.currentWorkspace.exists, false);
     const res = await get('mis_resumed'); assert.equal(res.body.state.code, 'blocked'); /* o boot fecha ciclos ativos como bloqueados (restarted) */ assert.equal(res.body.context.kind, 'none'); assert.equal(res.body.state.delivered, false);
-    const hist = await get('mis_hist'); assert.equal(hist.status, 200); assert.equal(hist.body.source, 'recomputed'); assert.equal(hist.body.assurance.level, 'verified'); assert.match(hist.body.assurance.basis, /histórico/);
+    const hist = await get('mis_hist'); assert.equal(hist.status, 200); assert.equal(hist.body.source, 'recomputed'); assert.equal(hist.body.assurance.level, 'unverified'); assert.match(hist.body.assurance.basis, /histórico/);
     const blk = await get('mis_blk'); assert.equal(blk.body.state.code, 'blocked'); assert.equal(blk.body.state.delivered, false); assert.match(blk.body.state.reasons.join(' '), /planner_blocked/);
     const man = await get('mis_man'); assert.equal(man.status, 200); assert.equal(man.body.state.code, 'no_cycle'); assert.equal(man.body.assurance.level, 'not_applicable');
     const bad = await get('mis_bad'); assert.equal(bad.status, 200); assert.equal(bad.body.assurance.level, 'unverified'); assert.match(bad.body.limitations.join(' '), /sem nenhuma rodada/);

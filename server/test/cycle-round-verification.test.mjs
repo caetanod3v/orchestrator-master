@@ -27,7 +27,7 @@ before(() => {
 });
 after(async () => { await new Promise((r) => setTimeout(r, 800)); fs.rmSync(tmp, { recursive: true, force: true }); });
 
-const cont = (title, mode = 'write') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} ${title}`, acceptance: ['conferir'] } });
+const cont = (title, mode = 'write') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['verificações reais aprovadas'] });
 const scripted = (answers) => { const calls = []; return { calls, busy: () => false, cancel: async () => {}, decide: async ({ prompt }) => { calls.push(prompt); const a = answers.shift(); return a === undefined ? { error: 'roteiro acabou' } : { text: a }; } }; };
 /** `plan`: status por chamada (item a item); `onRun(item, n)` permite observar o estado no meio da verificação. */
@@ -40,7 +40,7 @@ function fakeVerifier(plan, onRun) {
 }
 const items = (...scripts) => scripts.map((s) => ({ id: s, script: s, command: 'x', required: true, timeoutMs: 1000 }));
 async function go({ answers, verifier, verifications = items('test') }) {
-  fs.rmSync(path.join(wsDir, 'out.txt'), { force: true }); ws.verifications = verifications;
+  fs.rmSync(path.join(wsDir, 'out.txt'), { force: true }); fs.rmSync(path.join(wsDir, 'evid.txt'), { force: true }); ws.verifications = verifications;
   const m = { id: `v${++seq}`, demo: false, title: 'M', objective: 'o', workspaceId: 'ws', createdAt: store.now(), tasks: [] }; db.missions.push(m);
   const planner = scripted(answers), cy = createCycle({ db, executor, planner, startTaskRun, verifier, listFiles: () => [] });
   assert.equal((await cy.start(m.id, 4)).status, 202); await cy.idle();
@@ -95,7 +95,7 @@ test('sem verificações configuradas => none; verificador indisponível => skip
 
 test('cancelar no MEIO da fila inicial (1ª de 2 verificações) => skipped; a fila completa continua dando passed', async () => {
   const run = async (cancelDuringFirst) => {
-    fs.rmSync(path.join(wsDir, 'out.txt'), { force: true }); ws.verifications = items('test', 'lint');
+    fs.rmSync(path.join(wsDir, 'out.txt'), { force: true }); fs.rmSync(path.join(wsDir, 'evid.txt'), { force: true }); ws.verifications = items('test', 'lint');
     const m = { id: `v${++seq}`, demo: false, title: 'M', objective: 'o', workspaceId: 'ws', createdAt: store.now(), tasks: [] }; db.missions.push(m);
     let cancelling = null, cy;
     const verifier = fakeVerifier(['pass', 'pass'], (item) => { if (cancelDuringFirst && item.script === 'test') cancelling = cy.cancel(m.id); });

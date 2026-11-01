@@ -93,9 +93,9 @@ test('aumento de verificações REAIS aprovadas continua contando como progresso
   assert.equal(c.rounds.length, 4); assert.equal(c.status, 'blocked'); assert.equal(c.blockedCode, 'no_progress');
 });
 
-test('conclusão com checks autodeclarados e sem verificações obrigatórias continua funcionando (rotulada self-declared)', async () => {
-  const c = await run({ executor: cli({ declare: () => 1 }), answers: [cont('Única'), done] });
-  assert.equal(c.status, 'completed'); assert.equal(c.assurance, 'self-declared'); assert.equal(c.rounds.length, 1);
+test('conclusão apoiada só em checks autodeclarados e sem verificações obrigatórias é REJEITADA (o relato do Executor não é evidência)', async () => {
+  const c = await run({ executor: cli({ declare: () => 1 }), answers: [cont('Única'), done, JSON.stringify({ decision: 'blocked', rationale: 'sem como comprovar', blockedReason: 'preciso de evidência' })] });
+  assert.notEqual(c.status, 'completed'); assert.equal(c.rounds.length, 1); assert.match(c.rejections[0].problem, /evidência do sistema/);
   assert.equal(c.rounds[0].report.checks[0].result, 'pass');
 });
 

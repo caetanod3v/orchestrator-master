@@ -27,7 +27,7 @@ before(() => {
 });
 after(async () => { await new Promise((r) => setTimeout(r, 800)); fs.rmSync(tmp, { recursive: true, force: true }); });
 
-const cont = (title, mode = 'check') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} ${title}`, acceptance: ['conferir'] } });
+const cont = (title, mode = 'check') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'objetivo atendido', evidence: ['out.txt conferido'] });
 const blocked = (why = 'preciso de um humano') => JSON.stringify({ decision: 'blocked', rationale: 'sem como seguir', blockedReason: why });
 const scripted = (answers) => { const calls = []; return { calls, busy: () => false, cancel: async () => {}, decide: async ({ prompt }) => { calls.push(prompt); const a = answers.shift(); return a === undefined ? { error: 'roteiro acabou' } : { text: a }; } }; };

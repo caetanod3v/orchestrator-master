@@ -23,7 +23,7 @@ const { missionStatus } = await import('../mission-status.js');
 let db, executor, startTaskRun, ws, seq = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await sleep(30); } return false; };
-const cont = (title, mode) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} ${title}`, acceptance: ['conferir'] } });
+const cont = (title, mode) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['verificações reais aprovadas no relatório'] });
 const blocked = () => JSON.stringify({ decision: 'blocked', rationale: 'sem como seguir', blockedReason: 'preciso de um humano' });
 const scripted = (answers) => { const calls = []; return { calls, busy: () => false, cancel: async () => {}, decide: async ({ prompt }) => { calls.push(prompt); const a = answers.shift(); return a === undefined ? { error: 'roteiro acabou' } : { text: a }; } }; };
@@ -54,7 +54,7 @@ after(async () => { await sleep(800); fs.rmSync(tmp, { recursive: true, force: t
 
 const verifs = (...specs) => specs.map(([script, required]) => ({ id: script, script, command: `x-${script}`, required, timeoutMs: 60000 }));
 function setup(planner, verifier, config) {
-  fs.rmSync(path.join(wsDir, 'out.txt'), { force: true });
+  fs.rmSync(path.join(wsDir, 'out.txt'), { force: true }); fs.rmSync(path.join(wsDir, 'evid.txt'), { force: true });
   ws.verifications = config;
   const m = { id: `v${++seq}`, demo: false, title: `Missão ${seq}`, objective: 'obj', workspaceId: 'ws', createdAt: store.now(), tasks: [] };
   db.missions.unshift(m);
@@ -149,11 +149,13 @@ test('cancelar durante a verificação interrompe o processo e termina "cancelle
   assert.equal(s.planner.calls.length, 1); assert.equal(missionStatus(s.m), 'cancelled');
 });
 
-test('sem verificações configuradas: comportamento anterior (autodeclarado) e rotulado "self-declared"', async () => {
+test('sem verificações configuradas: só conclui com arquivos esperados conferidos pelo sistema (verified); sem eles, "complete" é rejeitado', async () => {
   const v = fakeVerifier(['pass']);
-  const s = setup(scripted([cont('Conferir', 'check'), done()]), v, []);
-  const c = await go(s);
-  assert.equal(c.status, 'completed'); assert.equal(c.assurance, 'self-declared'); assert.equal(v.calls.length, 0);
+  const c = await go(setup(scripted([cont('Conferir', 'check'), done()]), v, []));
+  assert.equal(c.status, 'completed'); assert.equal(c.assurance, 'verified'); assert.equal(c.rounds[0].report.evidence.basis, 'expected_files'); assert.equal(v.calls.length, 0);
+  const bare = JSON.stringify({ decision: 'continue', rationale: 'x', task: { title: 'Conferir', instructions: 'MODE:check Conferir', acceptance: ['conferir'] } });
+  const r = await go(setup(scripted([bare, done(), JSON.stringify({ decision: 'blocked', rationale: 'sem prova', blockedReason: 'preciso de evidência' })]), fakeVerifier(['pass']), []));
+  assert.notEqual(r.status, 'completed'); assert.match(r.rejections[0].problem, /evidência do sistema para a última rodada é "inconclusive"/);
 });
 
 test('só verificações opcionais configuradas: ainda exige evidência (aprovada) para concluir', async () => {

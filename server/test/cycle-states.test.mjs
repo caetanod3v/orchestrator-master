@@ -23,7 +23,7 @@ const { missionStatus, taskDerivedStatus } = await import('../mission-status.js'
 let db, executor, startTaskRun, seq = 0;
 const until = async (fn, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await new Promise((r) => setTimeout(r, 30)); } return false; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const cont = (title, mode) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} ${title}`, acceptance: ['conferir'] } });
+const cont = (title, mode) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['verificação aprovada no relatório'] });
 const blocked = () => JSON.stringify({ decision: 'blocked', rationale: 'sem como seguir', blockedReason: 'preciso de um humano' });
 const scripted = (answers) => { const calls = []; return { calls, busy: () => false, cancel: async () => {}, decide: async ({ prompt }) => { calls.push(prompt); const a = answers.shift(); return a === undefined ? { error: 'roteiro acabou' } : { text: a }; } }; };
@@ -37,7 +37,7 @@ before(() => {
 after(async () => { await sleep(800); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 const mkMission = () => {
-  fs.rmSync(path.join(wsDir, 'out.txt'), { force: true });
+  fs.rmSync(path.join(wsDir, 'out.txt'), { force: true }); fs.rmSync(path.join(wsDir, 'evid.txt'), { force: true });
   const m = { id: `s${++seq}`, demo: false, title: `Missão ${seq}`, objective: 'obj', workspaceId: 'ws', createdAt: store.now(), tasks: [] };
   db.missions.unshift(m); return m;
 };

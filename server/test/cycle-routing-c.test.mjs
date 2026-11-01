@@ -35,7 +35,7 @@ before(() => {
 after(async () => { await new Promise((r) => setTimeout(r, 800)); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 const SIMPLE = 'No arquivo config.json, alterar o valor de timeoutMs de 1000 para 5000, sem modificar nenhuma outra chave. Critério de aceitação: a verificação obrigatória npm test passa.';
-const cont = (title, mode = 'check') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} ${title}`, acceptance: ['conferir'] } });
+const cont = (title, mode = 'check') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['verificação real aprovada'] });
 const blocked = () => JSON.stringify({ decision: 'blocked', rationale: 'sem como seguir', blockedReason: 'preciso de um humano' });
 const metrics = (cost) => { const t = { input: 2, output: 100, cacheCreation: 50, cacheRead: 20 }; return { final: { tokens: t, tokensAllModels: t, costUsd: cost, models: { m: { ...t, thinking: 0, costUsd: cost } } }, live: null, rateLimit: null }; };
@@ -51,7 +51,7 @@ const verifier = (status = 'pass') => ({ isBusy: () => false, stop: async () => 
 const mkMission = (objective) => { const m = { id: `c${++seq}`, demo: false, title: `Missão C${seq}`, objective, workspaceId: 'ws', createdAt: 'T0', tasks: [] }; db.missions.push(m); return m; };
 const notes = (m, re) => db.activity.filter((a) => a.type === 'cycle' && a.missionId === m.id && re.test(a.message));
 async function run(answers, { router = createRouter(), planner = scripted(answers), ver = verifier(), max = 5, progress = false } = {}) {
-  for (const x of fs.readdirSync(wsDir)) if (x === 'out.txt' || /^pd+.txt$/.test(x)) fs.rmSync(path.join(wsDir, x), { force: true }); // cada ciclo parte do mesmo estado do workspace (a CLI falsa cria out.txt: a 1ª rodada tem progresso, as seguintes não)
+  for (const x of fs.readdirSync(wsDir)) if (x === 'out.txt' || x === 'evid.txt' || /^pd+.txt$/.test(x)) fs.rmSync(path.join(wsDir, x), { force: true }); // cada ciclo parte do mesmo estado do workspace (a CLI falsa cria out.txt: a 1ª rodada tem progresso, as seguintes não)
   const m = mkMission(SIMPLE), cy = createCycle({ db, executor: progress ? progExec : executor, planner, startTaskRun: progress ? startProg : startTaskRun, verifier: ver, listFiles: () => ['config.json'], router });
   assert.equal((await cy.start(m.id, max)).status, 202); await cy.idle();
   return { m, c: m.cycle, cy, planner };

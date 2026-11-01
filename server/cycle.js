@@ -29,6 +29,7 @@ import { MAX_PLAN_STEPS, validatePlanSteps } from './cycle-schema.js';
 import { snapshotWorkspace, hashesOf, diffHashes, checkExpected, buildEvidence, evidencePathProblem, CATEGORY_LABEL } from './evidence.js';
 import { syncPlan, nextStep, openSteps, planProblem, dependencyTaskIds, planProgress, newPlan } from './plan.js';
 import { evaluateTask, actionDigest, approvalProblem } from './policy.js';
+import { closingContext } from './delivery.js';
 
 // O que precisa acontecer para um ciclo parado por limite poder retomar. Os limites vêm do ambiente do servidor; a retomada nunca os altera.
 const LIMIT_HINT = {
@@ -47,6 +48,7 @@ const ACTIVE = ['planning', 'running'];
 const REPEAT_WINDOW = 3;
 const clip = (s, n) => String(s ?? '').slice(0, n);
 const find = (arr, id) => arr.find((x) => x.id === id);
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const ok = (cycle) => ({ status: 200, cycle });
 const fail = (status, error) => ({ status, error });
 
@@ -220,7 +222,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, mult
     `OBJETIVO E CRITÉRIOS DE ACEITAÇÃO: ${mission.objective || '(não informado; use o título)'}`,
     (workspace.verifications || []).some((v) => v.required)
       ? `VERIFICAÇÕES OBRIGATÓRIAS (rodadas reais pelo orquestrador depois de cada execução bem-sucedida; "complete" só é aceito se TODAS passaram na ÚLTIMA rodada): ${workspace.verifications.filter((v) => v.required).map((v) => v.script).join(', ')}`
-      : 'VERIFICAÇÕES OBRIGATÓRIAS: nenhuma configurada neste workspace (só existem verificações autodeclaradas pelo Executor, de menor confiança).',
+      : 'VERIFICAÇÕES OBRIGATÓRIAS: nenhuma configurada neste workspace. Sem verificação real, a conclusão só é aceita com "expectedFiles" conferidos pelo orquestrador; checks autodeclarados do Executor NÃO valem como prova.',
     `WORKSPACE: ${workspace.name} — arquivos (até 2 níveis, só nomes):\n${listing.length ? listing.join('\n') : '(vazio)'}`,
     pastCyclesSection(mission.pastCycles),
     `RODADA A DECIDIR: ${rounds.length + 1} de no máximo ${cycle.maxIterations} (executadas: ${rounds.length})`,
@@ -232,12 +234,12 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, mult
     feedback ? `\nATENÇÃO: ${feedback}` : '',
     '',
     'Responda SOMENTE com um objeto JSON (nada fora dele) em um destes formatos:',
-    '{"decision":"continue","rationale":"...","task":{"title":"...","instructions":"...","acceptance":["critério verificável"]}}',
+    '{"decision":"continue","rationale":"...","task":{"title":"...","instructions":"...","acceptance":["critério verificável"],"expectedFiles":["caminho/relativo.ext (opcional, 1 a 8: arquivos que a tarefa deve CRIAR ou ALTERAR; o orquestrador os confere no disco)"]}}',
     '{"decision":"complete","rationale":"...","evidence":["evidência concreta tirada dos relatórios"]}',
     '{"decision":"blocked","rationale":"...","blockedReason":"o que precisa de intervenção humana"}',
     ...(multiStep ? [PLAN_FORMAT] : []),
     'Como ler o HISTÓRICO: linhas "verificação anterior SUBSTITUÍDA" são histórico (resultados antigos trocados por uma re-verificação posterior); o resumo e as verificações autodeclaradas descrevem o FIM DA RODADA, não o estado atual do workspace. Para decidir sobre o estado atual, use a linha de verificações REAIS e a linha do tempo.',
-    'Regras: se houver verificações obrigatórias, a decisão "complete" exige que todas tenham passado na última rodada (evidência real do orquestrador). Uma tarefa pequena e específica por vez; critérios objetivos; não repita tarefa idêntica; use "complete" apenas se a ÚLTIMA execução foi bem-sucedida e os relatórios trazem verificações aprovadas (pass) sem falhas — o backend rejeita "complete" sem isso; se faltar permissão ou algo fora do alcance do executor, use "blocked".',
+    'Regras: se houver verificações obrigatórias, a decisão "complete" exige que todas tenham passado na última rodada (evidência real do orquestrador). Uma tarefa pequena e específica por vez; critérios objetivos; não repita tarefa idêntica; use "complete" apenas se a ÚLTIMA execução foi bem-sucedida E a linha "EVIDÊNCIA" da última rodada indica nível "verified" (evidência do orquestrador: todas as verificações reais configuradas executadas e aprovadas e/ou "expectedFiles" conferidos no disco, sem alterações de testes pendentes de revisão) — o backend REJEITA "complete" quando o nível é "inconclusive" ou "failed", e o relato ou os checks do Executor nunca substituem essa evidência; se o nível não for "verified", planeje uma tarefa que gere a evidência que falta (por exemplo com "expectedFiles") ou declare "blocked" pedindo intervenção humana; se faltar permissão ou algo fora do alcance do executor, use "blocked".',
   ].filter((x) => x !== '').join('\n');
 }
 
@@ -280,12 +282,24 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   };
   // `confirm`: o estado final só vale se for gravado (conclusão do ciclo). Se a gravação falhar, volta ao estado anterior e a exceção segue: nunca se anuncia
   // "concluído" (nem em memória nem na atividade) sem o disco ter registrado.
+  // Relatório de entrega (delivery.js): NÃO é gravado. Ao terminar, grava-se só um contexto histórico mínimo (workspace e verificações configuradas naquele momento), ligado a ESTE ciclo
+  // terminado (id, estado e instante de fim); o relatório é reconstruído na consulta. Falha ao montar o contexto NUNCA muda o estado nem impede o fim do ciclo (a consulta avisa da limitação).
+  // `delivery` (formato anterior, relatório inteiro) deste mesmo ciclo é descartado aqui, já que este ciclo está sendo regravado de qualquer modo (nada é migrado em massa).
+  const recordDeliveryContext = (m) => {
+    const c = m.cycle;
+    try { c.deliveryContext = closingContext(m, wsOf(m)); } catch (e) { delete c.deliveryContext; try { note(m, 'cycle', `Contexto histórico do relatório de entrega não registrado (${clip(e?.message, 120)}); o relatório usará a configuração atual e dirá isso.`); } catch { /* informativo */ } }
+    delete c.delivery;
+  };
   const end = (m, status, msg, confirm = false) => {
-    const c = m.cycle, prev = { status: c.status, finishedAt: c.finishedAt };
+    const c = m.cycle, prev = { status: c.status, finishedAt: c.finishedAt }, prevCtx = c.deliveryContext, prevOld = c.delivery;
     c.status = status; c.finishedAt = store.now();
-    if (confirm) { try { store.saveOrThrow(); } catch (e) { Object.assign(c, prev); throw e; } }
+    recordDeliveryContext(m);
+    if (confirm) { try { store.saveOrThrow(); } catch (e) { Object.assign(c, prev); if (prevCtx === undefined) delete c.deliveryContext; else c.deliveryContext = prevCtx; if (prevOld !== undefined) c.delivery = prevOld; throw e; } }
     note(m, 'cycle', msg, status === 'completed' ? 'planner' : undefined); emit(m); return 'stop';
   };
+
+  /** Garantia do ciclo, do PARECER do sistema da última rodada: 'verified' só com evidência "verified"; inconclusiva, falha, ausente (rodada histórica) ou inválida => 'self-declared'. */
+  const assuranceOf = (round) => (round?.report?.evidence?.level === 'verified' ? 'verified' : 'self-declared');
 
   /** Checagens que dependem do contexto; devolvem o motivo da rejeição ou null. */
   function semanticProblem(m, d) {
@@ -300,11 +314,16 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       const required = (wsOf(m)?.verifications || []).filter((v) => v.required);
       const missing = required.filter((v) => !vs.some((x) => x.id === v.id));
       if (missing.length) return `"complete" rejeitado: verificação obrigatória não executada nesta rodada: ${missing.map((v) => v.script).join(', ')}`;
+      // Verificação CONFIGURADA que não rodou nesta rodada (verificador indisponível, interrompida, fila incompleta) nunca é substituída por check autodeclarado do Executor.
+      const notRun = (wsOf(m)?.verifications || []).filter((v) => !vs.some((x) => x.id === v.id));
+      if (notRun.length) return `"complete" rejeitado: verificação real configurada não executada nesta rodada (${notRun.map((v) => v.script).join(', ')}${last.report.verificationsSkipped ? `; motivo: ${clip(last.report.verificationsSkipped, 120)}` : ''}); checks autodeclarados do Executor não a substituem. Resolva a pendência (ambiente, aprovação ou nova tarefa) ou declare "blocked"`;
       if (failCount(last.report) > 0) return '"complete" rejeitado: o último relatório tem verificações com falha';
       if (!required.length && passCount(last.report) < 1) return '"complete" rejeitado: o último relatório não traz nenhuma verificação aprovada (pass)';
       const pend = c.integrity?.pending ?? []; // M8: testes/configuração alterados e não revisados: uma verificação que passa sobre eles não prova a conclusão
       if (pend.length) return `"complete" rejeitado: arquivos de teste ou de configuração de validação foram alterados e não foram revisados por uma pessoa (${pend.slice(0, 5).map((x) => x.path).join(', ')}); a verificação real sobre testes alterados não prova a conclusão`;
-      if (last.report.evidence?.level === 'failed') return `"complete" rejeitado: a evidência da última rodada falhou (${clip(last.report.evidence.reasons.join('; '), 250)})`;
+      const ev = last.report.evidence; // parecer do SISTEMA (assessRound); rodada histórica sem parecer: valem só as regras acima, e nada é presumido (o rótulo fica "self-declared")
+      if (ev?.level === 'failed') return `"complete" rejeitado: a evidência da última rodada falhou (${clip((ev.reasons ?? []).join('; '), 250)})`;
+      if (ev != null && ev.level !== 'verified') return `"complete" rejeitado: a evidência do sistema para a última rodada é "${clip(ev.level, 20)}", não "verified" (${clip((ev.reasons ?? []).join('; ') || 'sem motivos gravados', 250)}). O relato e os checks do Executor não substituem evidência independente. Para concluir, gere essa evidência (verificações reais configuradas e aprovadas e/ou "expectedFiles" conferidos pelo orquestrador, sem testes alterados pendentes de revisão) ou declare "blocked" pedindo intervenção humana`;
       const open = openSteps(c); // M4: um plano com etapas não concluídas nunca vira "concluído"
       if (open.length) return `"complete" rejeitado: o plano ainda tem etapas não concluídas (${open.map((st) => `${st.id}=${st.status}`).join(', ')}); conclua-as, proponha um novo plano ou declare "blocked"`;
     }
@@ -692,7 +711,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       }
       if (d.decision === 'complete') {
         const keep = { finalSummary: c.finalSummary, evidence: c.evidence, assurance: c.assurance, decision: prevDecision };
-        c.finalSummary = d.rationale; c.evidence = d.evidence; c.assurance = (wsOf(m)?.verifications || []).some((v) => v.required) ? 'verified' : 'self-declared';
+        c.finalSummary = d.rationale; c.evidence = d.evidence; c.assurance = assuranceOf(last);
         try { return end(m, 'completed', `Planner declarou a missão concluída: ${clip(d.rationale, 200)}`, true); } catch (e) { // conclusão NÃO gravada: nada de "concluído"; o ciclo bloqueia (launch)
           const { decision, ...fields } = keep; Object.assign(c, fields); if (last) { if (decision === undefined) delete last.decision; else last.decision = decision; } throw e;
         }

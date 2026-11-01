@@ -24,7 +24,7 @@ let db, executor, startTaskRun, seq = 0;
 const until = async (fn, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await new Promise((r) => setTimeout(r, 30)); } return false; };
 
 // ---- simulações -------------------------------------------------------------------------
-const cont = (title, mode, extra = {}) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} ${title}`, acceptance: ['conferir o arquivo'] }, ...extra });
+const cont = (title, mode, extra = {}) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} EVID:evid.txt ${title}`, acceptance: ['conferir o arquivo'], expectedFiles: ['evid.txt'] }, ...extra });
 const done = (evidence = ['out.txt existe e foi conferido']) => JSON.stringify({ decision: 'complete', rationale: 'objetivo atendido', evidence });
 const blocked = (why = 'preciso de um humano') => JSON.stringify({ decision: 'blocked', rationale: 'sem como seguir', blockedReason: why });
 function scripted(answers) {

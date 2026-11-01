@@ -55,7 +55,7 @@ function busy() {
 }
 const trySave = () => { try { return store.save(); } catch { return 'lançou'; } };
 
-const cont = (title, mode = 'check') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} ${title}`, acceptance: ['conferir o arquivo'] } });
+const cont = (title, mode = 'check') => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} EVID:evid.txt ${title}`, acceptance: ['conferir o arquivo'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'objetivo atendido', evidence: ['out.txt existe e foi conferido'] });
 const blocked = (why = 'fim') => JSON.stringify({ decision: 'blocked', rationale: 'r', blockedReason: why });
 /** Planner roteirizado: cada resposta é um texto ou uma função (efeito colateral antes de responder, por exemplo quebrar o disco). */
@@ -70,7 +70,7 @@ function rig() {
   return { executor, started, startTaskRun };
 }
 let seq = 0;
-const mkMission = () => { const m = { id: `m${++seq}`, demo: false, title: `M${seq}`, objective: 'objetivo', workspaceId: 'ws', createdAt: store.now(), tasks: [] }; db.missions.push(m); return m; };
+const mkMission = () => { fs.rmSync(path.join(wsDir, 'evid.txt'), { force: true }); const m = { id: `m${++seq}`, demo: false, title: `M${seq}`, objective: 'objetivo', workspaceId: 'ws', createdAt: store.now(), tasks: [] }; db.missions.push(m); return m; };
 const mkCycle = (r, planner, retry = [0, 0]) => createCycle({ db, executor: r.executor, planner, startTaskRun: r.startTaskRun, listFiles: () => [], persistRetryMs: retry });
 
 // ---- saudável: nada muda ---------------------------------------------------------------------------------------------------------

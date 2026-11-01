@@ -57,7 +57,7 @@ const mk = (planner, { limits = null, multiStep = true } = {}) => createCycle({ 
 function restart(planner, opts = {}) { boot(opts); const cy = mk(planner, opts); cy.recover(); return cy; }
 
 const step = (id, deps = []) => ({ id, title: `Etapa ${id}`, instructions: `MODE:check ${id}`, acceptance: ['out.txt existe com o conteúdo conferido'], dependsOn: deps });
-const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:check ${title}`, acceptance: ['conferir'] } });
+const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:check EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['verificação real aprovada'] });
 const blockedAns = () => JSON.stringify({ decision: 'blocked', rationale: 'preciso de ajuda', blockedReason: 'decisão humana' });
 

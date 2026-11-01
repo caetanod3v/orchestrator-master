@@ -22,7 +22,7 @@ const { createCycle } = await import('../cycle.js');
 const { missionStatus } = await import('../mission-status.js');
 
 let db, executor, startTaskRun, ws, seq = 0;
-const cont = (title, mode) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} ${title}`, acceptance: ['conferir'] } });
+const cont = (title, mode) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:${mode} EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['verificação real aprovada'] });
 const blocked = () => JSON.stringify({ decision: 'blocked', rationale: 'sem como seguir', blockedReason: 'preciso de um humano' });
 const scripted = (answers) => { const calls = []; return { calls, busy: () => false, cancel: async () => {}, decide: async ({ prompt }) => { calls.push(prompt); const a = answers.shift(); return a === undefined ? { error: 'roteiro acabou' } : { text: a }; } }; };
@@ -66,7 +66,7 @@ before(() => {
 after(async () => { await new Promise((r) => setTimeout(r, 800)); fs.rmSync(tmp, { recursive: true, force: true }); });
 
 function setup(planner, verifier) {
-  fs.rmSync(path.join(wsDir, 'out.txt'), { force: true });
+  fs.rmSync(path.join(wsDir, 'out.txt'), { force: true }); fs.rmSync(path.join(wsDir, 'evid.txt'), { force: true });
   ws.verifications = [{ id: 'test', script: 'test', command: 'node --test', required: true, timeoutMs: 60000 }];
   const m = { id: `r${++seq}`, demo: false, title: `Missão ${seq}`, objective: 'obj', workspaceId: 'ws', createdAt: store.now(), tasks: [] };
   db.missions.unshift(m);

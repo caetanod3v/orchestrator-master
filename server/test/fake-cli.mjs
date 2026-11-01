@@ -2,6 +2,7 @@
 // Lê o prompt do stdin e se comporta conforme a diretiva "MODE:<x>" nele.
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 if (process.argv.includes('--version')) { console.log('0.0.0-fake (teste)'); process.exit(0); }
 
@@ -19,6 +20,7 @@ process.stdin.on('end', async () => {
   if (mode === 'sleep') { setInterval(() => {}, 1000); return; } // fica vivo até ser interrompido
   if (mode === 'write') fs.writeFileSync('out.txt', 'criado pelo teste\n');
   if (mode === 'fixbuild') fs.writeFileSync('BUILD_OK', 'x\n'); // faz o build do fake-verify passar
+  { const evid = /EVID:([\w./-]+)/.exec(input)?.[1]; if (evid && mode !== 'plain') { fs.mkdirSync(path.dirname(evid), { recursive: true }); fs.writeFileSync(evid, `evidência ${crypto.createHash('sha256').update(`${/TAREFA A EXECUTAR[^\n]*/.exec(input)?.[0] ?? ''}|${/MODE:[^\n]*/.exec(input)?.[0] ?? input}`).digest('hex')}\n`); } } // gate de conclusão: `expectedFiles` conferido pelo sistema precisa de um arquivo criado/alterado a cada execução
   const block = (checks) => '```json\n' + JSON.stringify({ summary: 'resumo estruturado', checks }) + '\n```';
   if (mode === 'usagepartial') { // reporta uso e fica vivo SEM emitir result (para testar interrupção/falha com métricas parciais)
     out({ type: 'assistant', message: { id: 'msg_P', content: [{ type: 'text', text: 'p' }], usage: { input_tokens: 7, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 70 } } });

@@ -33,7 +33,7 @@ after(async () => { await new Promise((r) => setTimeout(r, 800)); fs.rmSync(tmp,
 
 const SIMPLE = 'No arquivo config.json, alterar o valor de timeoutMs de 1000 para 5000, sem modificar nenhuma outra chave. Critério de aceitação: a verificação obrigatória npm test passa.';
 const COMPLEX = 'Refatorar todos os módulos do projeto conforme a especificação. Critério de aceitação: npm test passa.';
-const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:check ${title}`, acceptance: ['conferir'] } });
+const cont = (title) => JSON.stringify({ decision: 'continue', rationale: `plano: ${title}`, task: { title, instructions: `MODE:check EVID:evid.txt ${title}`, acceptance: ['conferir'], expectedFiles: ['evid.txt'] } });
 const done = () => JSON.stringify({ decision: 'complete', rationale: 'ok', evidence: ['verificação real aprovada'] });
 const blocked = () => JSON.stringify({ decision: 'blocked', rationale: 'sem como seguir', blockedReason: 'preciso de um humano' });
 const metrics = (cost) => { const t = { input: 2, output: 100, cacheCreation: 50, cacheRead: 20 }; return { final: { tokens: t, tokensAllModels: t, costUsd: cost, models: { m: { ...t, thinking: 0, costUsd: cost } } }, live: null, rateLimit: null }; };
@@ -50,7 +50,7 @@ const verifier = (status = 'pass') => ({ isBusy: () => false, stop: async () => 
 const mkMission = (objective) => { const m = { id: `b${++seq}`, demo: false, title: `Missão B${seq}`, objective, workspaceId: 'ws', createdAt: 'T0', tasks: [] }; db.missions.push(m); return m; };
 const notes = (m, re) => db.activity.filter((a) => a.type === 'cycle' && a.missionId === m.id && re.test(a.message));
 async function run(objective, answers, { router = createRouter(), planner = scripted(answers), ver = verifier(), max = 3 } = {}) {
-  const m = mkMission(objective), cy = createCycle({ db, executor, planner, startTaskRun, verifier: ver, listFiles: () => ['config.json'], router });
+  for (const f of ['out.txt', 'evid.txt']) fs.rmSync(path.join(wsDir, f), { force: true }); const m = mkMission(objective), cy = createCycle({ db, executor, planner, startTaskRun, verifier: ver, listFiles: () => ['config.json'], router });
   const events = []; const on = (e) => events.push(e); bus.on('usage', on);
   assert.equal((await cy.start(m.id, max)).status, 202); await cy.idle(); bus.off('usage', on);
   return { m, c: m.cycle, cy, planner, events: events.filter((e) => e.agent === 'planner' && e.missionId === m.id) };

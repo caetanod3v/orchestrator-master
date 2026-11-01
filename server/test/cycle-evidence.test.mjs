@@ -196,7 +196,7 @@ test('critérios de aceitação insuficientes não viram plano nem sucesso: gen�
   resetWs(); const m = mkMission('ws0'); const refused = await mk(scripted([])).start(m.id, 5, { plan: { steps: [bare] } });
   assert.equal(refused.status, 400); assert.match(refused.error, /Plano sem como ser comprovado/); assert.ok(!m.cycle);
   const fix = await run([plan([bare]), plan([step('a'), step('b', ['a'])]), done()], { ws: 'ws0' });
-  assert.equal(fix.c.status, 'completed', fix.c.blockedCode); assert.equal(fix.c.assurance, 'self-declared'); assert.equal(fix.c.rounds[0].report.evidence.basis, 'expected_files'); assert.equal(fix.c.rounds[0].report.evidence.level, 'verified', 'arquivos esperados conferidos pelo sistema bastam quando não há verificações');
+  assert.equal(fix.c.status, 'completed', fix.c.blockedCode); assert.equal(fix.c.assurance, 'verified', 'a garantia vem do parecer do sistema (arquivos esperados conferidos, integridade limpa)'); assert.equal(fix.c.rounds[0].report.evidence.basis, 'expected_files'); assert.equal(fix.c.rounds[0].report.evidence.level, 'verified', 'arquivos esperados conferidos pelo sistema bastam quando não há verificações');
   const lie = await run([plan([step('a', [], 'nofile'), step('b', ['a'])]), blockedAns()], { ws: 'ws0' });
   assert.equal(lie.c.rounds[0].report.status, 'success', 'o Executor declarou sucesso sem produzir o arquivo'); assert.equal(lie.c.rounds[0].report.evidence.level, 'failed'); assert.match(lie.c.rounds[0].report.evidence.reasons.join(), /arquivo esperado "a\.txt": o arquivo não existe/);
   assert.deepEqual(statuses(lie.c), { a: 'failed', b: 'queued' }); assert.equal(lie.starts(), 1);
@@ -249,9 +249,9 @@ test('reinício: etapa interrompida ou de resultado incerto nunca vira sucesso s
 });
 
 // ---------- 10: compatibilidade ----------
-test('ciclos sem plano e com ORCH_CYCLE_PLAN desligado: o fluxo é o de sempre (self-declared sem verificações); só a violação de integridade de testes passa a exigir revisão', async () => {
-  const a = await run([cont('Criar x'), done()], { multiStep: false, ws: 'ws0' });
-  assert.equal(a.c.status, 'completed', a.c.blockedReason); assert.equal(a.c.assurance, 'self-declared'); assert.ok(!a.c.plan); assert.equal(a.c.rounds[0].report.evidence.level, 'inconclusive', 'a evidência é registrada, mas só informa: não bloqueia o fluxo avulso');
+test('ciclos sem plano e com ORCH_CYCLE_PLAN desligado: o gate de conclusão também vale (evidência inconclusiva é rejeitada); a violação de integridade de testes continua exigindo revisão', async () => {
+  const a = await run([cont('Criar x'), done(), blockedAns()], { multiStep: false, ws: 'ws0' });
+  assert.notEqual(a.c.status, 'completed'); assert.equal(a.c.blockedCode, 'planner_blocked'); assert.ok(!a.c.plan); assert.equal(a.c.rounds[0].report.evidence.level, 'inconclusive'); assert.match(a.c.rejections[0].problem, /evidência do sistema para a última rodada é "inconclusive"/); assert.equal(a.c.assurance, undefined);
   const plain = await run([cont('Criar x'), done()], { multiStep: false }); assert.equal(plain.c.status, 'completed'); assert.equal(plain.c.assurance, 'verified'); assert.equal(plain.c.rounds[0].report.evidence.level, 'verified');
   const off = await run([plan([step('a')]), plan([step('a')]), blockedAns()], { multiStep: false }); assert.equal(off.c.blockedCode, 'planner_invalid'); assert.match(off.c.rejections[0].problem, /chaves não permitidas: steps/);
   // violação de integridade no modo avulso: bloqueia; sem revisão "complete" é rejeitado; com revisão conclui
