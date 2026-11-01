@@ -11,6 +11,7 @@ import { pidAlive } from './instance-lock.js';
 import { usageRecord, usageEvent } from './usage.js';
 import { agentArgs } from './agents.js';
 import { evaluateTask } from './policy.js';
+import { retryContext } from './plan.js';
 
 const MAX_LOG = 600;
 const find = (arr, id) => arr.find((x) => x.id === id);
@@ -24,9 +25,11 @@ export function blockedReason(db, executor, mission, task) {
   });
 }
 
-function buildPrompt(mission, task) {
+export function buildPrompt(mission, task) {
   const deps = task.dependsOn.map((id) => find(mission.tasks, id)).filter(Boolean)
     .map((d) => `- ${d.title}: ${(d.report || '(sem relatório)').slice(0, 800)}`).join('\n');
+  const cyc = mission.cycle, round = task.auto && cyc ? (cyc.rounds || []).find((r) => r.taskId === task.id) : null;
+  const retry = round ? retryContext(cyc, round) : '';
   return [
     'Você executa UMA tarefa de desenvolvimento orquestrada por uma ferramenta local, dentro do diretório atual.',
     `Missão: ${mission.title}`,
@@ -35,6 +38,7 @@ function buildPrompt(mission, task) {
     task.instructions ? `Instruções:\n${task.instructions}` : '',
     task.acceptance?.length ? `Critérios de verificação:\n${task.acceptance.map((c) => `- ${c}`).join('\n')}` : '',
     deps ? `Contexto das tarefas anteriores já aprovadas:\n${deps}` : '',
+    retry, // reparo limitado: fatos da tentativa anterior desta MESMA etapa (vazio em qualquer outra tarefa); fora de `instructions`, então não entra na política
     'Regras:',
     '- Trabalhe apenas dentro do diretório atual e faça somente esta tarefa; não antecipe tarefas futuras.',
     '- Você só pode ler e editar arquivos (sem shell, sem rede). Não apague arquivos, não faça commit nem push.',

@@ -10,7 +10,7 @@ let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (c) => (input += c));
 process.stdin.on('end', async () => {
-  let mode = /MODE:(\w+)/.exec(input)?.[1] ?? 'ok';
+  let mode = process.env.FAKE_MODE || (/MODE:(\w+)/.exec(input)?.[1] ?? 'ok'); // FAKE_MODE (só testes, herdada do processo do teste): força o modo desta execução, ignorando o do prompt
   const slow = mode.startsWith('slow'); // modos slow* só atrasam (para observar a interface)
   if (slow) mode = mode.slice(4);
   const out = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);

@@ -122,7 +122,7 @@ export function diffHashes(a = {}, b = {}) {
 }
 
 /** Arquivos esperados: precisam existir, não vazios e ter sido CRIADOS ou ALTERADOS (hash diferente do instantâneo anterior). Sem instantâneo anterior usa `prior` (resultado anterior). */
-export function checkExpected(expected, before, after, prior = []) {
+export function checkExpected(expected, before, after, prior = [], inherited = {}) {
   return expected.map((p) => {
     const rel = safeRelPath(p) ?? String(p);
     const a = after?.expected?.[rel], b = before?.expected?.[rel], old = prior.find((x) => x.path === rel);
@@ -131,8 +131,32 @@ export function checkExpected(expected, before, after, prior = []) {
     if (a.size === 0) return { path: rel, ok: false, exists: true, changed: false, reason: 'o arquivo está vazio' };
     // Sem instantâneo anterior (re-verificação) vale o resultado anterior; sem nenhum, "alterado" é desconhecido (null) e só a existência é conferida.
     const changed = before ? !b || !b.exists || b.h !== a.h : (old ? old.changed : null);
+    // Reparo limitado: o arquivo não mudou NESTA tentativa, mas uma tentativa anterior da MESMA etapa o produziu e o conteúdo atual é idêntico ao que ela gravou (ver inheritableChanges).
+    // Só o fato "alterado pela etapa" é herdado; o hash registrado é o ATUAL, e verificações reais, integridade e nível da evidência são os desta tentativa.
+    const inh = changed === false && Object.hasOwn(inherited ?? {}, rel) ? inherited[rel] : null;
+    if (inh && inh.hash === a.h) return { path: rel, ok: true, exists: true, changed: true, inherited: { round: inh.round }, size: a.size, hash: a.h };
     return changed === false ? { path: rel, ok: false, exists: true, changed: false, size: a.size, hash: a.h, reason: 'o arquivo já existia e não foi criado nem alterado por esta etapa' } : { path: rel, ok: true, exists: true, changed, size: a.size, hash: a.h };
   });
+}
+
+/**
+ * Predicado FECHADO da herança de "alterado pela etapa" entre tentativas da mesma etapa. Devolve { caminho: { hash, round } } só para arquivos esperados que uma tentativa ANTERIOR
+ * (mesmo planId e stepId, rodada menor) comprovou como criados/alterados (ok e changed verdadeiros, sem ser, ela própria, herança) com hash de conteúdo (sha256). Nada é herdado se:
+ * o instantâneo atual está incompleto, a integridade dos testes não está limpa, o hash é aproximado (`big:`), ou o caminho está entre os arquivos vigiados (testes, configuração,
+ * referenciados pelo script aprovado). O chamador ainda exige hash IGUAL ao gravado (checkExpected): conteúdo diferente (terceiro) não herda.
+ */
+export function inheritableChanges(rounds, round, after, integrity) {
+  const out = {};
+  if (!round || round.planId == null || round.stepId == null || !after?.complete || integrity?.status !== 'clean') return out;
+  for (const r of Array.isArray(rounds) ? rounds : []) {
+    if (!r || r === round || !(r.n < round.n) || r.planId !== round.planId || r.stepId !== round.stepId) continue;
+    for (const e of r.report?.evidence?.system?.expectedFiles ?? []) {
+      if (!e || e.ok !== true || e.changed !== true || e.inherited || typeof e.hash !== 'string' || !/^[0-9a-f]{64}$/.test(e.hash) || typeof e.path !== 'string') continue;
+      if (Object.hasOwn(after.files ?? {}, e.path) || categoryOf(e.path)) continue;
+      out[e.path] = { hash: e.hash, round: r.n };
+    }
+  }
+  return out;
 }
 
 /**

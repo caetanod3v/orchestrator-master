@@ -13,6 +13,8 @@
 //                                   verificationOutcome/roundVerification; rodadas antigas sem o campo são derivadas do relatório, sem gravar)
 //   execução: task.status           (running, completed, failed, interrupted … – do executor existente)
 //   plano   : cycle.plan.steps[].status  queued | running | completed | failed | interrupted (M4, ver plan.js): DERIVADO das rodadas (round.planId/stepId); execução sequencial
+//             Reparo limitado (Marco A v1; ORCH_CYCLE_MAX_STEP_RETRIES, desligado por padrão): uma etapa pode ter até MAX_STEP_ATTEMPTS rodadas (tentativas) com o mesmo
+//             planId/stepId, só para falhas R1/R2 (plan.js retryClass), no MESMO laço (drive) e com o selo do Git; o orçamento é POR CICLO (plan.js retriesUsed). Ver retryStep.
 //
 // O Planner só pode escolher continue | complete | blocked, e o backend valida formato, decisão e
 // evidências. Ele não tem ferramentas e não consegue alterar políticas, permissões ou aprovações.
@@ -26,8 +28,9 @@ import { usageRecord, usageEvent } from './usage.js';
 import { limitProblem } from './limits.js';
 import { DEFAULT_AGENT } from './agents.js';
 import { MAX_PLAN_STEPS, validatePlanSteps } from './cycle-schema.js';
-import { snapshotWorkspace, hashesOf, diffHashes, checkExpected, buildEvidence, evidencePathProblem, CATEGORY_LABEL } from './evidence.js';
-import { syncPlan, nextStep, openSteps, planProblem, dependencyTaskIds, planProgress, newPlan } from './plan.js';
+import { snapshotWorkspace, hashesOf, diffHashes, checkExpected, inheritableChanges, buildEvidence, evidencePathProblem, CATEGORY_LABEL } from './evidence.js';
+import { gitChanges } from './git.js';
+import { syncPlan, nextStep, openSteps, planProblem, dependencyTaskIds, planProgress, newPlan, retryCandidate, retryClass, retriesUsed, MAX_STEP_ATTEMPTS, MAX_STEP_RETRIES } from './plan.js';
 import { evaluateTask, actionDigest, approvalProblem } from './policy.js';
 import { closingContext, acceptanceDigest } from './delivery.js';
 
@@ -50,6 +53,10 @@ const clip = (s, n) => String(s ?? '').slice(0, n);
 const find = (arr, id) => arr.find((x) => x.id === id);
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const ok = (cycle) => ({ status: 200, cycle });
+// Selo do Git (reparo limitado): assinatura ordenada de gitChanges (caminho, status, linhas +/-). null = ausente/incompleta (200 arquivos ou mais, erro, sem repositório): falha fechada.
+// Limite honesto: gitChanges NÃO vê conteúdo; arquivos não rastreados e edições que mantêm as contagens de linhas não mudam a assinatura.
+export const sealOf = (g) => (g && g.isRepo === true && !g.error && Array.isArray(g.files) && g.files.length < 200
+  ? JSON.stringify(g.files.map((f) => [f.path, f.status, f.added ?? null, f.removed ?? null]).sort((a, b) => (JSON.stringify(a) < JSON.stringify(b) ? -1 : 1))) : null);
 const fail = (status, error) => ({ status, error });
 
 /** Relatório estruturado de uma execução (derivado do estado real da tarefa; nada inventado). */
@@ -175,16 +182,16 @@ const PLAN_FORMAT = [
 const evidenceNote = (c, st) => { const ev = c.rounds.find((r) => r.n === st.round)?.report?.evidence; return ev?.reasons?.length ? ` [motivo: ${clip(ev.reasons.join('; '), 300)}]` : ''; };
 
 /** Estado do plano gravado, para o Planner (só dados do orquestrador; vazio se não há plano). */
-function planSection(c) {
+function planSection(c, stepRetries = 0) {
   const steps = c.plan?.steps;
   if (!Array.isArray(steps) || !steps.length) return '';
   const pr = planProgress(c);
   return [`\nPLANO ATUAL (gravado pelo orquestrador; ${pr.completed} de ${pr.total} etapas concluídas; execução sequencial, uma etapa por vez):`,
-    ...steps.map((st) => `  [${st.id}] ${clip(st.title, 120)} | estado: ${st.status}${st.round ? ` (rodada ${st.round})` : ''}${st.uncertain ? ' [RESULTADO INCERTO: o servidor caiu durante a execução; o workspace pode ter sido alterado]' : ''}${st.status === 'unverified' || st.status === 'failed' ? evidenceNote(c, st) : ''} | depende de: ${(st.dependsOn || []).join(', ') || 'nada'}`),
-    'Etapas "failed", "unverified" (executada, mas sem comprovação independente) ou "interrupted" não são refeitas sozinhas: decida se propõe um novo plano, executa uma tarefa avulsa ("continue") ou pede ajuda ("blocked").'].join('\n');
+    ...steps.map((st) => `  [${st.id}] ${clip(st.title, 120)} | estado: ${st.status}${st.round ? ` (rodada ${st.round})` : ''}${c.rounds.filter((r) => r.planId === c.plan.id && r.stepId === st.id).length > 1 ? ` [tentativa ${c.rounds.filter((r) => r.planId === c.plan.id && r.stepId === st.id).length} de ${MAX_STEP_ATTEMPTS}]` : ''}${st.uncertain ? ' [RESULTADO INCERTO: o servidor caiu durante a execução; o workspace pode ter sido alterado]' : ''}${st.status === 'unverified' || st.status === 'failed' ? evidenceNote(c, st) : ''} | depende de: ${(st.dependsOn || []).join(', ') || 'nada'}`),
+    'Etapas "failed", "unverified" (executada, mas sem comprovação independente) ou "interrupted" não são refeitas sozinhas: decida se propõe um novo plano, executa uma tarefa avulsa ("continue") ou pede ajuda ("blocked").' + (stepRetries > 0 ? ` O orquestrador só refaz sozinho (até ${stepRetries} retentativa(s) POR CICLO, somando todos os planos) uma etapa cuja execução terminou normalmente mas cuja verificação real reprovou ou cujos arquivos esperados não foram comprovados; substituir o plano ou reescrever a etapa NÃO renova esse orçamento.` : '')].join('\n');
 }
 
-function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, multiStep = false }) {
+function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, multiStep = false, stepRetries = 0 }) {
   const rounds = cycle.rounds;
   const hist = rounds.map((r) => {
     const rep = r.report;
@@ -229,7 +236,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, mult
     '',
     rounds.length ? `HISTÓRICO:\n${hist}` : 'HISTÓRICO: nenhuma rodada executada ainda (planeje a primeira tarefa).',
     last?.report ? `\nÚLTIMO RELATÓRIO (JSON):\n${JSON.stringify(plannerReportView(last.report))}` : '',
-    planSection(cycle),
+    planSection(cycle, stepRetries),
     cycle.humanNotes.length ? `\nORIENTAÇÕES HUMANAS (não alteram as políticas):\n${cycle.humanNotes.map((n) => `- ${n.text}`).join('\n')}` : '',
     feedback ? `\nATENÇÃO: ${feedback}` : '',
     '',
@@ -243,8 +250,9 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, mult
   ].filter((x) => x !== '').join('\n');
 }
 
-export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null, multiStep = false, persistRetryMs = PERSIST_RETRY_MS }) { // multiStep (M4): o Planner pode propor um plano de várias etapas (ORCH_CYCLE_PLAN=on; plan.js); false = fluxo de sempre. // limits: incremento D (limites.js); null = sem limites (como antes); persistRetryMs: só testes
+export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null, multiStep = false, stepRetries = 0, persistRetryMs = PERSIST_RETRY_MS }) { // multiStep (M4): o Planner pode propor um plano de várias etapas (ORCH_CYCLE_PLAN=on; plan.js); false = fluxo de sempre. // limits: incremento D (limites.js); null = sem limites (como antes); persistRetryMs: só testes
   const loops = new Map();
+  const retries = Number.isInteger(stepRetries) && stepRetries > 0 ? Math.min(stepRetries, MAX_STEP_RETRIES) : 0; // reparo limitado de etapas (ORCH_CYCLE_MAX_STEP_RETRIES): 0 = desligado (padrão)
   let starting = null; // reserva síncrona (missionId) enquanto start() aguarda o probe
   const mission = (id) => find(db.missions, id);
   const wsOf = (m) => find(db.workspaces, m.workspaceId);
@@ -370,7 +378,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       // confirmada a chamada não é feita (o ciclo bloqueia por persistência, com a contagem de volta ao valor anterior).
       try { store.saveOrThrow(); } catch (e) { c.plannerCalls--; throw e; }
       const listing = listFiles(ws.path);
-      const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback, multiStep });
+      const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback, multiStep, stepRetries: retries });
       const call = c.plannerCalls;
       // Roteamento (incrementos A e B): escolhe a camada desta chamada (seleção inicial na 1ª chamada do ciclo; escalonamento na tentativa que segue uma
       // rejeição) e REGISTRA a rota efetivamente aplicada. Só decide QUEM responde: o número de tentativas e todas as validações abaixo são as de sempre.
@@ -484,7 +492,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     }
     round.integrity = integrity;
     const prior = round.report?.evidence?.system?.expectedFiles ?? [];
-    const results = expected.length && after ? checkExpected(expected, before, after, prior) : expected.length ? expected.map((p) => ({ path: p, ok: false, exists: false, changed: false, reason: 'o estado do arquivo não pôde ser lido' })) : null;
+    const results = expected.length && after ? checkExpected(expected, before, after, prior, inheritableChanges(c.rounds, round, after, integrity)) : expected.length ? expected.map((p) => ({ path: p, ok: false, exists: false, changed: false, reason: 'o estado do arquivo não pôde ser lido' })) : null;
     round.report.evidence = { ...buildEvidence({ report: round.report, verification: roundVerification(round), configured: (wsOf(m)?.verifications || []).length, expectedResults: results, integrity: { ...integrity, pending: integrity.status === 'flagged' ? c.integrity.pending : [] } }), at: store.now() };
   }
 
@@ -634,8 +642,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   }
 
   /** `step`: etapa do plano (M4) que esta rodada executa; sem ela é a rodada avulsa de sempre. `only`: aprovação já concedida de uma ação avulsa (M9). */
-  async function runRound(m, d, step = null, only = null) {
+  async function runRound(m, d, step = null, only = null, ctx = null) {
     const c = m.cycle;
+    if (ctx) ctx.sealed = null; // o selo do reparo vale só para a rodada que acabou de terminar NESTE laço
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a rodada.');
     await persistGate(c); // iniciar o Executor é irreversível: o estado até aqui precisa estar no disco
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a rodada.');
@@ -706,6 +715,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const progress = report.status === 'success' && (report.filesChanged.some((f) => !f.preexisting) || realPassCount(report) > realPassCount(prev) || !report.filesKnown);
     c.consecutiveNoProgress = progress ? 0 : c.consecutiveNoProgress + 1;
     if (c.consecutiveNoProgress >= 2) return stop(m, 'no_progress', 'Duas rodadas seguidas sem progresso (nenhum arquivo novo alterado nem verificação nova aprovada).');
+    if (ctx && retries > 0 && step && retryClass(round)) ctx.sealed = { n: round.n, sig: await sealNow(m) }; // só em memória: reinício, recuperação e retomada humana perdem o selo (e, com ele, a retentativa automática)
     return 'next';
   }
 
@@ -714,8 +724,37 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   /** A etapa vira a mesma "decisão continue" que o Planner daria: runRound, verificação, limites e cancelamento são os de sempre. */
   const stepDecision = (st) => ({ decision: 'continue', rationale: `Etapa "${st.id}" do plano gravado.`, task: { title: st.title, instructions: st.instructions, acceptance: st.acceptance, ...(st.agent !== undefined ? { agent: st.agent } : {}), ...(st.expectedFiles?.length ? { expectedFiles: st.expectedFiles } : {}) } });
 
+  async function sealNow(m) { const p = wsOf(m)?.path; if (!p) return null; try { return sealOf(await gitChanges(p)); } catch { return null; } }
+
+  /** Por que a retentativa NÃO pode começar agora (ou null). Qualquer dúvida sobre estado, política ou Git => motivo (falha fechada); o Planner decide como hoje. */
+  async function retryBlocker(m, cand, ctx) {
+    const c = m.cycle, ws = wsOf(m);
+    if (c.cancelRequested) return 'cancelamento pedido';
+    if (!ws || !validateDir(ws.path).ok) return 'workspace inválido';
+    if (!ctx?.sealed || ctx.sealed.n !== cand.last.n || !ctx.sealed.sig) return 'não há selo do Git desta rodada neste mesmo laço (ciclo retomado ou recuperado, workspace sem Git ou assinatura incompleta)';
+    if (executor.isBusy()) return 'outra execução está em andamento';
+    const verdict = evaluateTask(actionOf(stepDecision(cand.step)), { workspace: ws, protectedDirs: [store.dataDir] });
+    if (verdict.decision !== 'allow') return `a política não dá "allow" à etapa (${verdict.decision}); retentativas automáticas nunca pedem nem reutilizam aprovação`;
+    const now = await sealNow(m);
+    if (c.cancelRequested) return 'cancelamento pedido';
+    if (!now || now !== ctx.sealed.sig) return 'o estado do Git mudou (ou não pôde ser lido) desde o fim da rodada anterior';
+    if (c.rounds.at(-1) !== cand.last) return 'o ciclo avançou desde a rodada que falhou';
+    return null;
+  }
+
+  /** @returns 'none' (nada a repetir: segue para o Planner) | 'ran' (uma nova tentativa foi executada) | 'stop' (a rodada bloqueou o ciclo) */
+  async function retryStep(m, ctx) {
+    const c = m.cycle, cand = retryCandidate(c, { maxRetries: retries });
+    if (!cand.step) { if (cand.reason) note(m, 'cycle', `Reparo automático não iniciado: ${cand.reason}`); return 'none'; }
+    const why = await retryBlocker(m, cand, ctx);
+    if (why) { note(m, 'cycle', `Reparo automático da etapa "${cand.step.id}" não iniciado: ${why}`); return 'none'; }
+    note(m, 'cycle', `Reparo automático da etapa "${cand.step.id}": tentativa ${cand.attempt} de ${MAX_STEP_ATTEMPTS} (retentativa ${retriesUsed(c) + 1} de ${retries} neste ciclo; falha da classe ${cand.cls})`);
+    return (await runRound(m, stepDecision(cand.step), cand.step, null, ctx)) === 'stop' ? 'stop' : 'ran';
+  }
+
   async function drive(m) {
     const c = m.cycle;
+    const ctx = { sealed: null }; // por laço (drive): uma retomada ou reinício começa com o selo vazio
     for (;;) {
       if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
       await persistGate(c); // não avança (re-verificação, Planner) com o banco sem gravar
@@ -728,13 +767,18 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       const step = nextStep(c); // M4: etapa elegível do plano gravado = não consulta o Planner (uma etapa por vez)
       if (step) {
         if (c.rounds.length >= c.maxIterations) return end(m, 'limit_reached', `Limite de ${c.maxIterations} rodadas atingido; o plano ainda tem etapas pendentes.`);
-        if ((await runRound(m, stepDecision(step), step)) === 'stop') return undefined;
+        if ((await runRound(m, stepDecision(step), step, null, ctx)) === 'stop') return undefined;
         continue;
+      }
+      if (retries > 0) { // reparo limitado de etapas (desligado por padrão): só na MESMA passagem do laço em que a rodada falhou
+        const rt = await retryStep(m, ctx);
+        if (rt === 'stop') return undefined;
+        if (rt === 'ran') continue;
       }
       const ready = (c.approvals || []).find((a) => a.status === 'approved' && a.stepId == null); // M9: ação avulsa JÁ aprovada pelo humano: executa exatamente o que foi revisado, sem consultar o Planner de novo
       if (ready) {
         if (c.rounds.length >= c.maxIterations) return end(m, 'limit_reached', `Limite de ${c.maxIterations} rodadas atingido; há uma ação aprovada ainda não executada.`);
-        if ((await runRound(m, approvedDecision(ready), null, ready)) === 'stop') return undefined;
+        if ((await runRound(m, approvedDecision(ready), null, ready, ctx)) === 'stop') return undefined;
         continue;
       }
       c.status = 'planning'; emit(m);
@@ -768,7 +812,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       }
       if (d.decision === 'blocked') { note(m, 'cycle', `Planner pediu intervenção humana: ${clip(d.blockedReason, 200)}`, 'planner'); return stop(m, 'planner_blocked', d.blockedReason); }
       if (c.rounds.length >= c.maxIterations) return end(m, 'limit_reached', `Limite de ${c.maxIterations} rodadas atingido; o Planner ainda queria continuar.`);
-      if ((await runRound(m, d)) === 'stop') return undefined;
+      if ((await runRound(m, d, null, null, ctx)) === 'stop') return undefined;
     }
   }
 

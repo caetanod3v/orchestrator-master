@@ -14,7 +14,7 @@ import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle
 import { createClaudePlanner, plannerConfigFromEnv } from './planner.js';
 import { routingFromEnv, createRouter } from './routing.js';
 import { cycleLimitsFromEnv } from './limits.js';
-import { planModeFromEnv } from './plan.js';
+import { planModeFromEnv, stepRetriesFromEnv } from './plan.js';
 import { setupChat } from './chat.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
@@ -29,6 +29,7 @@ const claudeCodeExecutor = testDeps.executor ?? realExecutor;
 const routingMode = routingFromEnv(); // ORCH_PLANNER_ROUTING=off|on (padrão off); valor inválido impede o boot, antes de qualquer acesso a dados
 const router = routingMode === 'on' ? createRouter() : null;
 const cycleLimits = cycleLimitsFromEnv(); // ORCH_CYCLE_MAX_PLANNER_CALLS / ORCH_CYCLE_MAX_ESTIMATED_COST_USD (padrão: desativados); valor inválido impede o boot
+const stepRetries = stepRetriesFromEnv(); // ORCH_CYCLE_MAX_STEP_RETRIES=0|1|2|off (padrão desligado): retentativas automáticas por ciclo de etapas com falha recuperável; valor inválido impede o boot
 const multiStepPlan = planModeFromEnv(); // ORCH_CYCLE_PLAN=on|off (padrão off): permite o Planner propor um plano de várias etapas (M4); valor inválido impede o boot
 const childRegistry = createChildRegistry(); // PIDs do Planner e do verificador no banco (db.childProcesses), para o boot reclamar o que um servidor anterior deixou vivo
 const planner = testDeps.planner ?? createClaudePlanner({ ...plannerConfigFromEnv(), routing: routingMode, track: childRegistry.track }); // ORCH_PLANNER_MODEL / ORCH_PLANNER_EFFORT (opcionais); valor inválido impede o boot
@@ -256,7 +257,7 @@ const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor,
 childRegistry.reclaim({ executor: claudeCodeExecutor }); // órfãos do Planner/verificador: depois dos do Executor, antes de qualquer ciclo (setupCycle) e de ouvir a porta
 setupVerification(app, { db, verifier });
 setupWorkspaceRemoval(app, { db });
-const cycle = setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: multiStepPlan });
+const cycle = setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: multiStepPlan, stepRetries });
 setupChat(app, { db, planner, cycle, multiStep: multiStepPlan }); // M5: chat geral; só prepara propostas, executar exige /api/chat/approve
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));
