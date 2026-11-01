@@ -1057,9 +1057,13 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
         }
         // Rodada bem-sucedida gravada SEM o parecer do sistema (queda entre salvar a rodada e avaliá-la): a ausência passaria no portão de conclusão como "rodada histórica" e o relato
         // do Executor sozinho concluiria o ciclo. O parecer nunca foi feito, então fica INCONCLUSIVO até uma re-verificação/avaliação (mesma regra do ramo da rodada que estava "running").
-        // Só sem verificações reais configuradas: com elas, o portão já recusa por "verificação interrompida/não executada" (acima), e o fluxo de re-verificação não muda.
+        // Com verificações reais configuradas vale o mesmo quando elas TERMINARAM (phase 'done' é gravada antes de assessRound): sem o parecer, a rodada passaria como "histórica"
+        // e a conclusão se apoiaria só nos resultados, sem integridade dos testes nem arquivos esperados. Os resultados gravados são preservados e o parecer (que ainda pode ser
+        // "failed" se uma verificação falhou) nunca é "verified" aqui. Se a verificação foi marcada como interrompida (acima), o portão e a re-verificação já cuidam dela.
         const configuredNow = (find(db.workspaces, m.workspaceId)?.verifications || []).length;
-        if (round?.status === 'succeeded' && round.report && !round.report.evidence && !configuredNow) {
+        // Ciclo gravado antes do M8 (sem estado de referência nem qualquer parecer) mantém a regra de quando foi feito: suas rodadas "históricas" não são reinterpretadas (mesmo critério de reverify).
+        const postM8 = !!c.integrity?.baseline || c.rounds.some((x) => x?.report?.evidence);
+        if (round?.status === 'succeeded' && round.report && !round.report.evidence && (!configuredNow || (!round.report.verificationsInterrupted && postM8))) {
           // Fecha também o resultado das verificações (o que runRound grava logo antes de avaliar): sem isso a etapa do plano ficaria "running" para sempre, sem execução alguma.
           if (round.verification === undefined) round.verification = verificationOutcome(round.report, configuredNow);
           round.phase = 'done';

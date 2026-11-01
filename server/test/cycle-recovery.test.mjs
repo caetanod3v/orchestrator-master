@@ -322,6 +322,25 @@ test('REGRESSÃO (rodada "running" sem baseline): a tarefa terminou como conclu�
   assert.equal(c.blockedCode, 'planner_blocked'); assert.equal(c.assurance, undefined); assert.equal(execStarts, starts, 'a execução não se repete'); assert.equal(c.rounds.length, 1);
 });
 
+test('REGRESSÃO (verificações configuradas): verificações terminadas (phase "done") mas queda ANTES de assessRound — sem parecer a rodada não vira "histórica": fica INCONCLUSIVA, os resultados são preservados, "complete" é rejeitado e a recuperação é idempotente', async () => {
+  const ta = task('ta', 'completed'), r = round(1, 'a', 'ta'); // workspace "ws" tem verificação real configurada; a rodada traz o resultado "pass" e phase "done", mas nenhum evidence
+  assert.equal(r.phase, 'done'); assert.equal(r.report.evidence, undefined);
+  const m = seed({ steps: [step('a')], rounds: [r], tasks: [ta], cycle: { integrity: { baseline: {}, last: {}, pending: [] } } }); // ciclo pós-M8: tem o estado de referência dos testes
+  const starts = execStarts, runs = verifierRuns, planner = scripted([done(), blockedAns()]), cy = restart(planner), c = live(m.id).cycle, rd = c.rounds[0];
+  assert.equal(c.blockedCode, 'restarted'); assert.equal(rd.report.evidence.level, 'inconclusive'); assert.match(rd.report.evidence.reasons.join(' '), /reiniciou antes da avaliação/);
+  assert.deepEqual(rd.report.verifications, [REAL_PASS], 'os resultados das verificações gravados foram preservados'); assert.equal(rd.report.verificationsInterrupted, null); assert.equal(rd.status, 'succeeded');
+  assert.deepEqual(statuses(c), { a: 'unverified' }, 'a etapa não é dada como concluída sem parecer'); assert.equal(onDisk(m.id).cycle.rounds[0].report.evidence.level, 'inconclusive', 'o parecer recuperado está no disco');
+  // Idempotência: nova recuperação na mesma instância (ciclo já bloqueado) e novo boot com o ciclo voltando a "ativo" não recriam nem alteram o parecer.
+  const ev1 = JSON.stringify(rd.report.evidence), snap1 = snap(c); await sleep(5); cy.recover(); assert.equal(snap(c), snap1, 'recover() repetido não muda nada');
+  Object.assign(c, { status: 'running', blockedCode: null, blockedReason: null, blocks: [] }); store.saveOrThrow();
+  restart(scripted([])); const c1 = live(m.id).cycle;
+  assert.equal(c1.blockedCode, 'restarted'); assert.equal(JSON.stringify(c1.rounds[0].report.evidence), ev1, 'o parecer não foi recriado'); assert.equal(c1.blocks.length, 1);
+  const cy2 = mk(planner); assert.equal((await cy2.resume(m.id)).status, 202); await cy2.idle(); const c2 = live(m.id).cycle;
+  assert.notEqual(c2.status, 'completed', 'verificações aprovadas sem parecer do sistema não concluem o ciclo');
+  assert.ok(c2.rejections.length >= 1, '"complete" do Planner foi rejeitado'); assert.match(c2.rejections[0].problem, /evidência do sistema.*inconclusive|etapas não concluídas/);
+  assert.equal(c2.assurance, undefined); assert.equal(execStarts, starts, 'nada foi executado de novo'); assert.equal(verifierRuns, runs, 'nem verificado de novo');
+});
+
 
 
 // ---------- cancelamento de ciclo ativo: o pedido é gravado antes de interromper processos ----------
