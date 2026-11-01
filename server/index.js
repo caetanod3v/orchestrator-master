@@ -21,6 +21,7 @@ import { createVerifier, setupVerification } from './verify.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { createChildRegistry } from './child-registry.js';
 import { installShutdown } from './shutdown.js';
+import { apiGuard } from './origin-guard.js';
 
 // Costura de teste: só código em processo (nunca env, rede ou requisição) pode injetar executor/planner simulados.
 const testDeps = globalThis.__ORCH_TEST_DEPS__ ?? {};
@@ -42,16 +43,10 @@ if (!lock.ok) { console.error(`[orchestrator] ${lock.message}`); process.exit(1)
 installShutdown({ lock, executor: claudeCodeExecutor, children: [planner, verifier], store }); // ao sair: encerra os filhos (executor, Planner, verificador), grava o que está pendente e libera a trava
 const db = store.load();
 const app = express();
+// Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO nas rotas de decisão humana (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).
+// ANTES do parser de JSON: uma requisição recusada nem chega a ter o corpo lido (e um corpo malformado vindo de origem externa dá 403, não 400).
+app.use('/api', apiGuard);
 app.use(express.json({ limit: '100kb' }));
-
-// Bloqueia requisições de outras origens (proteção contra CSRF vindo de páginas externas).
-app.use('/api', (req, res, next) => {
-  const origin = req.get('origin');
-  if (origin && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-    return res.status(403).json({ error: 'Origem não permitida.' });
-  }
-  next();
-});
 
 const str = (v, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
