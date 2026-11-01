@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../store.jsx';
 import { useCycleActions } from '../cycle-actions.js';
+import DeliveryReport from './DeliveryReport.jsx';
 import { Btn, Status, Icon, statusLabel, PersistenceNote, VERIFICATION_LABEL, DECISION_LABEL, EVIDENCE_BASIS } from './ui.jsx';
 
 const CODE = {
@@ -180,6 +181,7 @@ export default function CyclePanel({ mission }) {
           </div>
         </div>
       )}
+      {c && <DeliveryReport mission={mission} />}
       {c?.plan?.steps?.length > 0 && <Plan plan={c.plan} rounds={c.rounds} />}
       {c?.rounds.length > 0 && <div className="rounds">{c.rounds.map((r) => <Round key={r.n} r={r} />)}</div>}
     </div>
