@@ -3,13 +3,16 @@ import { api } from '../api.js';
 import { useStore } from '../store.jsx';
 import { Panel } from '../components/ui.jsx';
 import { orchestrationForm, hasActiveCycle, RETRY_CHOICES, retryChoiceLabel } from '../orchestration-view.js';
+import { supervisionForm, minutesLabel, resumeLabel } from '../supervision-view.js';
 
 export default function Settings() {
   const { state, missions, act } = useStore();
   if (!state) return null;
   const s = state.settings;
   const form = orchestrationForm(state.orchestration, { activeCycle: hasActiveCycle(missions) });
+  const sform = supervisionForm(state.supervision, { activeCycle: hasActiveCycle(missions) });
   const put = (body) => act(() => api.put('/api/settings', body));
+  const src = (f) => <p className="dim small">{f.sourceLabel}{f.reason && ` · ${f.reason}`}</p>;
   return (
     <div className="two">
       <Panel title="Configurações locais">
@@ -36,6 +39,34 @@ export default function Settings() {
           <p className="dim small" data-testid="opt-retries-source">{form.stepRetries.sourceLabel}{form.stepRetries.reason && ` · ${form.stepRetries.reason}`}</p>
           {form.warnings.map((w) => <p key={w} className="stale" data-testid="opt-warning">{w}</p>)}
           <ul className="plain small">{form.notes.map((n) => <li key={n} className="dim">{n}</li>)}</ul>
+        </Panel>
+      )}
+      {sform && (
+        <Panel title="Supervisão">
+          <label className="check">
+            <input type="checkbox" data-testid="sup-enabled" checked={sform.supervisor.value} disabled={sform.supervisor.disabled} onChange={(e) => put({ supervisor: e.target.checked })} />
+            Supervisão autônoma (registra cada decisão e bloqueia falha repetida)
+          </label>
+          {src(sform.supervisor)}
+          <label>Duração total do ciclo (tempo ativo)
+            <select data-testid="sup-max" value={sform.maxMinutes.value} disabled={sform.maxMinutes.disabled} onChange={(e) => put({ maxMinutes: Number(e.target.value) })}>
+              {sform.maxChoices.map((n) => <option key={n} value={n}>{minutesLabel(n)}</option>)}
+            </select>
+          </label>
+          {src(sform.maxMinutes)}
+          <label>Execução sem nenhuma saída
+            <select data-testid="sup-stall" value={sform.stallMinutes.value} disabled={sform.stallMinutes.disabled} onChange={(e) => put({ stallMinutes: Number(e.target.value) })}>
+              {sform.stallChoices.map((n) => <option key={n} value={n}>{minutesLabel(n)}</option>)}
+            </select>
+          </label>
+          {src(sform.stallMinutes)}
+          <label>Retomada automática (falhas transitórias do Planner)
+            <select data-testid="sup-resume" value={sform.autoResumes.value} disabled={sform.autoResumes.disabled} onChange={(e) => put({ autoResumes: Number(e.target.value) })}>
+              {sform.resumeChoices.map((n) => <option key={n} value={n}>{resumeLabel(n)}</option>)}
+            </select>
+          </label>
+          {src(sform.autoResumes)}
+          <ul className="plain small">{sform.notes.map((n) => <li key={n} className="dim">{n}</li>)}</ul>
         </Panel>
       )}
       <Panel title="Segurança">

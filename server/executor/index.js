@@ -86,6 +86,7 @@ export function createExecutor({ command = 'claude', prefixArgs = [], args = CLA
 
     const buffers = { out: '', err: '' };
     const feed = (kind, chunk) => {
+      run.lastOutputAt = Date.now(); // supervisão: instante da última saída (stdout ou stderr); ausência de saída não prova inatividade
       buffers[kind] += chunk.toString('utf8');
       const parts = buffers[kind].split(/\r?\n/);
       buffers[kind] = parts.pop();
@@ -172,7 +173,7 @@ export function createExecutor({ command = 'claude', prefixArgs = [], args = CLA
     orphanPids: () => (liveOrphans() ? [...orphans.keys()] : []),
     /** Encerramento síncrono do filho ativo (para o servidor sair sem deixá-lo para trás). */
     killActiveSync: () => { if (active?.child?.pid) killTreeSync(active.child.pid); },
-    current: () => (active ? { missionId: active.missionId, taskId: active.taskId, startedAt: active.startedAt } : null),
+    current: () => (active ? { missionId: active.missionId, taskId: active.taskId, startedAt: active.startedAt, lastOutputAt: active.lastOutputAt ?? null } : null),
     start,
     stop,
   };

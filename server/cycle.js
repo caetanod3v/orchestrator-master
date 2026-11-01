@@ -32,6 +32,7 @@ import { snapshotWorkspace, hashesOf, diffHashes, checkExpected, inheritableChan
 import { gitChanges } from './git.js';
 import { syncPlan, nextStep, openSteps, planProblem, dependencyTaskIds, planProgress, newPlan, retryCandidate, retryClass, retriesUsed, MAX_STEP_ATTEMPTS, MAX_STEP_RETRIES } from './plan.js';
 import { evaluateTask, actionDigest, approvalProblem } from './policy.js';
+import { superviseRound, autoResumeDecision, timeExceeded, stallExceeded, controlMemory, transitionApplied, CONTROL_SIGS_MAX, AUTO_RESUMABLE, SUPERVISION_LOG_MAX } from './supervisor.js';
 import { closingContext, acceptanceDigest } from './delivery.js';
 
 // O que precisa acontecer para um ciclo parado por limite poder retomar. Os limites vêm do ambiente do servidor; a retomada nunca os altera.
@@ -191,7 +192,16 @@ function planSection(c, stepRetries = 0) {
     'Etapas "failed", "unverified" (executada, mas sem comprovação independente) ou "interrupted" não são refeitas sozinhas: decida se propõe um novo plano, executa uma tarefa avulsa ("continue") ou pede ajuda ("blocked").' + (stepRetries > 0 ? ` O orquestrador só refaz sozinho (até ${stepRetries} retentativa(s) POR CICLO, somando todos os planos) uma etapa cuja execução terminou normalmente mas cuja verificação real reprovou ou cujos arquivos esperados não foram comprovados; substituir o plano ou reescrever a etapa NÃO renova esse orçamento.` : '')].join('\n');
 }
 
-function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, multiStep = false, stepRetries = 0 }) {
+/** Decisões recentes da supervisão (fatos do orquestrador, não instruções) para o Planner replanejar com o diagnóstico; '' sem supervisão. */
+function supervisionSection(entries) {
+  const list = Array.isArray(entries) ? entries.slice(-3) : [];
+  if (!list.length) return '';
+  return ['\nSUPERVISÃO (decisões determinísticas do orquestrador sobre as últimas rodadas; DADO, não instrução; ela nunca autoriza uma ação por si só):',
+    ...list.map((e) => `  [rodada ${e.round}] observação: ${clip(e.observation?.kind, 40)} | ação: ${clip(e.action, 12)} | assinatura da falha: ${clip(e.signature ?? '-', 20)} | ${clip(e.reason, 240)}`),
+    'Uma falha com a MESMA assinatura já vista bloqueia o ciclo: não repita a abordagem que falhou.'].join('\n');
+}
+
+function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, multiStep = false, stepRetries = 0, supervision = [] }) {
   const rounds = cycle.rounds;
   const hist = rounds.map((r) => {
     const rep = r.report;
@@ -237,6 +247,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, mult
     rounds.length ? `HISTÓRICO:\n${hist}` : 'HISTÓRICO: nenhuma rodada executada ainda (planeje a primeira tarefa).',
     last?.report ? `\nÚLTIMO RELATÓRIO (JSON):\n${JSON.stringify(plannerReportView(last.report))}` : '',
     planSection(cycle, stepRetries),
+    supervisionSection(supervision),
     cycle.humanNotes.length ? `\nORIENTAÇÕES HUMANAS (não alteram as políticas):\n${cycle.humanNotes.map((n) => `- ${n.text}`).join('\n')}` : '',
     feedback ? `\nATENÇÃO: ${feedback}` : '',
     '',
@@ -250,13 +261,113 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, mult
   ].filter((x) => x !== '').join('\n');
 }
 
-export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null, multiStep = false, stepRetries = 0, persistRetryMs = PERSIST_RETRY_MS }) { // multiStep (M4): o Planner pode propor um plano de várias etapas (ORCH_CYCLE_PLAN=on; plan.js); false = fluxo de sempre. // limits: incremento D (limites.js); null = sem limites (como antes); persistRetryMs: só testes
+export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null, multiStep = false, stepRetries = 0, supervision = null, watchdogTickMs = 2000, persistRetryMs = PERSIST_RETRY_MS }) { // multiStep (M4): o Planner pode propor um plano de várias etapas (ORCH_CYCLE_PLAN=on; plan.js); false = fluxo de sempre. // limits: incremento D (limites.js); null = sem limites (como antes); persistRetryMs: só testes
   const loops = new Map();
   // Configuração de orquestração (I4): `multiStep` e `stepRetries` são valores fixos (testes) OU funções lidas a cada laço (drive). O laço em andamento usa o instantâneo tirado no início dele
   // (confs): uma mudança de configuração só vale para o próximo laço (nova rodada de planejamento, retomada ou novo ciclo), nunca no meio de uma execução.
-  const readConf = () => ({ multiStep: !!(typeof multiStep === 'function' ? multiStep() : multiStep), retries: ((n) => (Number.isInteger(n) && n > 0 ? Math.min(n, MAX_STEP_RETRIES) : 0))(typeof stepRetries === 'function' ? stepRetries() : stepRetries) });
+  const normSup = (s) => { // supervisão: valores em milissegundos (o servidor converte minutos); inválido/ausente = desligado
+    const o = s && typeof s === 'object' ? s : {}, ms = (v) => (Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+    const r = { enabled: o.enabled === true, maxMs: ms(o.maxMs), stallMs: ms(o.stallMs), autoResumes: Number.isInteger(o.autoResumes) && o.autoResumes > 0 ? Math.min(o.autoResumes, 2) : 0 };
+    return { ...r, active: r.enabled || r.maxMs > 0 || r.stallMs > 0 || r.autoResumes > 0 };
+  };
+  const readConf = () => ({ multiStep: !!(typeof multiStep === 'function' ? multiStep() : multiStep), retries: ((n) => (Number.isInteger(n) && n > 0 ? Math.min(n, MAX_STEP_RETRIES) : 0))(typeof stepRetries === 'function' ? stepRetries() : stepRetries), sup: normSup(typeof supervision === 'function' ? supervision() : supervision) });
   const confs = new Map(); // missionId -> instantâneo do laço ativo
   const confOf = (m) => confs.get(m.id) ?? readConf();
+
+  // ---------- Supervisão autônoma (Marco B; supervisor.js) ----------
+  // Tudo desligado por padrão. O supervisor só RECOMENDA e REGISTRA; quem aplica são os caminhos que o ciclo já tem (retryStep, Planner, stop) com as proteções de sempre.
+  const autoResuming = new Set(); // missões cuja retomada em curso é automática (só muda o texto da atividade; a rota HTTP não consegue ligar isto)
+  const activeMs = (m) => (m.cycle.activeMs || 0) + (confs.get(m.id)?.started ? Date.now() - confs.get(m.id).started : 0); // tempo ATIVO do ciclo: espera por pessoa não conta
+  const minutes = (ms) => Math.round(ms / 600) / 100;
+  const supBudget = (m) => { const c = m.cycle, cf = confOf(m); return { retriesUsed: retriesUsed(c), retriesMax: cf.retries, plannerCalls: c.plannerCalls ?? 0, autoResumes: controlMemory(c).resumes,autoResumesMax: cf.sup.autoResumes, activeMinutes: minutes(activeMs(m)) }; };
+  /** Registro auditável e LIMITADO de cada decisão (cycle.supervision). Só existe quando alguma parte da supervisão está ligada. */
+  /**
+   * Registro auditável e LIMITADO de cada decisão (cycle.supervision). `action` é a RECOMENDAÇÃO do supervisor; `applied` diz o que de fato aconteceu com ela:
+   *   pending (ainda nada) | started (a ação foi iniciada: rodada/consulta) | completed (terminou; `result` quando conhecido) | not_applied (outra proteção ou o fim do laço impediu)
+   *   | stopped (o ciclo parou, por esta decisão ou por outra proteção: `by`) | n/a (nada a aplicar). Nunca se grava "retry/replan" como se já tivesse sido executado.
+   */
+  /** Estado de CONTROLE (cycle.supControl, persistido), separado do log visível que é limitado: retomadas automáticas gastas e última rodada por assinatura de falha. Inicializado do log em ciclos antigos. */
+  const control = (c) => { if (!c.supControl || typeof c.supControl !== 'object') { const mem = controlMemory(c); c.supControl = { resumes: mem.resumes, sigs: mem.sigs }; } if (!c.supControl.sigs || typeof c.supControl.sigs !== 'object') c.supControl.sigs = {}; return c.supControl; };
+  const noteControl = (c, e) => {
+    control(c); // sempre inicializa (a partir do log) ANTES de qualquer descarte do log: ciclo antigo não perde orçamento nem memória
+    if (e.action === 'resume') { const ctl = control(c); ctl.resumes = (Number.isInteger(ctl.resumes) ? ctl.resumes : 0) + 1; return; }
+    if ((e.action !== 'retry' && e.action !== 'replan') || !e.signature) return;
+    const ctl = control(c); delete ctl.sigs[e.signature]; ctl.sigs[e.signature] = { round: e.round, action: e.action };
+    const keys = Object.keys(ctl.sigs); for (const k of keys.slice(0, Math.max(0, keys.length - CONTROL_SIGS_MAX))) delete ctl.sigs[k];
+  };
+  const logSup = (m, e) => { const c = m.cycle, entry = { at: store.now(), ...e, budget: supBudget(m) }; if (!entry.applied) entry.applied = { state: 'pending' }; noteControl(c, entry); c.supervision = [...(c.supervision || []), entry].slice(-SUPERVISION_LOG_MAX); return entry; };
+  const flushSup = () => { try { store.save(); } catch { /* melhor esforço: o próximo save() regrava o estado inteiro */ } }; // grava o desfecho das decisões (applied) sem nunca mascarar o erro original do laço
+  const applied = (entry, a) => { if (entry) entry.applied = transitionApplied(entry.applied, { ...a, ...(a.reason ? { reason: clip(a.reason, 200) } : {}), ...(a.by ? { by: clip(a.by, 60) } : {}) }); }; // decisão já finalizada nunca muda nem volta a "iniciada"
+  /** O que ficou "pendente"/"iniciado" quando o laço terminou (ou o servidor caiu) NÃO foi aplicado/terminado: fecha o registro com o motivo real. Idempotente: só toca em pending/started. */
+  const settleSup = (c, by, reason, { keepResume = false } = {}) => { // keepResume: o laço que terminou NÃO é dono da decisão "resume" (quem a fecha é autoResume); só a recuperação do boot a fecha
+
+    let changed = false;
+    for (const e of Array.isArray(c.supervision) ? c.supervision : []) {
+      const st = e?.applied?.state;
+      if (keepResume && e?.action === 'resume') continue;
+      if (st === 'pending') { e.applied = e.action === 'block' ? { state: 'stopped', by: clip(by, 60), reason: clip(reason, 200) } : { state: 'not_applied', by: clip(by, 60), reason: clip(reason, 200) }; changed = true; } else if (st === 'started') { e.applied = { ...e.applied, state: 'stopped', by: clip(by, 60), reason: clip(reason, 200) }; changed = true; }
+    }
+    return changed;
+  };
+  const timeReason = (sup) => `Limite de duração do ciclo atingido (${minutes(sup.maxMs)} min de tempo ativo). Nada novo é iniciado; o estado e as evidências foram preservados. Uma pessoa decide: aumentar o limite (ORCH_CYCLE_MAX_MINUTES ou Configurações) e retomar, ou encerrar.`;
+
+  /** Para tudo o que estiver em andamento NESTE ciclo pelos mesmos caminhos do cancelamento (Planner, verificação, Executor), sem marcar o ciclo como cancelado. Idempotente. */
+  async function interruptRunning(m) {
+    const c = m.cycle;
+    try { await planner.cancel?.(); } catch { /* o próximo passo confirma o estado */ }
+    try { await verifier?.stop?.(); } catch { /* idem */ }
+    const round = c.rounds.at(-1);
+    if (round?.status === 'running' && executor.current()?.taskId === round.taskId) { try { await executor.stop(); } catch { /* idem */ } }
+  }
+  async function watchdogCheck(m, ctx) {
+    const c = m.cycle, sup = confOf(m).sup;
+    if (ctx.watchdog) { await interruptRunning(m); return; } // já decidido: garante que nada continue rodando
+    const trip = async (code, reason) => { ctx.watchdog = { code, reason }; await interruptRunning(m); };
+    if (timeExceeded(activeMs(m), sup.maxMs)) return trip('time_limit', timeReason(sup));
+    if (sup.stallMs > 0) {
+      const cur = executor.current(), round = c.rounds.at(-1);
+      if (cur && cur.missionId === m.id && round && cur.taskId === round.taskId) {
+        const last = Math.max(Date.parse(cur.startedAt) || 0, cur.lastOutputAt || 0), now = Date.now();
+        if (stallExceeded(now, last, sup.stallMs)) return trip('stalled', `A execução ficou ${minutes(now - last)} min sem nenhuma saída (limite: ${minutes(sup.stallMs)} min). Ausência de saída não prova inatividade: o estado real é DESCONHECIDO. A execução foi interrompida e o resultado é tratado como INCERTO (arquivos possivelmente alterados); nada é repetido automaticamente.`);
+      }
+    }
+    return undefined;
+  }
+  function watchdogStart(m, ctx) {
+    const sup = confOf(m).sup;
+    if (!(sup.maxMs > 0 || sup.stallMs > 0)) return null;
+    let busy = false;
+    const t = setInterval(async () => { if (busy) return; busy = true; try { await watchdogCheck(m, ctx); } catch (e) { console.error('[cycle] watchdog', e); } finally { busy = false; } }, watchdogTickMs);
+    t.unref?.(); return t;
+  }
+  /** O vigia decidiu parar: registra a decisão e bloqueia (o estado, as rodadas e as evidências já gravadas ficam como estão). */
+  function stopWatchdog(m, ctx) {
+    const { code, reason } = ctx.watchdog;
+    if (confOf(m).sup.active) logSup(m, { round: m.cycle.rounds.length, step: m.cycle.rounds.at(-1)?.stepId ?? null, observation: { kind: code === 'stalled' ? 'sem_saida' : 'tempo_esgotado', uncertain: code === 'stalled' }, action: 'block', code, reason, signature: null, applied: { state: 'stopped', by: code } });
+    return stop(m, code, reason);
+  }
+
+  /** Depois que o laço termina: retomada AUTOMÁTICA, só para bloqueio transitório do Planner, dentro do orçamento e sem nenhuma execução ambígua (supervisor.js autoResumeDecision). Passa pela MESMA resume() de sempre. */
+  async function autoResume(m) {
+    const c = m.cycle, sup = readConf().sup;
+    if (!c || c.status !== 'blocked' || !(sup.autoResumes > 0) || !AUTO_RESUMABLE.includes(c.blockedCode)) return;
+    const lim = limitProblem(limits, m, 'planner');
+    const limitReason = lim ? lim.reason : c.plannerCalls >= (c.maxIterations + 1) * 3 ? 'o limite de consultas ao Planner deste ciclo foi atingido' : timeExceeded(c.activeMs || 0, sup.maxMs) ? 'o limite de duração do ciclo foi atingido' : null;
+    const d = autoResumeDecision({ cycle: c, autoResumes: sup.autoResumes, world: { executorBusy: executor.isBusy(), plannerBusy: !!planner.busy?.(), runningTask: m.tasks.some((t) => t.status === 'running'), limitReason } });
+    const base = { round: c.rounds.length, step: null, observation: { kind: 'bloqueio_transitorio', blockedCode: c.blockedCode } };
+    if (!d.ok) { logSup(m, { ...base, action: 'block', code: 'auto_resume_refused', reason: `Retomada automática NÃO feita: ${d.reason}.`, signature: null, applied: { state: 'stopped', by: 'auto_resume_refused' } }); flushSup(); return; }
+    const resumeEntry = logSup(m, { ...base, action: 'resume', code: 'auto_resume', reason: `Retomada automática ${d.used + 1} de ${sup.autoResumes}: ${d.reason}.`, signature: null });
+    try { store.saveOrThrow(); } catch { c.supervision.pop(); const ctl = control(c); ctl.resumes = Math.max(0, ctl.resumes - 1); return; } // sem a decisão gravada não se retoma (e nada fica registrado como feito nem gasto)
+    applied(resumeEntry, { state: 'started', by: 'resume' }); // ANTES de resume(): o laço retomado ainda não existe e não pode fechar a decisão antes de ela estar "iniciada"
+    autoResuming.add(m.id);
+    let r; try { r = await resume(m.id, {}); } catch (e) { // exceção DEPOIS de "started": não se sabe se a retomada chegou a ocorrer. Fecha a decisão como incerta; nada é relançado nem repetido
+      console.error('[cycle] retomada automática lançou exceção', e);
+      applied(resumeEntry, { state: 'stopped', by: 'resume_error', reason: `resume() lançou exceção (${e?.message ?? e}); se a retomada chegou a ocorrer é incerto e nada é relançado` }); flushSup(); return;
+    } finally { autoResuming.delete(m.id); }
+    applied(resumeEntry, r?.error ? { state: 'not_applied', by: 'resume', reason: r.error } : { state: 'completed', by: 'resume' }); // a retomada foi aceita; o que o laço faz depois tem as suas próprias decisões
+    if (r?.error) { logSup(m, { ...base, action: 'block', code: 'auto_resume_refused', reason: `A retomada automática foi recusada pelo ciclo: ${r.error}`, signature: null, applied: { state: 'stopped', by: 'auto_resume_refused' } }); }
+    flushSup();
+  }
   let starting = null; // reserva síncrona (missionId) enquanto start() aguarda o probe
   const mission = (id) => find(db.missions, id);
   const wsOf = (m) => find(db.workspaces, m.workspaceId);
@@ -382,7 +493,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       // confirmada a chamada não é feita (o ciclo bloqueia por persistência, com a contagem de volta ao valor anterior).
       try { store.saveOrThrow(); } catch (e) { c.plannerCalls--; throw e; }
       const listing = listFiles(ws.path);
-      const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback, multiStep: confOf(m).multiStep, stepRetries: confOf(m).retries });
+      const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback, multiStep: confOf(m).multiStep, stepRetries: confOf(m).retries, supervision: confOf(m).sup.enabled ? c.supervision : [] });
       const call = c.plannerCalls;
       // Roteamento (incrementos A e B): escolhe a camada desta chamada (seleção inicial na 1ª chamada do ciclo; escalonamento na tentativa que segue uma
       // rejeição) e REGISTRA a rota efetivamente aplicada. Só decide QUEM responde: o número de tentativas e todas as validações abaixo são as de sempre.
@@ -654,7 +765,18 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a rodada.');
     const lim = limitProblem(limits, m, 'executor'); if (lim) return stop(m, lim.code, lim.reason); // ANTES de criar a rodada e de iniciar o Executor
     const gate = policyGate(m, d, step, only); // M9: política e aprovação ANTES de qualquer efeito (criar tarefa, iniciar o Executor)
-    if (gate === 'stop' || gate === 'next') return gate;
+    if (gate === 'stop') return gate;
+    if (gate === 'next') { // recusa da política (rodada SEM execução, já gravada por refuseRound): barreira ABSOLUTA. A supervisão só decide se o Planner pode ser consultado de novo
+      const cfp = confOf(m);
+      if (cfp.sup.active) {
+        const refused = c.rounds.at(-1), sr = superviseRound({ cycle: c, round: refused, loopGuard: cfp.sup.enabled });
+        const ent = logSup(m, { round: refused.n, step: refused.stepId ?? null, observation: sr.observation, action: sr.action, code: sr.code, reason: sr.reason, signature: sr.signature });
+        if (ctx) ctx.lastSup = { round: refused.n, action: sr.action, entry: ent };
+        if (sr.enforce) { applied(ent, { state: 'stopped', by: 'supervisor_loop', reason: sr.reason }); emit(m); return stop(m, 'supervisor_loop', sr.reason); } // a proposta equivalente voltou: nenhuma nova consulta
+        emit(m);
+      }
+      return gate;
+    }
     // M8: instantâneo ANTES da execução (síncrono: nada pode mudar entre ele e a criação da rodada). O primeiro do ciclo vira o estado de referência dos testes.
     const before = snapOf(m, d.task.expectedFiles ?? []);
     if (!c.integrity?.baseline && before?.complete) c.integrity = { baseline: hashesOf(before), last: hashesOf(before), at: store.now(), pending: [] };
@@ -685,6 +807,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     await r.finished;
 
     const report = buildReport(task);
+    if (ctx?.watchdog && report.status === 'interrupted') report.outcomeUncertain = ctx.watchdog.code === 'stalled' ? 'A execução foi interrompida pelo supervisor por falta de saída; não se sabe se estava ociosa ou trabalhando: os arquivos alterados e o resultado são incertos.' : 'A execução foi interrompida pelo limite de duração do ciclo; efeitos parciais no workspace são possíveis e o resultado é incerto.';
     round.report = report; round.finishedAt = store.now();
     round.status = report.status === 'success' ? 'succeeded' : report.status;
     emit(m);
@@ -701,24 +824,34 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     round.verification = verificationOutcome(report, items.length);
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
     assessRound(m, round, before); emit(m); // M8: parecer do SISTEMA (evidência, arquivos esperados, integridade dos testes), gravado antes de qualquer decisão; sem gravação o portão de persistência impede o avanço
+    if (ctx?.watchdog) return stopWatchdog(m, ctx); // o vigia (tempo total / sem saída) já decidiu: evidência e estado ficam gravados; nada é decidido nem repetido por cima
+    let sup = null, entry = null; const cf = confOf(m);
+    const halt = (code, reason) => { if (entry && entry.applied?.state === 'pending') applied(entry, { state: entry.action === 'block' ? 'stopped' : 'not_applied', by: code, reason }); return stop(m, code, reason); }; // o ciclo parou por outra proteção DEPOIS da recomendação: retry/replan NÃO foram iniciados
+    if (cf.sup.active) { // supervisão: avalia por EVIDÊNCIA estrutural e registra; o retry continua sendo o do Marco A (retryCandidate/retryStep)
+      sup = superviseRound({ cycle: c, round, retry: cf.retries > 0 && step ? retryCandidate(c, { maxRetries: cf.retries }) : null, loopGuard: cf.sup.enabled });
+      entry = logSup(m, { round: round.n, step: round.stepId ?? null, observation: sup.observation, action: sup.action, code: sup.code, reason: sup.reason, signature: sup.signature, ...(sup.profile ? { profile: sup.profile } : {}), ...(sup.action === 'complete' ? { applied: { state: 'n/a' } } : {}) });
+      if (ctx) ctx.lastSup = { round: round.n, action: sup.action, entry };
+      emit(m);
+    }
 
     // Política explícita (o Planner é informado no próximo prompt, via histórico):
-    if (task.permissionDenied) return stop(m, 'needs_approval', 'A execução precisou de uma permissão que não foi concedida (negada automaticamente). Um humano precisa decidir; ao retomar, o Planner verá este bloqueio.');
-    if (report.status === 'interrupted') return stop(m, 'interrupted', 'A execução foi interrompida (não é sucesso). Retome para o Planner reavaliar ou cancele.');
-    if (report.status === 'failed') { c.consecutiveFailures++; if (c.consecutiveFailures >= 2) return stop(m, 'executor_failures', `Duas execuções seguidas falharam: ${clip(task.error, 200)}`); } else c.consecutiveFailures = 0;
+    if (task.permissionDenied) return halt('needs_approval', 'A execução precisou de uma permissão que não foi concedida (negada automaticamente). Um humano precisa decidir; ao retomar, o Planner verá este bloqueio.');
+    if (report.status === 'interrupted') return halt('interrupted', 'A execução foi interrompida (não é sucesso). Retome para o Planner reavaliar ou cancele.');
+    if (report.status === 'failed') { c.consecutiveFailures++; if (c.consecutiveFailures >= 2) return halt('executor_failures', `Duas execuções seguidas falharam: ${clip(task.error, 200)}`); } else c.consecutiveFailures = 0;
 
     const envProblem = report.verifications.find((v) => ['blocked', 'error'].includes(v.status));
-    if (envProblem) return stop(m, 'verification_blocked', `Não foi possível executar a verificação "${envProblem.script}": ${envProblem.reason} Um humano precisa resolver.`);
+    if (envProblem) return halt('verification_blocked', `Não foi possível executar a verificação "${envProblem.script}": ${envProblem.reason} Um humano precisa resolver.`);
 
     // M8: o Executor mexeu em testes/configuração de validação. Nenhuma verificação que passe sobre isso conclui a etapa; uma pessoa revisa (ou o Planner decide sem aprovar).
     if (report.status === 'success' && round.integrity?.status === 'flagged' && round.integrity.changes.length) {
-      return stop(m, 'integrity_review', `O Executor alterou arquivos que validam o trabalho nesta rodada: ${describeChanges(round.integrity.changes)}. Mesmo que a verificação real passe, isso não comprova a conclusão (o Executor pode ter enfraquecido o que é verificado), e a etapa NÃO foi concluída. Revise as alterações: "Retomar aprovando as alterações" as aceita (a aprovação fica ligada ao conteúdo exato revisado); "Retomar" sem aprovar deixa o Planner decidir com a etapa ainda não comprovada; ou cancele.`);
+      return halt('integrity_review', `O Executor alterou arquivos que validam o trabalho nesta rodada: ${describeChanges(round.integrity.changes)}. Mesmo que a verificação real passe, isso não comprova a conclusão (o Executor pode ter enfraquecido o que é verificado), e a etapa NÃO foi concluída. Revise as alterações: "Retomar aprovando as alterações" as aceita (a aprovação fica ligada ao conteúdo exato revisado); "Retomar" sem aprovar deixa o Planner decidir com a etapa ainda não comprovada; ou cancele.`);
     }
 
+    if (sup?.enforce) return halt('supervisor_loop', sup.reason); // falha repetida: bloqueia ANTES de gastar outra rodada
     const prev = c.rounds.at(-2)?.report;
     const progress = report.status === 'success' && (report.filesChanged.some((f) => !f.preexisting) || realPassCount(report) > realPassCount(prev) || !report.filesKnown);
     c.consecutiveNoProgress = progress ? 0 : c.consecutiveNoProgress + 1;
-    if (c.consecutiveNoProgress >= 2) return stop(m, 'no_progress', 'Duas rodadas seguidas sem progresso (nenhum arquivo novo alterado nem verificação nova aprovada).');
+    if (c.consecutiveNoProgress >= 2) return halt('no_progress', 'Duas rodadas seguidas sem progresso (nenhum arquivo novo alterado nem verificação nova aprovada).');
     if (ctx && confOf(m).retries > 0 && step && retryClass(round)) ctx.sealed = { n: round.n, sig: await sealNow(m) }; // só em memória: reinício, recuperação e retomada humana perdem o selo (e, com ele, a retentativa automática)
     return 'next';
   }
@@ -749,20 +882,41 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   /** @returns 'none' (nada a repetir: segue para o Planner) | 'ran' (uma nova tentativa foi executada) | 'stop' (a rodada bloqueou o ciclo) */
   async function retryStep(m, ctx) {
     const c = m.cycle, cand = retryCandidate(c, { maxRetries: confOf(m).retries });
-    if (!cand.step) { if (cand.reason) note(m, 'cycle', `Reparo automático não iniciado: ${cand.reason}`); return 'none'; }
+    const pend = ctx.lastSup?.entry && ctx.lastSup.entry.action === 'retry' && ctx.lastSup.entry.applied?.state === 'pending' ? ctx.lastSup.entry : null; // a recomendação "retry" desta rodada, se houver
+    if (!cand.step) { if (cand.reason) note(m, 'cycle', `Reparo automático não iniciado: ${cand.reason}`); applied(pend, { state: 'not_applied', by: 'retry_candidate', reason: cand.reason ?? 'a etapa já não é candidata a retentativa' }); return 'none'; }
+    if (confOf(m).sup.enabled && !(ctx.lastSup && ctx.lastSup.round === cand.last.n && ctx.lastSup.action === 'retry')) { note(m, 'cycle', 'Reparo automático não iniciado: a supervisão não recomendou "retry" para esta rodada.'); return 'none'; }
     const why = await retryBlocker(m, cand, ctx);
-    if (why) { note(m, 'cycle', `Reparo automático da etapa "${cand.step.id}" não iniciado: ${why}`); return 'none'; }
+    if (why) { note(m, 'cycle', `Reparo automático da etapa "${cand.step.id}" não iniciado: ${why}`); applied(pend, { state: 'not_applied', by: 'retry_blocker', reason: why }); return 'none'; }
     note(m, 'cycle', `Reparo automático da etapa "${cand.step.id}": tentativa ${cand.attempt} de ${MAX_STEP_ATTEMPTS} (retentativa ${retriesUsed(c) + 1} de ${confOf(m).retries} neste ciclo; falha da classe ${cand.cls})`);
-    return (await runRound(m, stepDecision(cand.step), cand.step, null, ctx)) === 'stop' ? 'stop' : 'ran';
+    const before = c.rounds.length; applied(pend, { state: 'started', round: before + 1 });
+    const res = await runRound(m, stepDecision(cand.step), cand.step, null, ctx), made = c.rounds.length > before ? c.rounds.at(-1) : null;
+    applied(pend, made ? { state: res === 'stop' ? 'stopped' : 'completed', round: made.n, ...(res === 'stop' ? { by: c.blockedCode ?? 'stop' } : {}), result: { execution: made.status, verification: made.verification ?? null, evidence: made.report?.evidence?.level ?? null } } : { state: 'not_applied', by: c.blockedCode ?? 'sem_rodada', reason: 'a retentativa foi barrada antes de criar a rodada' });
+    return res === 'stop' ? 'stop' : 'ran';
   }
 
   async function drive(m) {
     const c = m.cycle;
-    confs.set(m.id, readConf()); // instantâneo da configuração para TODO este laço
-    const ctx = { sealed: null }; // por laço (drive): uma retomada ou reinício começa com o selo vazio
+    confs.set(m.id, { ...readConf(), started: Date.now() }); // instantâneo da configuração para TODO este laço (+ início, para o tempo ativo)
+    const ctx = { sealed: null, watchdog: null, lastSup: null }; // por laço (drive): uma retomada ou reinício começa com o selo vazio
+    const timer = watchdogStart(m, ctx);
+    let failure = null;
+    try { return await driveLoop(m, ctx); } catch (e) { failure = e ?? new Error('erro desconhecido'); throw e; } finally {
+      if (timer) clearInterval(timer);
+      // erro interno/de persistência: o bloqueio só é gravado depois (launch), então o motivo real é o da exceção, não o estado anterior do ciclo
+      if (failure) settleSup(c, failure.persistence === true ? 'persistence_failed' : 'internal_error', `${failure.persistence === true ? 'falha de persistência' : 'erro interno do ciclo'}: ${failure.message ?? failure}`, { keepResume: true });
+      else settleSup(c, c.status === 'cancelled' ? 'cancelled' : (c.blockedCode ?? c.status), 'o laço terminou antes de a ação recomendada ocorrer', { keepResume: true });
+      if (confOf(m).sup.maxMs > 0) c.activeMs = activeMs(m);
+      if (confOf(m).sup.active) flushSup(); // tempo ativo e desfecho (applied) das decisões gravados no fim do laço; // só com limite de tempo ligado: o tempo ativo acumula entre retomadas
+    }
+  }
+
+  async function driveLoop(m, ctx) {
+    const c = m.cycle;
     for (;;) {
       if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
       await persistGate(c); // não avança (re-verificação, Planner) com o banco sem gravar
+      if (!ctx.watchdog && timeExceeded(activeMs(m), confOf(m).sup.maxMs)) ctx.watchdog = { code: 'time_limit', reason: timeReason(confOf(m).sup) };
+      if (ctx.watchdog) return stopWatchdog(m, ctx);
       if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
       if (c.reverifyPending) { c.reverifyPending = false; if ((await reverifyLast(m)) === 'stop') return undefined; }
       const broken = planProblem(c); // plano gravado inconsistente: nunca executa a partir dele
@@ -787,7 +941,12 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
         continue;
       }
       c.status = 'planning'; emit(m);
+      const rp = ctx.lastSup?.entry && ctx.lastSup.entry.action === 'replan' && ctx.lastSup.entry.applied?.state === 'pending' ? ctx.lastSup.entry : null;
+      if (rp) applied(rp, { state: 'started', by: 'planner' });
       const plan = await askPlanner(m);
+      if (rp) applied(rp, plan.decision ? { state: 'completed', by: 'planner', result: { decision: plan.decision.decision } } : { state: 'stopped', by: plan.limit?.code ?? (plan.overBudget ? 'planner_calls_limit' : plan.error ? 'planner_error' : plan.invalid ? 'planner_invalid' : ctx.watchdog ? ctx.watchdog.code : 'cancelled'), reason: plan.error ?? plan.invalid ?? plan.limit?.reason });
+      ctx.lastSup = null; // consumida
+      if (ctx.watchdog) return stopWatchdog(m, ctx); // Planner interrompido pelo vigia: não é erro do Planner
       if (plan.cancelled || c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
       if (plan.limit) return stop(m, plan.limit.code, plan.limit.reason);
       if (plan.overBudget) return stop(m, 'planner_calls_limit', 'Limite de consultas ao Planner atingido neste ciclo.');
@@ -853,6 +1012,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       }
     }).finally(() => { if (loops.get(m.id) === p) { loops.delete(m.id); confs.delete(m.id); } });
     loops.set(m.id, p);
+    p.then(() => autoResume(m)).catch((e) => console.error('[cycle] retomada automática', e)); // depois do laço (e da remoção dele em loops): passa pela resume() normal
   }
 
   /**
@@ -998,6 +1158,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if ((c.blockedCode === 'planner_calls_limit' || atRoundLimit) && c.plannerCalls >= ((maxIterations ?? c.maxIterations) + 1) * 3) return fail(409, 'O limite de consultas ao Planner deste ciclo foi atingido; aumente o limite de rodadas (maxIterations) para continuar.');
     // Limites do incremento D: retomar não contorna o controle. Recusa ANTES de qualquer mutação enquanto o próximo passo (consultar o Planner) seria bloqueado de novo.
     const lim = limitProblem(limits, m, nextStep(c) ? 'executor' : 'planner'); if (lim) return fail(409, `${lim.reason} ${LIMIT_HINT[lim.code]}`); // M4: com etapa elegível o próximo passo é o Executor, não o Planner
+    { const sup = readConf().sup; if (timeExceeded(c.activeMs || 0, sup.maxMs)) return fail(409, `O limite de duração total do ciclo (${minutes(sup.maxMs)} min de tempo ativo) já foi atingido: aumente ORCH_CYCLE_MAX_MINUTES (ou a configuração) para continuar. O histórico e as evidências foram mantidos.`); }
     // Persistência (M2): um ciclo parado por falha de gravação só retoma depois de o estado (inclusive este bloqueio) ser GRAVADO de fato; com qualquer outra falha
     // recente do banco também se exige uma gravação confirmada antes. Recusa ANTES de qualquer mutação.
     const reconcile = c.blockedCode === 'persistence_failed';
@@ -1016,7 +1177,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     c.consecutiveFailures = 0; c.consecutiveNoProgress = 0; c.cancelRequested = false;
     c.reverifyPending = staleVerification(c.rounds.at(-1)); // evidência velha de ambiente: refazer antes de consultar o Planner
     c.blockedReason = null; c.blockedCode = null; c.finishedAt = null; c.status = 'planning'; // finishedAt: limit_reached era um estado final até esta retomada
-    return launchOrRollback(m, 'Ciclo retomado por um humano', 'retomar o ciclo', () => {
+    return launchOrRollback(m, autoResuming.has(m.id) ? 'Ciclo retomado automaticamente pela supervisão' : 'Ciclo retomado por um humano', 'retomar o ciclo', () => {
       // volta a "blocked" com o mesmo motivo, sem a orientação humana nova e sem perder o histórico (rounds, blocks, notas anteriores)
       c.humanNotes.length = prev.humanNotes;
       if (prevIntegrity) { const old = JSON.parse(prevIntegrity); if (old.i === undefined) delete c.integrity; else c.integrity = old.i; c.rounds.forEach((x, i) => { if (old.r[i]?.[0] === undefined) delete x.integrity; else x.integrity = old.r[i][0]; if (x.report) { if (old.r[i]?.[1] === undefined) delete x.report.evidence; else x.report.evidence = old.r[i][1]; } }); }
@@ -1096,10 +1257,13 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (normalized) safely('gravar tarefas normalizadas', () => store.save());
     for (const m of db.missions) {
       const c = m.cycle;
+      // ciclo parado (ex.: bloqueado) com decisão da supervisão ainda aberta (queda entre "started" e o retorno de resume()): nenhum laço a fecharia. Só fecha o registro; nunca relança nada
+      if (c && !ACTIVE.includes(c.status) && settleSup(c, 'restarted', 'o servidor reiniciou antes de a ação terminar; se ela chegou a ocorrer é incerto')) safely(`gravar decisões da supervisão da missão ${m.id}`, () => store.save());
       if (!c || !ACTIVE.includes(c.status)) continue;
       safely(`ciclo da missão ${m.id}`, () => {
         const round = c.rounds.at(-1);
         if (round?.status === 'running') settleCrashedRound(m, round);
+        settleSup(c, 'restarted', 'o servidor reiniciou antes de a ação terminar'); // decisões "pendentes/iniciadas" na queda NÃO foram concluídas e nunca são reaplicadas (idempotente)
         // Rodada que terminou, mas cuja verificação real não chegou ao fim: resultado parcial/ausente NÃO é sucesso.
         if (round?.status === 'succeeded' && round.phase !== 'done' && round.report && !round.report.verificationsSkipped && (find(db.workspaces, m.workspaceId)?.verifications || []).length) {
           round.phase = 'done'; round.report.verificationsInterrupted = 'o servidor foi reiniciado durante a verificação';
@@ -1126,7 +1290,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     }
   }
 
-  return { start, cancel, resume, decideApproval, acceptUnverified, recover, isPlanning: () => !!planner.busy?.(), idle: () => Promise.all([...loops.values()]) };
+  return { start, cancel, resume, decideApproval, acceptUnverified, recover, isPlanning: () => !!planner.busy?.(), idle: async () => { while (loops.size) await Promise.all([...loops.values()]); } };
 }
 
 export function setupCycle(app, deps) {

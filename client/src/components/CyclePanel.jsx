@@ -3,6 +3,7 @@ import { useStore } from '../store.jsx';
 import { useCycleActions } from '../cycle-actions.js';
 import DeliveryReport from './DeliveryReport.jsx';
 import { roundAttempts, stepAttempts, attemptLabel } from '../orchestration-view.js';
+import SupervisionLog from './SupervisionLog.jsx';
 import { Btn, Status, Icon, statusLabel, PersistenceNote, VERIFICATION_LABEL, DECISION_LABEL, EVIDENCE_BASIS } from './ui.jsx';
 
 const CODE = {
@@ -187,6 +188,7 @@ export default function CyclePanel({ mission }) {
         </div>
       )}
       {c && <DeliveryReport mission={mission} />}
+      {c?.supervision?.length > 0 && <SupervisionLog entries={c.supervision} />}
       {c?.plan?.steps?.length > 0 && <Plan plan={c.plan} rounds={c.rounds} maxAttempts={maxAttempts} />}
       {c?.rounds.length > 0 && <div className="rounds">{c.rounds.map((r) => <Round key={r.n} r={r} attempt={attempts[r.n]} maxAttempts={maxAttempts} />)}</div>}
     </div>

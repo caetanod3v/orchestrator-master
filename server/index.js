@@ -15,6 +15,7 @@ import { createClaudePlanner, plannerConfigFromEnv } from './planner.js';
 import { routingFromEnv, createRouter } from './routing.js';
 import { cycleLimitsFromEnv } from './limits.js';
 import { planModeFromEnv, stepRetriesFromEnv, resolveOrchestration, MAX_STEP_ATTEMPTS, MAX_STEP_RETRIES } from './plan.js';
+import { resolveSupervision, supervisionMs, MAX_MINUTES_LIMIT, STALL_MINUTES_LIMIT, MAX_AUTO_RESUMES } from './supervisor.js';
 import { setupChat } from './chat.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
@@ -31,6 +32,7 @@ const router = routingMode === 'on' ? createRouter() : null;
 const cycleLimits = cycleLimitsFromEnv(); // ORCH_CYCLE_MAX_PLANNER_CALLS / ORCH_CYCLE_MAX_ESTIMATED_COST_USD (padrão: desativados); valor inválido impede o boot
 stepRetriesFromEnv(); // ORCH_CYCLE_MAX_STEP_RETRIES=0|1|2|off: valor inválido impede o boot, antes de qualquer dado. O valor EFETIVO (ambiente > configurações > padrão) é resolvido por orchestration()
 planModeFromEnv(); // ORCH_CYCLE_PLAN=on|off: valor inválido impede o boot, antes de qualquer dado. O valor EFETIVO (ambiente > configurações > padrão) é resolvido por orchestration()
+resolveSupervision({ settings: {} }); // Marco B: ORCH_CYCLE_SUPERVISOR / _MAX_MINUTES / _STALL_MINUTES / _AUTO_RESUMES; valor inválido impede o boot, antes de qualquer dado
 const childRegistry = createChildRegistry(); // PIDs do Planner e do verificador no banco (db.childProcesses), para o boot reclamar o que um servidor anterior deixou vivo
 const planner = testDeps.planner ?? createClaudePlanner({ ...plannerConfigFromEnv(), routing: routingMode, track: childRegistry.track }); // ORCH_PLANNER_MODEL / ORCH_PLANNER_EFFORT (opcionais); valor inválido impede o boot
 const verifier = testDeps.verifier ?? createVerifier({ track: childRegistry.track });
@@ -45,6 +47,8 @@ installShutdown({ lock, executor: claudeCodeExecutor, children: [planner, verifi
 const db = store.load();
 // Configuração efetiva de planejamento e retentativas (I4): ambiente > db.settings > padrão (desligados). Lida a cada mensagem do chat e a cada laço do ciclo.
 const orchestration = () => resolveOrchestration({ settings: db.settings });
+// Supervisão autônoma (Marco B): mesma precedência (ambiente > configurações > padrão DESLIGADO), lida a cada laço do ciclo.
+const supervision = () => resolveSupervision({ settings: db.settings });
 const app = express();
 // Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO em POST/PUT/PATCH/DELETE (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).
 // ANTES do parser de JSON: uma requisição recusada nem chega a ter o corpo lido (e um corpo malformado vindo de origem externa dá 403, não 400).
@@ -66,7 +70,7 @@ const withStatus = (m) => ({ ...m, status: missionStatus(m), tasks: m.tasks.map(
 app.get('/api/state', async (req, res) => {
   const probe = await claudeCodeExecutor.probe();
   const tasks = visibleMissions().flatMap((m) => m.tasks);
-  const o = orchestration();
+  const o = orchestration(), sv = supervision();
   res.json({
     system: claudeCodeExecutor.isBusy() || planning() ? 'running' : probe.available ? 'idle' : 'degraded',
     executor: { id: claudeCodeExecutor.id, connected: probe.available, busy: claudeCodeExecutor.isBusy(), current: claudeCodeExecutor.current(), ...probe },
@@ -81,6 +85,7 @@ app.get('/api/state', async (req, res) => {
     persistence: store.persistenceStatus(), // aditivo: ok, código do último erro, quando falhou e quantas falhas seguidas (sem caminhos)
     settings: { cycleMaxIterations: DEFAULT_MAX_ITERATIONS, ...db.settings, cycleHardMax: HARD_MAX_ITERATIONS },
     orchestration: { planMode: o.planMode, stepRetries: o.stepRetries, maxStepAttempts: MAX_STEP_ATTEMPTS, hardMaxIterations: HARD_MAX_ITERATIONS, source: o.source }, // efetivo + origem (env | settings | default)
+    supervision: sv, // Marco B, aditivo: { supervisor, maxMinutes, stallMinutes, autoResumes, source } — efetivo + origem de cada valor
     activeWorkspace: find(db.workspaces, db.settings.activeWorkspaceId) || null,
     // costUsd/runs (legado: execuções reais que reportaram custo) + durationMs + tokens agregados por agente/missão/ciclo (ver usage.js); null sem nenhum dado
     usage: summarizeUsage(visibleMissions(), db.chat),
@@ -243,18 +248,23 @@ app.put('/api/settings', (req, res) => {
   if (b.cycleMaxIterations !== undefined && (!Number.isInteger(b.cycleMaxIterations) || b.cycleMaxIterations < 1 || b.cycleMaxIterations > HARD_MAX_ITERATIONS)) return bad(res, `cycleMaxIterations deve ser um inteiro de 1 a ${HARD_MAX_ITERATIONS}.`);
   if (b.planMode !== undefined && typeof b.planMode !== 'boolean') return bad(res, 'planMode deve ser verdadeiro ou falso.');
   if (b.stepRetries !== undefined && (!Number.isInteger(b.stepRetries) || b.stepRetries < 0 || b.stepRetries > MAX_STEP_RETRIES)) return bad(res, `stepRetries deve ser um inteiro de 0 a ${MAX_STEP_RETRIES}.`);
-  const orchKeys = ['planMode', 'stepRetries'].filter((k) => b[k] !== undefined);
+  if (b.supervisor !== undefined && typeof b.supervisor !== 'boolean') return bad(res, 'supervisor deve ser verdadeiro ou falso.');
+  for (const [k, max] of [['maxMinutes', MAX_MINUTES_LIMIT], ['stallMinutes', STALL_MINUTES_LIMIT], ['autoResumes', MAX_AUTO_RESUMES]]) {
+    if (b[k] !== undefined && (!Number.isInteger(b[k]) || b[k] < 0 || b[k] > max)) return bad(res, `${k} deve ser um inteiro de 0 a ${max}.`);
+  }
+  const orchKeys = ['planMode', 'stepRetries', 'supervisor', 'maxMinutes', 'stallMinutes', 'autoResumes'].filter((k) => b[k] !== undefined);
   if (orchKeys.length) {
-    const locked = orchKeys.filter((k) => orchestration().source[k] === 'env');
-    if (locked.length) return bad(res, `${locked.join(' e ')} ${locked.length > 1 ? 'são definidos' : 'é definido'} pelo ambiente do servidor (ORCH_CYCLE_PLAN / ORCH_CYCLE_MAX_STEP_RETRIES) e não podem ser mudados pela interface; altere o ambiente e reinicie.`, 409);
-    if (db.missions.some((m) => ['planning', 'running'].includes(m.cycle?.status))) return bad(res, 'Há um ciclo em andamento: aguarde terminar ou cancele antes de mudar o planejamento ou as retentativas.', 409);
+    const locked = orchKeys.filter((k) => (orchestration().source[k] ?? supervision().source[k]) === 'env');
+    if (locked.length) return bad(res, `${locked.join(' e ')} ${locked.length > 1 ? 'são definidos' : 'é definido'} pelo ambiente do servidor (variáveis ORCH_CYCLE_*, como ORCH_CYCLE_PLAN) e não podem ser mudados pela interface; altere o ambiente e reinicie.`, 409);
+    if (db.missions.some((m) => ['planning', 'running'].includes(m.cycle?.status))) return bad(res, 'Há um ciclo em andamento: aguarde terminar ou cancele antes de mudar o planejamento, as retentativas ou a supervisão.', 409);
   }
   // Aplica e GRAVA com confirmação; se o disco falhar, volta EXATAMENTE ao estado anterior (nada fica só na memória dizendo que foi salvo) e responde 503.
-  const KEYS = ['showDemoData', 'cycleMaxIterations', 'planMode', 'stepRetries'], prev = new Map(KEYS.map((k) => [k, Object.hasOwn(db.settings, k) ? { v: db.settings[k] } : null]));
+  const KEYS = ['showDemoData', 'cycleMaxIterations', 'planMode', 'stepRetries', 'supervisor', 'maxMinutes', 'stallMinutes', 'autoResumes'], prev = new Map(KEYS.map((k) => [k, Object.hasOwn(db.settings, k) ? { v: db.settings[k] } : null]));
   if (typeof b.showDemoData === 'boolean') db.settings.showDemoData = b.showDemoData;
   if (b.cycleMaxIterations !== undefined) db.settings.cycleMaxIterations = b.cycleMaxIterations;
   if (b.planMode !== undefined) db.settings.planMode = b.planMode;
   if (b.stepRetries !== undefined) db.settings.stepRetries = b.stepRetries;
+  for (const k of ['supervisor', 'maxMinutes', 'stallMinutes', 'autoResumes']) if (b[k] !== undefined) db.settings[k] = b[k];
   // requireApproval é fixo: aprovação humana é obrigatória.
   try { store.saveOrThrow(); } catch (e) {
     for (const [k, p] of prev) { if (p) db.settings[k] = p.v; else delete db.settings[k]; }
@@ -275,7 +285,7 @@ const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor,
 childRegistry.reclaim({ executor: claudeCodeExecutor }); // órfãos do Planner/verificador: depois dos do Executor, antes de qualquer ciclo (setupCycle) e de ouvir a porta
 setupVerification(app, { db, verifier });
 setupWorkspaceRemoval(app, { db });
-const cycle = setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: () => orchestration().planMode, stepRetries: () => orchestration().stepRetries });
+const cycle = setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: () => orchestration().planMode, stepRetries: () => orchestration().stepRetries, supervision: () => supervisionMs(supervision()) });
 setupChat(app, { db, planner, cycle, multiStep: () => orchestration().planMode }); // M5: chat geral; só prepara propostas, executar exige /api/chat/approve
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));
