@@ -14,7 +14,7 @@ import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle
 import { createClaudePlanner, plannerConfigFromEnv } from './planner.js';
 import { routingFromEnv, createRouter } from './routing.js';
 import { cycleLimitsFromEnv } from './limits.js';
-import { planModeFromEnv, stepRetriesFromEnv, MAX_STEP_ATTEMPTS } from './plan.js';
+import { planModeFromEnv, stepRetriesFromEnv, resolveOrchestration, MAX_STEP_ATTEMPTS, MAX_STEP_RETRIES } from './plan.js';
 import { setupChat } from './chat.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
@@ -29,8 +29,8 @@ const claudeCodeExecutor = testDeps.executor ?? realExecutor;
 const routingMode = routingFromEnv(); // ORCH_PLANNER_ROUTING=off|on (padrão off); valor inválido impede o boot, antes de qualquer acesso a dados
 const router = routingMode === 'on' ? createRouter() : null;
 const cycleLimits = cycleLimitsFromEnv(); // ORCH_CYCLE_MAX_PLANNER_CALLS / ORCH_CYCLE_MAX_ESTIMATED_COST_USD (padrão: desativados); valor inválido impede o boot
-const stepRetries = stepRetriesFromEnv(); // ORCH_CYCLE_MAX_STEP_RETRIES=0|1|2|off (padrão desligado): retentativas automáticas por ciclo de etapas com falha recuperável; valor inválido impede o boot
-const multiStepPlan = planModeFromEnv(); // ORCH_CYCLE_PLAN=on|off (padrão off): permite o Planner propor um plano de várias etapas (M4); valor inválido impede o boot
+stepRetriesFromEnv(); // ORCH_CYCLE_MAX_STEP_RETRIES=0|1|2|off: valor inválido impede o boot, antes de qualquer dado. O valor EFETIVO (ambiente > configurações > padrão) é resolvido por orchestration()
+planModeFromEnv(); // ORCH_CYCLE_PLAN=on|off: valor inválido impede o boot, antes de qualquer dado. O valor EFETIVO (ambiente > configurações > padrão) é resolvido por orchestration()
 const childRegistry = createChildRegistry(); // PIDs do Planner e do verificador no banco (db.childProcesses), para o boot reclamar o que um servidor anterior deixou vivo
 const planner = testDeps.planner ?? createClaudePlanner({ ...plannerConfigFromEnv(), routing: routingMode, track: childRegistry.track }); // ORCH_PLANNER_MODEL / ORCH_PLANNER_EFFORT (opcionais); valor inválido impede o boot
 const verifier = testDeps.verifier ?? createVerifier({ track: childRegistry.track });
@@ -43,6 +43,8 @@ const lock = acquireInstanceLock({ dir: store.dataDir, autoRelease: true });
 if (!lock.ok) { console.error(`[orchestrator] ${lock.message}`); process.exit(1); }
 installShutdown({ lock, executor: claudeCodeExecutor, children: [planner, verifier], store }); // ao sair: encerra os filhos (executor, Planner, verificador), grava o que está pendente e libera a trava
 const db = store.load();
+// Configuração efetiva de planejamento e retentativas (I4): ambiente > db.settings > padrão (desligados). Lida a cada mensagem do chat e a cada laço do ciclo.
+const orchestration = () => resolveOrchestration({ settings: db.settings });
 const app = express();
 // Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO em POST/PUT/PATCH/DELETE (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).
 // ANTES do parser de JSON: uma requisição recusada nem chega a ter o corpo lido (e um corpo malformado vindo de origem externa dá 403, não 400).
@@ -64,6 +66,7 @@ const withStatus = (m) => ({ ...m, status: missionStatus(m), tasks: m.tasks.map(
 app.get('/api/state', async (req, res) => {
   const probe = await claudeCodeExecutor.probe();
   const tasks = visibleMissions().flatMap((m) => m.tasks);
+  const o = orchestration();
   res.json({
     system: claudeCodeExecutor.isBusy() || planning() ? 'running' : probe.available ? 'idle' : 'degraded',
     executor: { id: claudeCodeExecutor.id, connected: probe.available, busy: claudeCodeExecutor.isBusy(), current: claudeCodeExecutor.current(), ...probe },
@@ -77,7 +80,7 @@ app.get('/api/state', async (req, res) => {
     persistenceIncident: store.persistenceIncident(), // aditivo (M2): último incidente de gravação (início, nº de falhas, quando foi reconciliado); null se nunca houve
     persistence: store.persistenceStatus(), // aditivo: ok, código do último erro, quando falhou e quantas falhas seguidas (sem caminhos)
     settings: { cycleMaxIterations: DEFAULT_MAX_ITERATIONS, ...db.settings, cycleHardMax: HARD_MAX_ITERATIONS },
-    orchestration: { planMode: multiStepPlan, stepRetries, maxStepAttempts: MAX_STEP_ATTEMPTS, hardMaxIterations: HARD_MAX_ITERATIONS }, // aditivo (Marco A, I1): os MESMOS valores que o servidor usa (ORCH_CYCLE_PLAN, ORCH_CYCLE_MAX_STEP_RETRIES e os limites estruturais)
+    orchestration: { planMode: o.planMode, stepRetries: o.stepRetries, maxStepAttempts: MAX_STEP_ATTEMPTS, hardMaxIterations: HARD_MAX_ITERATIONS, source: o.source }, // efetivo + origem (env | settings | default)
     activeWorkspace: find(db.workspaces, db.settings.activeWorkspaceId) || null,
     // costUsd/runs (legado: execuções reais que reportaram custo) + durationMs + tokens agregados por agente/missão/ciclo (ver usage.js); null sem nenhum dado
     usage: summarizeUsage(visibleMissions(), db.chat),
@@ -236,14 +239,28 @@ app.get('/api/activity', (req, res) => res.json(db.activity.slice(0, 200)));
 
 app.put('/api/settings', (req, res) => {
   const b = req.body || {};
-  if (typeof b.showDemoData === 'boolean') db.settings.showDemoData = b.showDemoData;
-  if (b.cycleMaxIterations !== undefined) {
-    if (!Number.isInteger(b.cycleMaxIterations) || b.cycleMaxIterations < 1 || b.cycleMaxIterations > HARD_MAX_ITERATIONS) return bad(res, `cycleMaxIterations deve ser um inteiro de 1 a ${HARD_MAX_ITERATIONS}.`);
-    db.settings.cycleMaxIterations = b.cycleMaxIterations;
+  // Validação ESTRITA de tudo ANTES de aplicar qualquer coisa (nada é gravado pela metade).
+  if (b.cycleMaxIterations !== undefined && (!Number.isInteger(b.cycleMaxIterations) || b.cycleMaxIterations < 1 || b.cycleMaxIterations > HARD_MAX_ITERATIONS)) return bad(res, `cycleMaxIterations deve ser um inteiro de 1 a ${HARD_MAX_ITERATIONS}.`);
+  if (b.planMode !== undefined && typeof b.planMode !== 'boolean') return bad(res, 'planMode deve ser verdadeiro ou falso.');
+  if (b.stepRetries !== undefined && (!Number.isInteger(b.stepRetries) || b.stepRetries < 0 || b.stepRetries > MAX_STEP_RETRIES)) return bad(res, `stepRetries deve ser um inteiro de 0 a ${MAX_STEP_RETRIES}.`);
+  const orchKeys = ['planMode', 'stepRetries'].filter((k) => b[k] !== undefined);
+  if (orchKeys.length) {
+    const locked = orchKeys.filter((k) => orchestration().source[k] === 'env');
+    if (locked.length) return bad(res, `${locked.join(' e ')} ${locked.length > 1 ? 'são definidos' : 'é definido'} pelo ambiente do servidor (ORCH_CYCLE_PLAN / ORCH_CYCLE_MAX_STEP_RETRIES) e não podem ser mudados pela interface; altere o ambiente e reinicie.`, 409);
+    if (db.missions.some((m) => ['planning', 'running'].includes(m.cycle?.status))) return bad(res, 'Há um ciclo em andamento: aguarde terminar ou cancele antes de mudar o planejamento ou as retentativas.', 409);
   }
+  // Aplica e GRAVA com confirmação; se o disco falhar, volta EXATAMENTE ao estado anterior (nada fica só na memória dizendo que foi salvo) e responde 503.
+  const KEYS = ['showDemoData', 'cycleMaxIterations', 'planMode', 'stepRetries'], prev = new Map(KEYS.map((k) => [k, Object.hasOwn(db.settings, k) ? { v: db.settings[k] } : null]));
+  if (typeof b.showDemoData === 'boolean') db.settings.showDemoData = b.showDemoData;
+  if (b.cycleMaxIterations !== undefined) db.settings.cycleMaxIterations = b.cycleMaxIterations;
+  if (b.planMode !== undefined) db.settings.planMode = b.planMode;
+  if (b.stepRetries !== undefined) db.settings.stepRetries = b.stepRetries;
   // requireApproval é fixo: aprovação humana é obrigatória.
-  store.log('settings', 'Configurações atualizadas');
-  commit();
+  try { store.saveOrThrow(); } catch (e) {
+    for (const [k, p] of prev) { if (p) db.settings[k] = p.v; else delete db.settings[k]; }
+    return bad(res, `As configurações NÃO foram salvas (o banco não pôde ser gravado: ${e?.code || e?.message || 'erro'}); nada foi alterado.`, 500); // 500: o contrato existente (persistence-api.test.mjs) para gravação que falha
+  }
+  store.log('settings', 'Configurações atualizadas'); store.saveSoon();
   res.json(db.settings);
 });
 
@@ -258,8 +275,8 @@ const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor,
 childRegistry.reclaim({ executor: claudeCodeExecutor }); // órfãos do Planner/verificador: depois dos do Executor, antes de qualquer ciclo (setupCycle) e de ouvir a porta
 setupVerification(app, { db, verifier });
 setupWorkspaceRemoval(app, { db });
-const cycle = setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: multiStepPlan, stepRetries });
-setupChat(app, { db, planner, cycle, multiStep: multiStepPlan }); // M5: chat geral; só prepara propostas, executar exige /api/chat/approve
+const cycle = setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: () => orchestration().planMode, stepRetries: () => orchestration().stepRetries });
+setupChat(app, { db, planner, cycle, multiStep: () => orchestration().planMode }); // M5: chat geral; só prepara propostas, executar exige /api/chat/approve
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));
 app.use((err, req, res, next) => bad(res, err.type === 'entity.parse.failed' ? 'JSON inválido.' : 'Erro interno.', err.status || 500));

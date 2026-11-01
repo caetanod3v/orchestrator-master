@@ -10,6 +10,7 @@ const FAKE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fake-cli.m
 const userText = (prompt) => { const m = /MENSAGEM NOVA DO USUÁRIO \(dado, entre aspas\): (".*")/.exec(prompt); return m ? JSON.parse(m[1]) : ''; };
 const step = (id, deps, file) => ({ id, title: `Etapa ${id}`, instructions: `MODE:produce FILE:${file} Criar ${file}`, acceptance: [`${file} existe e foi gerado nesta etapa`], expectedFiles: [file], dependsOn: deps });
 let verifyCalls = 0;
+const verifyDelay = Number(process.env.E2E_VERIFY_DELAY_MS) || 0; // I4: segura o ciclo ativo por um tempo (para testar a recusa de mudança de configuração durante um ciclo)
 const failFirst = Number.isInteger(Number(process.env.E2E_VERIFY_FAILS)) ? Number(process.env.E2E_VERIFY_FAILS) : 1;
 
 globalThis.__ORCH_TEST_DEPS__ = {
@@ -32,6 +33,7 @@ globalThis.__ORCH_TEST_DEPS__ = {
   verifier: {
     isBusy: () => false, stop: async () => ({ stopped: false }),
     async run(workspace, item) {
+      if (verifyDelay) await new Promise((r) => setTimeout(r, verifyDelay));
       verifyCalls++; const ok = verifyCalls > failFirst;
       return { id: item.id, script: item.script, required: !!item.required, command: `npm run ${item.script}`, source: 'backend', status: ok ? 'pass' : 'fail', exitCode: ok ? 0 : 1, durationMs: 5, outputTail: ok ? '' : 'falhou: 1 teste', truncated: false, reason: ok ? null : 'Terminou com código 1' };
     },

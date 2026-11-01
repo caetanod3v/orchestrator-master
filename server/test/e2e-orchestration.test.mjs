@@ -85,7 +85,7 @@ test('A — falha recuperável da verificação, UMA retentativa e conclusão ve
     assert.ok(fs.existsSync(path.join(ws, 'index.html')) && fs.existsSync(path.join(ws, 'style.css')), 'os arquivos esperados existem no workspace');
     // C — a configuração publicada e o relatório contam a mesma história
     state = (await call(a, '/api/state')).json;
-    assert.deepEqual(state.orchestration, { planMode: true, stepRetries: 1, maxStepAttempts: 3, hardMaxIterations: 10 });
+    assert.deepEqual(state.orchestration, { planMode: true, stepRetries: 1, maxStepAttempts: 3, hardMaxIterations: 10, source: { planMode: 'env', stepRetries: 'env' } });
     assert.equal(report.observed.retriesUsed, state.orchestration.stepRetries, 'o orçamento de 1 retentativa foi usado por inteiro');
     assert.ok(report.observed.steps.every((s) => s.attempts <= state.orchestration.maxStepAttempts)); assert.ok(report.cycle.rounds <= state.orchestration.hardMaxIterations); assert.ok(report.cycle.rounds <= report.cycle.maxIterations);
     assert.equal(report.observed.rounds.filter((r) => r.stepId === 's1').length, report.observed.steps.find((s) => s.id === 's1').attempts, 'attempts = rodadas da etapa no relatório');
@@ -122,7 +122,7 @@ test('B — retentativas desligadas (padrão): a mesma falha NÃO é repetida, o
     assert.match(report.state.reasons.join(' '), /planner_blocked/);
     assert.ok(!fs.existsSync(path.join(ws, 'style.css')), 'a etapa seguinte não rodou');
     const st = (await call(b, '/api/state')).json;
-    assert.deepEqual(st.orchestration, { planMode: true, stepRetries: 0, maxStepAttempts: 3, hardMaxIterations: 10 }); assert.equal(report.observed.retriesUsed, st.orchestration.stepRetries);
+    assert.deepEqual(st.orchestration, { planMode: true, stepRetries: 0, maxStepAttempts: 3, hardMaxIterations: 10, source: { planMode: 'env', stepRetries: 'default' } }); assert.equal(report.observed.retriesUsed, st.orchestration.stepRetries);
   } finally { await stop(b); }
   assert.equal(stat(), realBefore, 'o banco real (data/db.json) não foi tocado');
 });

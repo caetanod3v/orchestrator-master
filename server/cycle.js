@@ -252,7 +252,11 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, mult
 
 export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null, multiStep = false, stepRetries = 0, persistRetryMs = PERSIST_RETRY_MS }) { // multiStep (M4): o Planner pode propor um plano de várias etapas (ORCH_CYCLE_PLAN=on; plan.js); false = fluxo de sempre. // limits: incremento D (limites.js); null = sem limites (como antes); persistRetryMs: só testes
   const loops = new Map();
-  const retries = Number.isInteger(stepRetries) && stepRetries > 0 ? Math.min(stepRetries, MAX_STEP_RETRIES) : 0; // reparo limitado de etapas (ORCH_CYCLE_MAX_STEP_RETRIES): 0 = desligado (padrão)
+  // Configuração de orquestração (I4): `multiStep` e `stepRetries` são valores fixos (testes) OU funções lidas a cada laço (drive). O laço em andamento usa o instantâneo tirado no início dele
+  // (confs): uma mudança de configuração só vale para o próximo laço (nova rodada de planejamento, retomada ou novo ciclo), nunca no meio de uma execução.
+  const readConf = () => ({ multiStep: !!(typeof multiStep === 'function' ? multiStep() : multiStep), retries: ((n) => (Number.isInteger(n) && n > 0 ? Math.min(n, MAX_STEP_RETRIES) : 0))(typeof stepRetries === 'function' ? stepRetries() : stepRetries) });
+  const confs = new Map(); // missionId -> instantâneo do laço ativo
+  const confOf = (m) => confs.get(m.id) ?? readConf();
   let starting = null; // reserva síncrona (missionId) enquanto start() aguarda o probe
   const mission = (id) => find(db.missions, id);
   const wsOf = (m) => find(db.workspaces, m.workspaceId);
@@ -378,7 +382,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       // confirmada a chamada não é feita (o ciclo bloqueia por persistência, com a contagem de volta ao valor anterior).
       try { store.saveOrThrow(); } catch (e) { c.plannerCalls--; throw e; }
       const listing = listFiles(ws.path);
-      const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback, multiStep, stepRetries: retries });
+      const prompt = buildPlannerPrompt({ mission: m, workspace: ws, listing, cycle: c, feedback, multiStep: confOf(m).multiStep, stepRetries: confOf(m).retries });
       const call = c.plannerCalls;
       // Roteamento (incrementos A e B): escolhe a camada desta chamada (seleção inicial na 1ª chamada do ciclo; escalonamento na tentativa que segue uma
       // rejeição) e REGISTRA a rota efetivamente aplicada. Só decide QUEM responde: o número de tentativas e todas as validações abaixo são as de sempre.
@@ -407,7 +411,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       recordPlannerUsage(m, call, res.usage?.metrics, route); // o consumo existiu mesmo se a chamada foi cancelada ou falhou
       if (c.cancelRequested) return { cancelled: true };
       if (res.error) return { error: res.error };
-      const v = validateDecision(res.text, { plan: multiStep });
+      const v = validateDecision(res.text, { plan: confOf(m).multiStep });
       problem = v.ok ? semanticProblem(m, v.value) : `formato inválido: ${v.error}`;
       if (!problem) return { decision: v.value };
       c.rejections.push({ at: store.now(), problem: clip(problem, 300), excerpt: clip(res.text, 200) });
@@ -715,7 +719,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const progress = report.status === 'success' && (report.filesChanged.some((f) => !f.preexisting) || realPassCount(report) > realPassCount(prev) || !report.filesKnown);
     c.consecutiveNoProgress = progress ? 0 : c.consecutiveNoProgress + 1;
     if (c.consecutiveNoProgress >= 2) return stop(m, 'no_progress', 'Duas rodadas seguidas sem progresso (nenhum arquivo novo alterado nem verificação nova aprovada).');
-    if (ctx && retries > 0 && step && retryClass(round)) ctx.sealed = { n: round.n, sig: await sealNow(m) }; // só em memória: reinício, recuperação e retomada humana perdem o selo (e, com ele, a retentativa automática)
+    if (ctx && confOf(m).retries > 0 && step && retryClass(round)) ctx.sealed = { n: round.n, sig: await sealNow(m) }; // só em memória: reinício, recuperação e retomada humana perdem o selo (e, com ele, a retentativa automática)
     return 'next';
   }
 
@@ -744,16 +748,17 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
 
   /** @returns 'none' (nada a repetir: segue para o Planner) | 'ran' (uma nova tentativa foi executada) | 'stop' (a rodada bloqueou o ciclo) */
   async function retryStep(m, ctx) {
-    const c = m.cycle, cand = retryCandidate(c, { maxRetries: retries });
+    const c = m.cycle, cand = retryCandidate(c, { maxRetries: confOf(m).retries });
     if (!cand.step) { if (cand.reason) note(m, 'cycle', `Reparo automático não iniciado: ${cand.reason}`); return 'none'; }
     const why = await retryBlocker(m, cand, ctx);
     if (why) { note(m, 'cycle', `Reparo automático da etapa "${cand.step.id}" não iniciado: ${why}`); return 'none'; }
-    note(m, 'cycle', `Reparo automático da etapa "${cand.step.id}": tentativa ${cand.attempt} de ${MAX_STEP_ATTEMPTS} (retentativa ${retriesUsed(c) + 1} de ${retries} neste ciclo; falha da classe ${cand.cls})`);
+    note(m, 'cycle', `Reparo automático da etapa "${cand.step.id}": tentativa ${cand.attempt} de ${MAX_STEP_ATTEMPTS} (retentativa ${retriesUsed(c) + 1} de ${confOf(m).retries} neste ciclo; falha da classe ${cand.cls})`);
     return (await runRound(m, stepDecision(cand.step), cand.step, null, ctx)) === 'stop' ? 'stop' : 'ran';
   }
 
   async function drive(m) {
     const c = m.cycle;
+    confs.set(m.id, readConf()); // instantâneo da configuração para TODO este laço
     const ctx = { sealed: null }; // por laço (drive): uma retomada ou reinício começa com o selo vazio
     for (;;) {
       if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
@@ -770,7 +775,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
         if ((await runRound(m, stepDecision(step), step, null, ctx)) === 'stop') return undefined;
         continue;
       }
-      if (retries > 0) { // reparo limitado de etapas (desligado por padrão): só na MESMA passagem do laço em que a rodada falhou
+      if (confOf(m).retries > 0) { // reparo limitado de etapas (desligado por padrão): só na MESMA passagem do laço em que a rodada falhou
         const rt = await retryStep(m, ctx);
         if (rt === 'stop') return undefined;
         if (rt === 'ran') continue;
@@ -846,7 +851,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
         console.error('[cycle] falha ao registrar o bloqueio', e);
         const c = m.cycle; c.status = 'blocked'; c.blockedCode = code; c.blockedReason = reason;
       }
-    }).finally(() => { if (loops.get(m.id) === p) loops.delete(m.id); });
+    }).finally(() => { if (loops.get(m.id) === p) { loops.delete(m.id); confs.delete(m.id); } });
     loops.set(m.id, p);
   }
 

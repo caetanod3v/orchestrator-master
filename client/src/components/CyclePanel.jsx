@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useStore } from '../store.jsx';
 import { useCycleActions } from '../cycle-actions.js';
 import DeliveryReport from './DeliveryReport.jsx';
+import { roundAttempts, stepAttempts, attemptLabel } from '../orchestration-view.js';
 import { Btn, Status, Icon, statusLabel, PersistenceNote, VERIFICATION_LABEL, DECISION_LABEL, EVIDENCE_BASIS } from './ui.jsx';
 
 const CODE = {
@@ -17,7 +18,7 @@ const APPROVAL_LABEL = { pending: 'pendente', approved: 'aprovada (ainda não ex
 const LIMIT_CODES = ['planner_call_cap', 'cost_budget_reached', 'cost_budget_unknown'];
 
 /** Plano de etapas gravado no ciclo (M4): estado e dependências de cada etapa, etapa atual e progresso. Só leitura; quem executa e verifica é o servidor. */
-function Plan({ plan, rounds }) {
+function Plan({ plan, rounds, maxAttempts }) {
   const steps = plan.steps || [];
   const done = steps.filter((s) => s.status === 'completed').length;
   const stuck = steps.some((s) => ['failed', 'interrupted', 'unverified'].includes(s.status));
@@ -31,6 +32,7 @@ function Plan({ plan, rounds }) {
             <span className="n">{s.id}</span> <span className="grow">{s.title}</span> <Status value={s.status} />
             {s.dependsOn?.length > 0 && <span className="dim"> · depende de: {s.dependsOn.join(', ')}</span>}
             {s.round && <span className="dim"> · rodada {s.round}</span>}
+            {stepAttempts(plan, rounds, s.id) > 1 && <span className="dim" data-testid="step-attempt"> · {attemptLabel(stepAttempts(plan, rounds, s.id), maxAttempts)}</span>}
             {s.uncertain && <span className="s-interrupted"> · resultado incerto</span>}
             {why(s).map((r, i) => <div key={i} className="dim">↳ {r}</div>)}
           </li>
@@ -41,12 +43,13 @@ function Plan({ plan, rounds }) {
   );
 }
 
-function Round({ r }) {
+function Round({ r, attempt, maxAttempts }) {
   const rep = r.report;
   return (
     <details className="round">
       <summary>
         <span className="n">{String(r.n).padStart(2, '0')}</span> <span className="grow">{r.plan.title}</span>
+        {attempt && attempt.total > 1 && <span className="dim" data-testid="round-attempt">etapa {attempt.stepId} · {attemptLabel(attempt.attempt, maxAttempts)}</span>}
         {r.phase === 'verifying' && <span className="status s-running"><i />verificando…</span>}
         <Status value={r.status} />
       </summary>
@@ -92,6 +95,8 @@ export default function CyclePanel({ mission }) {
   const { state } = useStore();
   const c = mission.cycle;
   const hard = state?.settings.cycleHardMax ?? 10;
+  const maxAttempts = state?.orchestration?.maxStepAttempts; // tentativas por etapa (não confundir com a rodada, que é do ciclo)
+  const attempts = roundAttempts(c?.rounds);
   const [max, setMax] = useState(state?.settings.cycleMaxIterations ?? 5);
   const [note, setNote] = useState('');
   const active = !!c && ['planning', 'running'].includes(c.status);
@@ -182,8 +187,8 @@ export default function CyclePanel({ mission }) {
         </div>
       )}
       {c && <DeliveryReport mission={mission} />}
-      {c?.plan?.steps?.length > 0 && <Plan plan={c.plan} rounds={c.rounds} />}
-      {c?.rounds.length > 0 && <div className="rounds">{c.rounds.map((r) => <Round key={r.n} r={r} />)}</div>}
+      {c?.plan?.steps?.length > 0 && <Plan plan={c.plan} rounds={c.rounds} maxAttempts={maxAttempts} />}
+      {c?.rounds.length > 0 && <div className="rounds">{c.rounds.map((r) => <Round key={r.n} r={r} attempt={attempts[r.n]} maxAttempts={maxAttempts} />)}</div>}
     </div>
   );
 }

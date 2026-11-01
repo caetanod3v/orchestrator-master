@@ -155,6 +155,7 @@ function buildChatPrompt({ chat, workspace, listing, text, multiStep, mayClarify
  * @param {{db:object, planner:{decide:Function, busy?:Function}, cycle:{start:Function}, multiStep?:boolean, listFiles?:Function}} deps
  */
 export function createChat({ db, planner, cycle, multiStep = false, listFiles = listWorkspace }) {
+  const multi = () => !!(typeof multiStep === 'function' ? multiStep() : multiStep); // I4: valor fixo (testes) ou função lida a CADA mensagem
   let inflight = false; // uma operação do chat por vez (reserva síncrona, antes de qualquer await)
   const cur = () => (db.chat && typeof db.chat === 'object' && Array.isArray(db.chat.messages) ? db.chat : null);
   const empty = () => ({ id: store.uid('chat'), workspaceId: null, startedAt: null, plannerCalls: 0, plannerUsage: [], messages: [], trimmed: 0, brief: null, previousGoals: [], proposal: null });
@@ -202,7 +203,7 @@ export function createChat({ db, planner, cycle, multiStep = false, listFiles = 
   function view() {
     const chat = cur(), w = workspaceOf(chat), b = chat?.brief ?? null;
     return {
-      planMode: multiStep, busy: busy(), workspace: w.ws ? { id: w.ws.id, name: w.ws.name } : null, workspaceProblem: w.error ?? null,
+      planMode: multi(), busy: busy(), workspace: w.ws ? { id: w.ws.id, name: w.ws.name } : null, workspaceProblem: w.error ?? null,
       messages: chat?.messages ?? [], proposal: chat?.proposal ? { ...chat.proposal, ...(chat.proposal.status === 'proposed' && chat.proposal.steps ? { policy: policyPreview(chat.proposal, w.ws) } : {}) } : null, plannerCalls: chat?.plannerCalls ?? 0,
       brief: b ? { goalNo: b.goalNo, goal: b.goal, confirmed: b.confirmed, assumptions: b.assumptions, open: b.open, updatedAt: b.updatedAt } : null,
       previousGoals: chat?.previousGoals ?? [], phase: phaseOf(chat),
@@ -219,6 +220,7 @@ export function createChat({ db, planner, cycle, multiStep = false, listFiles = 
     if (t.length > MAX_TEXT) return fail(400, `A mensagem deve ter até ${MAX_TEXT} caracteres.`);
     if (CTRL.test(t)) return fail(400, 'A mensagem contém caracteres de controle.');
     if (busy()) return fail(409, 'O Planner está ocupado (outra conversa ou um ciclo em andamento). Tente de novo em instantes.');
+    const ms = multi(); // configuração desta mensagem (lida uma vez: prompt e validação concordam)
     const chat = cur();
     if (chat?.proposal?.status === 'approved') return fail(409, 'Há um plano em aprovação; aguarde ou comece uma nova conversa.');
     const w = workspaceOf(chat); if (w.error) return fail(409, w.error);
@@ -231,12 +233,12 @@ export function createChat({ db, planner, cycle, multiStep = false, listFiles = 
       let feedback = null, reply = null, problem = null;
       for (let attempt = 0; attempt < 2 && !reply; attempt++) {
         if (attempt > 0 && planner.busy?.()) return fail(409, 'O Planner foi ocupado por outra operação; tente de novo.');
-        const prompt = buildChatPrompt({ chat, workspace: w.ws, listing: listFiles(w.ws.path), text: t, multiStep, mayClarify, feedback });
+        const prompt = buildChatPrompt({ chat, workspace: w.ws, listing: listFiles(w.ws.path), text: t, multiStep: ms, mayClarify, feedback });
         calls++;
         const res = await planner.decide({ prompt, cwd: w.ws.path });
         try { const rec = usageRecord(res.usage?.metrics, { ended: true, at: store.now() }); if (rec) recs.push(rec); } catch { /* o consumo é acessório: nunca derruba a conversa */ }
         if (res.error) return fail(502, `O Planner falhou: ${res.error}`);
-        const v = validateChatReply(res.text, { plan: multiStep, mayClarify, workspace: w.ws });
+        const v = validateChatReply(res.text, { plan: ms, mayClarify, workspace: w.ws });
         const dup = v.ok ? repeatedQuestion(chat?.brief, v.value) : null;
         if (v.ok && !dup) reply = v.value;
         else { problem = v.ok ? `pergunta repetida (já feita neste objetivo): "${clip(dup, 120)}"; use o que o usuário já respondeu e pergunte só o que ainda falta, ou prossiga com suposições` : v.error; feedback = `Sua resposta anterior foi REJEITADA pelo backend: ${problem}. Corrija e responda apenas com o JSON válido.`; }

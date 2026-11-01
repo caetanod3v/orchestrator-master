@@ -49,6 +49,22 @@ export function stepRetriesFromEnv(env = process.env) {
   throw new Error(`${STEP_RETRIES_ENV} inválido: use 0, 1 ou 2 (máximo ${MAX_STEP_RETRIES} retentativas automáticas por ciclo), ou "off" (ou vazio) para desativar.`);
 }
 
+/**
+ * Configuração EFETIVA de orquestração (I4). Precedência por campo: variável de ambiente (definida e não vazia; inclui `off`/`0`) > configuração persistida (settings) > padrão (tudo desligado).
+ * Ambiente inválido lança Error (o servidor não sobe); configuração persistida inválida (banco editado à mão) é IGNORADA e vale o padrão. `source` diz de onde veio cada valor.
+ * @returns {{planMode:boolean, stepRetries:0|1|2, source:{planMode:'env'|'settings'|'default', stepRetries:'env'|'settings'|'default'}}}
+ */
+export function resolveOrchestration({ env = process.env, settings = {} } = {}) {
+  const s = settings && typeof settings === 'object' ? settings : {};
+  const envPlan = String(env[PLAN_ENV] ?? '').trim() !== '', envRetries = String(env[STEP_RETRIES_ENV] ?? '').trim() !== '';
+  const setPlan = typeof s.planMode === 'boolean', setRetries = Number.isInteger(s.stepRetries) && s.stepRetries >= 0 && s.stepRetries <= MAX_STEP_RETRIES;
+  return {
+    planMode: envPlan ? planModeFromEnv(env) : setPlan ? s.planMode : false,
+    stepRetries: envRetries ? stepRetriesFromEnv(env) : setRetries ? s.stepRetries : 0,
+    source: { planMode: envPlan ? 'env' : setPlan ? 'settings' : 'default', stepRetries: envRetries ? 'env' : setRetries ? 'settings' : 'default' },
+  };
+}
+
 /** Plano gravado no ciclo a partir de etapas JÁ validadas (validatePlanSteps): todas começam "queued", sem rodada. Único ponto que cria a forma de cycle.plan. */
 export const newPlan = ({ id, at, rationale, steps }) => ({ id, createdAt: at, rationale, steps: steps.map((st) => ({ ...st, status: 'queued', round: null, taskId: null })) });
 

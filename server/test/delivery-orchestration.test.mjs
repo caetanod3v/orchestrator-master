@@ -94,15 +94,15 @@ async function stateWith(extra) {
 
 test('/api/state.orchestration: padrão = plano e retentativas DESLIGADOS, com os limites estruturais reais; campos antigos preservados', async () => {
   const s = await stateWith({});
-  assert.deepEqual(s.orchestration, { planMode: false, stepRetries: 0, maxStepAttempts: MAX_STEP_ATTEMPTS, hardMaxIterations: HARD_MAX_ITERATIONS });
+  assert.deepEqual(s.orchestration, { planMode: false, stepRetries: 0, maxStepAttempts: MAX_STEP_ATTEMPTS, hardMaxIterations: HARD_MAX_ITERATIONS, source: { planMode: 'default', stepRetries: 'default' } });
   assert.equal(s.orchestration.maxStepAttempts, 3); assert.equal(s.orchestration.hardMaxIterations, 10); assert.equal(s.settings.cycleHardMax, s.orchestration.hardMaxIterations, 'mesma fonte do campo antigo');
   for (const k of ['system', 'executor', 'planner', 'counts', 'persistence', 'persistenceIncident', 'settings', 'activeWorkspace', 'usage']) assert.ok(k in s, `campo antigo ${k} preservado`);
 });
 
 test('/api/state.orchestration: com ORCH_CYCLE_PLAN=on e ORCH_CYCLE_MAX_STEP_RETRIES=2 reflete os valores REAIS do servidor; off e 0 continuam desligados', async () => {
   const on = await stateWith({ ORCH_CYCLE_PLAN: 'on', ORCH_CYCLE_MAX_STEP_RETRIES: '2' });
-  assert.deepEqual(on.orchestration, { planMode: true, stepRetries: 2, maxStepAttempts: 3, hardMaxIterations: 10 });
-  assert.deepEqual((await stateWith({ ORCH_CYCLE_PLAN: 'on', ORCH_CYCLE_MAX_STEP_RETRIES: '1' })).orchestration, { planMode: true, stepRetries: 1, maxStepAttempts: 3, hardMaxIterations: 10 });
-  assert.deepEqual((await stateWith({ ORCH_CYCLE_PLAN: 'off', ORCH_CYCLE_MAX_STEP_RETRIES: 'off' })).orchestration, { planMode: false, stepRetries: 0, maxStepAttempts: 3, hardMaxIterations: 10 });
+  assert.deepEqual(on.orchestration, { planMode: true, stepRetries: 2, maxStepAttempts: 3, hardMaxIterations: 10, source: { planMode: 'env', stepRetries: 'env' } });
+  assert.deepEqual((await stateWith({ ORCH_CYCLE_PLAN: 'on', ORCH_CYCLE_MAX_STEP_RETRIES: '1' })).orchestration, { planMode: true, stepRetries: 1, maxStepAttempts: 3, hardMaxIterations: 10, source: { planMode: 'env', stepRetries: 'env' } });
+  assert.deepEqual((await stateWith({ ORCH_CYCLE_PLAN: 'off', ORCH_CYCLE_MAX_STEP_RETRIES: 'off' })).orchestration, { planMode: false, stepRetries: 0, maxStepAttempts: 3, hardMaxIterations: 10, source: { planMode: 'env', stepRetries: 'env' } });
   assert.equal((await stateWith({ ORCH_CYCLE_MAX_STEP_RETRIES: '0' })).orchestration.stepRetries, 0);
 });
