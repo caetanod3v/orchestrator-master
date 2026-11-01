@@ -15,7 +15,7 @@ const data = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-real-'));
 const server = spawn('node', ['server/index.js'], { cwd: ROOT, env: { ...process.env, PORT: '4398', ORCH_DATA_DIR: data }, stdio: 'ignore' });
 const B = 'http://127.0.0.1:4398';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const api = async (m, p, b) => { const r = await fetch(B + p, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
+const api = async (m, p, b) => { const r = await fetch(B + p, { method: m, headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
 try {
   for (let i = 0; i < 30; i++) { try { await fetch(B + '/api/state'); break; } catch { await sleep(300); } }
   const ws = (await api('POST', '/api/workspaces', { path: WS.replace(/\//g, '\\'), name: 'test-workspace' })).body;

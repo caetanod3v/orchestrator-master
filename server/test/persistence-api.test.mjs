@@ -30,7 +30,7 @@ test('/api/state: saudável => persistence.ok e incidente null; falha real de gr
   try {
     assert.equal(await waitUp(b), true, `o servidor não subiu: ${b.out()}`);
     const state = async () => (await fetch(`${base}/api/state`)).json();
-    const save = () => fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const save = () => fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: '{}' });
 
     let s = await state();
     assert.equal(s.persistence.ok, true); assert.equal(s.persistence.error, null); assert.equal(s.persistenceIncident, null);

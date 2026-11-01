@@ -43,7 +43,7 @@ if (!lock.ok) { console.error(`[orchestrator] ${lock.message}`); process.exit(1)
 installShutdown({ lock, executor: claudeCodeExecutor, children: [planner, verifier], store }); // ao sair: encerra os filhos (executor, Planner, verificador), grava o que está pendente e libera a trava
 const db = store.load();
 const app = express();
-// Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO nas rotas de decisão humana (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).
+// Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO em POST/PUT/PATCH/DELETE (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).
 // ANTES do parser de JSON: uma requisição recusada nem chega a ter o corpo lido (e um corpo malformado vindo de origem externa dá 403, não 400).
 app.use('/api', apiGuard);
 app.use(express.json({ limit: '100kb' }));

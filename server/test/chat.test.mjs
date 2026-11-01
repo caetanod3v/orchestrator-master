@@ -223,7 +223,7 @@ test('rotas HTTP: /api/chat lê e valida; mensagem e aprovação só por POST; o
   const w = world([reply('oi!'), planReply([step('s1')]), done()]);
   const app = express(); app.use(express.json()); setupChat(app, { db, planner: w.planner, cycle: w.cy, multiStep: true, listFiles: () => [] });
   const srv = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); }); const base = `http://127.0.0.1:${srv.address().port}`;
-  const call = async (p, body) => { const res = await fetch(base + p, body === undefined ? undefined : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: res.status, json: await res.json() }; };
+  const call = async (p, body) => { const res = await fetch(base + p, body === undefined ? undefined : { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: JSON.stringify(body) }); return { status: res.status, json: await res.json() }; };
   try {
     assert.deepEqual((await call('/api/chat')).json.messages, []); assert.equal((await call('/api/chat/message', { text: '' })).status, 400); assert.equal((await call('/api/chat/message', {})).status, 400);
     const a = await call('/api/chat/message', { text: 'oi' }); assert.equal(a.status, 200); assert.equal(a.json.messages.length, 2); assert.equal(a.json.proposal, null);

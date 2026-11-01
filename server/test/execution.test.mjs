@@ -21,7 +21,7 @@ const { createExecutor } = await import('../executor/index.js');
 const { setupExecution } = await import('../execution.js');
 
 let db, server, base, executor;
-const api = async (m, p, b) => { const r = await fetch(base + p, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
+const api = async (m, p, b) => { const r = await fetch(base + p, { method: m, headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
 const task = (id) => db.missions.find((m) => m.id === 'mis').tasks.find((t) => t.id === id);
 const until = async (fn, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await new Promise((r) => setTimeout(r, 50)); } return false; };
 const mkTask = (id, title, extra = {}) => ({ id, title, status: 'queued', authorized: false, dependsOn: [], report: '', files: [], log: [], ...extra });

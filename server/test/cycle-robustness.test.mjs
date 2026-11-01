@@ -48,7 +48,7 @@ test('3 start simultâneos (probe frio): exatamente um 202 e dois 409; nunca pas
   const cy = setupCycle(app, { db, executor, planner, startTaskRun, verifier: null });
   server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
   const url = `http://127.0.0.1:${server.address().port}/api/missions/race1/cycle/start`;
-  const post = () => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ maxIterations: 1 }) }).then((r) => r.status);
+  const post = () => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: JSON.stringify({ maxIterations: 1 }) }).then((r) => r.status);
   const statuses = await Promise.all([post(), post(), post()]);
   assert.deepEqual(statuses.slice().sort(), [202, 409, 409]);
   gate.resolve();

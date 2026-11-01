@@ -270,7 +270,7 @@ test('API: validações das rotas do ciclo; campos extras do cliente são ignora
   setupCycle(app, { db, executor, planner: p, startTaskRun });
   const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
-  const api = async (u, b) => { const r = await fetch(base + u, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b ?? {}) }); return { status: r.status, body: await r.json() }; };
+  const api = async (u, b) => { const r = await fetch(base + u, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: JSON.stringify(b ?? {}) }); return { status: r.status, body: await r.json() }; };
   try {
     db.missions.unshift({ id: 'demoM', demo: true, title: 'd', workspaceId: null, tasks: [] });
     assert.equal((await api('/api/missions/demoM/cycle/start')).status, 409);

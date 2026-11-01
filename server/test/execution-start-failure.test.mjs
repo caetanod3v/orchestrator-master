@@ -68,11 +68,11 @@ test('rota /run: 500 estruturado (P7), servidor vivo e nenhum filho sem acompanh
   server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); }); base = `http://127.0.0.1:${server.address().port}`;
   const t = mkTask(), m = mkMission([t]);
   failSave();
-  const res = await fetch(`${base}/api/missions/${m.id}/tasks/${t.id}/run`, { method: 'POST' });
+  const res = await fetch(`${base}/api/missions/${m.id}/tasks/${t.id}/run`, { method: 'POST', headers: { origin: 'http://localhost:5173' } });
   mock.restoreAll(); quiet();
   assert.equal(res.status, 500); assert.deepEqual(await res.json(), { error: 'Erro interno.' });
   assert.equal(started.length, 1); assert.equal(pidAlive(started[0].pid), false); assert.equal(executor.isBusy(), false); assert.equal(t.status, 'failed');
-  assert.equal((await fetch(`${base}/api/missions/inexistente/tasks/x/run`, { method: 'POST' })).status, 404, 'o servidor continua respondendo');
+  assert.equal((await fetch(`${base}/api/missions/inexistente/tasks/x/run`, { method: 'POST', headers: { origin: 'http://localhost:5173' } })).status, 404, 'o servidor continua respondendo');
   assert.deepEqual(unhandled, []);
   mock.restoreAll();
 });

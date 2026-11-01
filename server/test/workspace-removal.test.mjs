@@ -17,7 +17,7 @@ const { workspaceRemovalBlocker, setupWorkspaceRemoval } = await import('../work
 
 let db, server, base;
 const diskDb = () => JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-const del = (id) => fetch(`${base}/api/workspaces/${id}`, { method: 'DELETE' });
+const del = (id) => fetch(`${base}/api/workspaces/${id}`, { method: 'DELETE', headers: { origin: 'http://localhost:5173' } });
 
 before(async () => {
   db = store.load();

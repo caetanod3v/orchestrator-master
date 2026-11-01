@@ -22,7 +22,7 @@ const { createCycle } = await import('../cycle.js');
 
 let db, server, base, executor, startTaskRun;
 const T0 = '2026-01-01T00:00:00.000Z';
-const api = async (m, p) => { const r = await fetch(base + p, { method: m }); return r.status; };
+const api = async (m, p) => { const r = await fetch(base + p, { method: m, headers: { origin: 'http://localhost:5173' } }); return r.status; };
 const until = async (fn, ms = 8000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await new Promise((r) => setTimeout(r, 30)); } return false; };
 const mkTask = (id, title) => ({ id, title, status: 'queued', authorized: true, dependsOn: [], report: '', files: [], log: [] });
 const mission = () => db.missions.find((m) => m.id === 'mis');

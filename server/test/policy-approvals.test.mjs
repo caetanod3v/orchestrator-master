@@ -166,7 +166,7 @@ test('rota HTTP: o estado devolvido é o registrado e a decisão exige o digest'
   const cy = setupCycle(app, { db, executor, planner, startTaskRun, verifier: null, listFiles: () => [], multiStep: false, persistRetryMs: [1] });
   const srv = app.listen(0, '127.0.0.1'); await new Promise((r) => srv.once('listening', r));
   const url = (p) => `http://127.0.0.1:${srv.address().port}/api/missions/${m.id}/cycle/${p}`;
-  const post = async (p, body) => { const r = await fetch(url(p), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
+  const post = async (p, body) => { const r = await fetch(url(p), { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: JSON.stringify(body) }); return { status: r.status, body: await r.json() }; };
   try {
     assert.equal((await post('start', {})).status, 202); await cy.idle();
     const a = m.cycle.approvals[0];

@@ -39,7 +39,7 @@ before(async () => {
 });
 after(async () => { process.off('unhandledRejection', onUnhandled); mock.restoreAll(); server.close(); server.closeAllConnections?.(); await new Promise((r) => setTimeout(r, 600)); fs.rmSync(tmp, { recursive: true, force: true }); });
 
-const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: JSON.stringify(body ?? {}) });
 const quiet = () => mock.method(console, 'error', () => {});
 const blockedMission = (over = {}) => {
   const m = { id: `m${++seq}`, demo: false, title: 'M', objective: 'o', workspaceId: 'ws', createdAt: T0, tasks: [],

@@ -9,7 +9,7 @@ import net from 'node:net';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { isAllowedHost, isAllowedOrigin, isDecisionRoute, apiGuard } from '../origin-guard.js';
+import { isAllowedHost, isAllowedOrigin, isMutatingMethod, apiGuard } from '../origin-guard.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BOOT = path.join(here, 'chat-boot.mjs');
@@ -28,24 +28,30 @@ test('isAllowedOrigin: parsing de URL, sem prefixos ou correspondências parciai
     'ftp://localhost', 'file://localhost', 'javascript:alert(1)', 'http://127.1', 'http://2130706433', 'http://localhost:80', 'http://localhost:99999', 'http://[::1]:4317', 'localhost:5173', 'http://localhost:5173, http://evil.com', ' http://localhost:5173']) assert.equal(isAllowedOrigin(o), false, String(o));
 });
 
-test('isDecisionRoute: as rotas de decisão (maiúsculas, barra final e consulta incluídas) e nenhuma outra', () => {
-  for (const p of ['/api/missions/m1/cycle/approvals/ap1', '/api/missions/m1/cycle/accept-unverified', '/api/missions/m1/tasks/t1/approve', '/api/missions/m1/tasks/t1/reject', '/api/missions/m1/tasks/t1/authorize', '/api/chat/approve',
-    '/api/chat/approve/', '/API/CHAT/APPROVE', '/api/chat/approve?x=1', '/api/Missions/M1/Cycle/Accept-Unverified/']) assert.equal(isDecisionRoute(p), true, p);
-  for (const p of ['/api/chat/message', '/api/chat', '/api/missions/m1/cycle/start', '/api/missions/m1/cycle/resume', '/api/missions/m1/cycle/cancel', '/api/workspaces/validate', '/api/missions/m1/tasks/t1/revoke', '/api/missions/m1/tasks/t1/run', '/api/state', '/api/chat/approve/x', '/x/api/chat/approve']) assert.equal(isDecisionRoute(p), false, p);
+test('isMutatingMethod: só POST, PUT, PATCH e DELETE (sem diferenciar maiúsculas)', () => {
+  for (const m of ['POST', 'PUT', 'PATCH', 'DELETE', 'post', 'Delete']) assert.equal(isMutatingMethod(m), true, m);
+  for (const m of ['GET', 'HEAD', 'OPTIONS', 'get', '', undefined, null]) assert.equal(isMutatingMethod(m), false, String(m));
 });
 
-test('apiGuard (middleware): Host inválido, Origin externo e Origin ausente em rota de decisão dão 403; o resto segue', () => {
-  const run = ({ host = 'localhost:4317', origin, baseUrl = '/api', path: p = '/chat' }) => {
-    const headers = { host, ...(origin === undefined ? {} : { origin }) }; let out = { next: false };
+test('apiGuard (middleware): Host inválido, Origin externo e Origin ausente em método mutável dão 403; GET/HEAD/OPTIONS seguem', () => {
+  const run = ({ host = 'localhost:4317', origin, method = 'GET' }) => {
+    const headers = { host, ...(origin === undefined ? {} : { origin }) }; const out = { next: false };
     const res = { status(c) { out.status = c; return this; }, json(b) { out.body = b; return this; } };
-    apiGuard({ get: (k) => headers[k.toLowerCase()], baseUrl, path: p, originalUrl: `${baseUrl}${p}` }, res, () => { out.next = true; });
+    apiGuard({ method, get: (k) => headers[k.toLowerCase()] }, res, () => { out.next = true; });
     return out;
   };
-  assert.equal(run({}).next, true, 'rota comum sem Origin segue'); assert.equal(run({ origin: 'http://localhost:5173' }).next, true);
+  for (const method of ['GET', 'HEAD', 'OPTIONS']) assert.equal(run({ method }).next, true, `${method} sem Origin segue`);
+  assert.equal(run({ origin: 'http://localhost:5173' }).next, true);
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    assert.equal(run({ method }).status, 403, `${method} sem Origin`);
+    assert.equal(run({ method, origin: '' }).status, 403, `${method} com Origin vazio`);
+    assert.equal(run({ method, origin: 'null' }).status, 403, `${method} com Origin null`);
+    assert.equal(run({ method, origin: 'http://evil.example' }).status, 403, `${method} com Origin externo`);
+    assert.equal(run({ method, origin: 'http://127.0.0.1:4317' }).next, true, `${method} com Origin válido`);
+    assert.equal(run({ method, host: 'evil.com', origin: 'http://localhost:5173' }).status, 403, `${method}: Host inválido vale mesmo com Origin legítimo`);
+  }
   assert.equal(run({ host: 'evil.com' }).status, 403); assert.equal(run({ host: null }).status, 403, 'Host ausente');
-  assert.equal(run({ origin: 'http://evil.example' }).status, 403); assert.equal(run({ origin: '' }).status, 403, 'Origin vazio não é "ausente"');
-  assert.equal(run({ path: '/chat/approve' }).status, 403, 'decisão sem Origin'); assert.equal(run({ path: '/chat/approve', origin: 'http://127.0.0.1:4317' }).next, true);
-  assert.equal(run({ path: '/chat/approve', host: 'evil.com', origin: 'http://localhost:5173' }).status, 403, 'Host inválido vale mesmo com Origin legítimo');
+  assert.equal(run({ origin: 'http://evil.example' }).status, 403, 'GET com Origin externo continua barrado'); assert.equal(run({ origin: '' }).status, 403, 'Origin vazio não é "ausente"');
 });
 
 // ---- integração com o index.js REAL ----
@@ -70,33 +76,45 @@ const raw = (port, { method = 'POST', target, headers = {}, body, raw: rawBody }
   req.on('error', reject); if (data) req.write(data); req.end();
 });
 
-test('index.js real: Origin obrigatório nas rotas de decisão, Host validado em toda a /api e rotas comuns preservadas', async () => {
+test('index.js real: Origin obrigatório em POST/PUT/PATCH/DELETE (403 sem alterar estado), Host validado e leituras preservadas', async () => {
   const realBefore = stat();
   const dir = path.join(root, 'data'), ws = path.join(root, 'workspace'); fs.mkdirSync(dir); fs.mkdirSync(ws);
   const port = await freePort(), b = boot(port, dir), legit = `http://127.0.0.1:${port}`;
   const call = (target, o = {}) => raw(port, { target, ...o, headers: { host: `127.0.0.1:${port}`, ...(o.headers ?? {}) } });
   try {
     assert.ok(await waitUp(b), `servidor não subiu:\n${b.out()}`);
-    const DECISION = ['/api/missions/m1/cycle/approvals/ap1', '/api/missions/m1/cycle/accept-unverified', '/api/missions/m1/tasks/t1/approve', '/api/missions/m1/tasks/t1/reject', '/api/missions/m1/tasks/t1/authorize', '/api/chat/approve'];
-    for (const p of DECISION) {
-      assert.equal((await call(p, { body: {} })).status, 403, `${p} sem Origin`);
-      for (const origin of ['http://evil.example', 'null', 'http://localhost.evil.com', 'http://127.0.0.1:1@evil.com', 'http://127.1']) assert.equal((await call(p, { body: {}, headers: { origin } })).status, 403, `${p} Origin ${origin}`);
-      assert.notEqual((await call(p, { body: {}, headers: { origin: legit } })).status, 403, `${p} com a origem legítima chega à rota (não é 403)`);
-      assert.notEqual((await call(p, { body: {}, headers: { origin: 'http://localhost:5173' } })).status, 403, `${p} com a origem do Vite`);
+    const state = async () => (await call('/api/state', { method: 'GET' })).text;
+    const s0 = await state();
+    // toda rota mutável (POST/PUT/PATCH/DELETE, de decisão ou não, existente ou não): sem Origin, vazio ou inválido => 403
+    const MUT = [['POST', '/api/workspaces', { name: 'invasor', path: ws }], ['POST', '/api/workspaces/validate', { path: ws }], ['POST', '/api/missions', { title: 'invasora' }], ['POST', '/api/missions/m1/tasks', { title: 'x' }],
+      ['POST', '/api/missions/m1/tasks/t1/approve', {}], ['POST', '/api/missions/m1/tasks/t1/reject', {}], ['POST', '/api/missions/m1/cycle/accept-unverified', {}], ['POST', '/api/chat/approve', {}], ['POST', '/api/chat/message', { text: 'oi' }],
+      ['PUT', '/api/settings', { showDemoData: true, cycleMaxIterations: 3 }], ['PATCH', '/api/settings', { showDemoData: true }], ['DELETE', '/api/missions/m1'], ['DELETE', '/api/missions/m1/tasks/t1']];
+    for (const [method, p, body] of MUT) {
+      assert.equal((await call(p, { method, body })).status, 403, `${method} ${p} sem Origin`);
+      for (const origin of ['', 'http://evil.example', 'null', 'http://localhost.evil.com', 'http://127.0.0.1:1@evil.com', 'http://127.1']) assert.equal((await call(p, { method, body, headers: { origin } })).status, 403, `${method} ${p} Origin "${origin}"`);
     }
-    // contornos de forma: maiúsculas, barra final e alvo em forma absoluta não escapam da regra
-    for (const target of ['/API/CHAT/APPROVE', '/api/chat/approve/', `http://127.0.0.1:${port}/api/chat/approve`, '/api/chat/approve?x=1']) assert.equal((await call(target, { body: {} })).status, 403, target);
-    // rotas que NÃO são de decisão: sem Origin continuam funcionando (Host válido); Origin externo continua barrado; Origin legítimo passa
-    assert.equal((await call('/api/workspaces/validate', { body: { path: ws } })).status, 200);
-    assert.equal((await call('/api/chat', { method: 'GET' })).status, 200);
-    assert.equal((await call('/api/workspaces/validate', { body: { path: ws }, headers: { origin: 'http://evil.example' } })).status, 403);
+    assert.equal(await state(), s0, 'nenhuma requisição barrada alterou o estado');
+    // contornos de forma: maiúsculas, barra final, consulta e alvo em forma absoluta não escapam da regra
+    for (const target of ['/API/CHAT/APPROVE', '/api/chat/approve/', `http://127.0.0.1:${port}/api/chat/approve`, '/api/chat/approve?x=1', '/API/SETTINGS']) assert.equal((await call(target, { method: target === '/API/SETTINGS' ? 'PUT' : 'POST', body: {} })).status, 403, target);
+    assert.equal(await state(), s0, 'o estado segue intacto');
+    // com Origin válido (o próprio servidor ou o Vite) a requisição chega à rota e altera o estado (controle positivo)
     assert.equal((await call('/api/workspaces/validate', { body: { path: ws }, headers: { origin: legit } })).status, 200);
+    assert.equal((await call('/api/chat/approve', { body: {}, headers: { origin: 'http://localhost:5173' } })).status !== 403, true, 'Origin do Vite passa pelo guard');
+    assert.equal((await call('/api/workspaces', { body: { name: 'legitimo', path: ws }, headers: { origin: legit } })).status, 201);
+    assert.notEqual(await state(), s0, 'com Origin válido o estado muda');
+    // leituras sem Origin continuam funcionando (Host válido); HEAD e OPTIONS não são barrados; Origin externo em leitura continua barrado
+    assert.equal((await call('/api/chat', { method: 'GET' })).status, 200);
+    assert.equal((await call('/api/state', { method: 'HEAD' })).status, 200);
+    assert.notEqual((await call('/api/state', { method: 'OPTIONS' })).status, 403);
+    assert.equal((await call('/api/chat', { method: 'GET', headers: { origin: legit } })).status, 200);
+    assert.equal((await call('/api/chat', { method: 'GET', headers: { origin: 'http://evil.example' } })).status, 403);
     // Host: externo, com sufixo, porta inválida e ausente são barrados em qualquer rota /api; localhost com outra porta é aceito
     for (const host of ['evil.com', 'localhost.evil.com', '127.0.0.1.evil.com:4317', 'localhost:99999', 'localhost:0']) assert.equal((await call('/api/chat', { method: 'GET', headers: { host } })).status, 403, host);
     for (const host of ['localhost', `localhost:${port}`, '127.0.0.1:5173']) assert.equal((await call('/api/chat', { method: 'GET', headers: { host } })).status, 200, host);
     assert.equal((await call('/api/chat/approve', { body: {}, headers: { host: 'evil.com', origin: legit } })).status, 403, 'Host inválido barra até a rota de decisão com Origin legítimo');
     // o guard roda ANTES do parser de JSON: Origin externo + corpo malformado é 403 (não 400 "JSON inválido"), em rota comum e de decisão; corpo malformado de origem legítima segue sendo 400
     for (const p of ['/api/workspaces/validate', '/api/chat/approve']) {
+      assert.equal((await call(p, { raw: '{' })).status, 403, `${p} sem Origin + JSON malformado`);
       assert.equal((await call(p, { raw: '{', headers: { origin: 'http://evil.example' } })).status, 403, `${p} Origin externo + JSON malformado`);
       assert.equal((await call(p, { raw: '{', headers: { host: 'evil.com' } })).status, 403, `${p} Host externo + JSON malformado`);
     }

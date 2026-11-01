@@ -21,7 +21,7 @@ const store = await import('../store.js');
 const { createVerifier, setupVerification } = await import('../verify.js');
 
 let db, server, base;
-const call = async (m, u, b) => { const r = await fetch(base + u, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
+const call = async (m, u, b) => { const r = await fetch(base + u, { method: m, headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
 const approve = () => call('PUT', '/api/workspaces/w1/verifications', { items: [{ script: 'test', required: true }] });
 
 before(async () => {

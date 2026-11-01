@@ -261,9 +261,9 @@ test('rota POST /api/missions/:id/cycle/accept-unverified: valida o corpo, aceit
   const srv = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
   try {
     const base = `http://127.0.0.1:${srv.address().port}/api/missions`;
-    const post = async (id, b) => { const r = await fetch(`${base}/${id}/cycle/accept-unverified`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }); return { status: r.status, body: await r.json() }; };
+    const post = async (id, b) => { const r = await fetch(`${base}/${id}/cycle/accept-unverified`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: JSON.stringify(b) }); return { status: r.status, body: await r.json() }; };
     assert.equal((await post(m.id, {})).status, 400); assert.equal((await post('nao-existe', body(c))).status, 404); assert.equal((await post(m.id, body(c, { cycleId: 'cyc_x' }))).status, 409);
-    for (const raw of ['null', '[]', '"texto"', '{']) { const r = await fetch(`${base}/${m.id}/cycle/accept-unverified`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: raw }); assert.ok([400, 409].includes(r.status), `corpo ${raw}: ${r.status}`); }
+    for (const raw of ['null', '[]', '"texto"', '{']) { const r = await fetch(`${base}/${m.id}/cycle/accept-unverified`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: raw }); assert.ok([400, 409].includes(r.status), `corpo ${raw}: ${r.status}`); }
     assert.equal((await post(m.id, body(c, { reason: 12345678901 }))).status, 400, 'motivo numérico');
     assert.equal(c.status, 'blocked'); assert.equal((await fetch(`${base}/${m.id}/cycle/accept-unverified`)).status, 404, 'só POST');
     const ok = await post(m.id, body(c)); assert.equal(ok.status, 200, JSON.stringify(ok.body)); assert.equal(ok.body.status, 'completed'); assert.equal(ok.body.acceptance.by, 'user'); assert.equal(ok.body.assurance, 'self-declared');

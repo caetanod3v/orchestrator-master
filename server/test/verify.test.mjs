@@ -178,7 +178,7 @@ test('npm real: pass, fail, cwd correto e hooks pre/post NÃO executam', { skip:
 
 // ---- rotas de aprovação humana ----------------------------------------------------------
 let server, base, db;
-const call = async (m, u, b) => { const r = await fetch(base + u, { method: m, headers: { 'content-type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
+const call = async (m, u, b) => { const r = await fetch(base + u, { method: m, headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
 test('rotas: detectar mostra só scripts permitidos; aprovar fixa o texto lido do disco', async () => {
   db = store.load(); db.workspaces.push({ id: 'w1', name: 'w1', path: wsDir }); db.missions = [];
   const app = express(); app.use(express.json());

@@ -37,7 +37,7 @@ test('alterar -> bloquear -> restaurar e reaprovar -> retomar -> re-verificar: o
   const app = express(); app.use(express.json());
   setupVerification(app, { db, verifier });
   server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
-  const approve = async () => (await fetch(`http://127.0.0.1:${server.address().port}/api/workspaces/w1/verifications`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: [{ script: 'test', required: true }] }) })).status;
+  const approve = async () => (await fetch(`http://127.0.0.1:${server.address().port}/api/workspaces/w1/verifications`, { method: 'PUT', headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: JSON.stringify({ items: [{ script: 'test', required: true }] }) })).status;
 
   setTest('node --test'); assert.equal(await approve(), 200);                  // 1. aprovação humana de "node --test"
   assert.equal(db.workspaces[0].verifications[0].command, 'node --test');

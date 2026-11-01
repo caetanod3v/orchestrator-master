@@ -390,7 +390,7 @@ test('GET /api/missions/:id/delivery: 200 com o contrato, 404 para missão inexi
     const bad = await get('mis_bad'); assert.equal(bad.status, 200); assert.equal(bad.body.assurance.level, 'unverified'); assert.match(bad.body.limitations.join(' '), /sem nenhuma rodada/);
     const demo = await get('demo_mission'); assert.equal(demo.status, 200); assert.equal(demo.body.state.code, 'demo');
     const miss = await get('nao_existe'); assert.equal(miss.status, 404); assert.deepEqual(miss.body, { error: 'Missão não encontrada.' });
-    assert.equal((await fetch(`${base}/api/missions/mis_ok/delivery`, { method: 'POST' })).status, 404); // só leitura: não existe POST
+    assert.equal((await fetch(`${base}/api/missions/mis_ok/delivery`, { method: 'POST', headers: { origin: 'http://localhost:5173' } })).status, 404); // só leitura: não existe POST
     assert.deepEqual(await states(), before, 'a consulta não muda nenhum estado');
     assert.equal(dig(JSON.parse(fs.readFileSync(path.join(dir, 'db.json'), 'utf8')).missions), disk, 'a consulta não grava nada');
   } finally { child.kill(); await sleep(500); }
