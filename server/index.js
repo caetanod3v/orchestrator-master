@@ -190,6 +190,9 @@ app.delete('/api/missions/:id/tasks/:tid', (req, res) => {
   const task = m && find(m.tasks, req.params.tid);
   if (!task) return bad(res, 'Tarefa não encontrada.', 404);
   if (task.status === 'running') return bad(res, 'Tarefa em execução não pode ser removida.', 409);
+  // Rodadas (do ciclo atual e dos anteriores) apontam para a tarefa por taskId; removê-la deixaria o histórico e o relatório com referência quebrada.
+  const referenced = [m.cycle, ...(m.pastCycles || [])].some((c) => (c?.rounds || []).some((r) => r.taskId === task.id));
+  if (referenced) return bad(res, 'A tarefa é referenciada por uma rodada de ciclo e não pode ser removida.', 409);
   m.tasks = m.tasks.filter((t) => t.id !== task.id);
   m.tasks.forEach((t) => (t.dependsOn = t.dependsOn.filter((d) => d !== task.id)));
   store.log('task', `Tarefa removida: ${task.title}`, { missionId: m.id });
