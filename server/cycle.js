@@ -899,6 +899,12 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (!c || ![...ACTIVE, 'blocked'].includes(c.status)) return fail(409, 'Não há ciclo ativo ou bloqueado para cancelar.');
     c.cancelRequested = true;
     if (c.status === 'blocked') { end(m, 'cancelled', 'Ciclo cancelado pelo usuário.'); return ok(c); }
+    // Ciclo ativo: grava o pedido ANTES de interromper qualquer processo; uma queda nessa janela não desfaz a decisão (o boot a respeita: recover() encerra como "cancelled").
+    // Cancelar é uma ação protetora e NUNCA é recusada por falha de disco (contrato de persistence-policy: o ciclo termina "cancelled" mesmo com o banco falhando): sem gravação o pedido
+    // segue valendo em memória e o processo é interrompido, mas isso fica dito na atividade (não se finge persistência) e o próximo save() bem-sucedido o grava.
+    try { store.saveOrThrow(); } catch (e) {
+      note(m, 'cycle', `Pedido de cancelamento NÃO gravado no disco (${e?.code || e?.message || 'erro'}): vale neste processo e será gravado quando o banco voltar; uma queda antes disso o desfaz.`);
+    }
     await planner.cancel?.();
     await verifier?.stop?.();
     const round = c.rounds.at(-1);

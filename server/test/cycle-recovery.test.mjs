@@ -321,3 +321,36 @@ test('REGRESSÃO (rodada "running" sem baseline): a tarefa terminou como conclu�
   assert.notEqual(c.status, 'completed', 'o relato do Executor sozinho não conclui'); assert.equal(c.rejections.length, 1); assert.match(c.rejections[0].problem, /evidência do sistema.*inconclusive/);
   assert.equal(c.blockedCode, 'planner_blocked'); assert.equal(c.assurance, undefined); assert.equal(execStarts, starts, 'a execução não se repete'); assert.equal(c.rounds.length, 1);
 });
+
+
+
+// ---------- cancelamento de ciclo ativo: o pedido é gravado antes de interromper processos ----------
+/** Ciclo ativo com o Planner "pensando" até ser cancelado; `diskAtCancel` guarda o que o DISCO dizia quando planner.cancel foi chamado. */
+async function hangingCycle() {
+  boot();
+  const o = { release: null, decides: 0, cancels: 0, diskAtCancel: null, mid: null };
+  const planner = { busy: () => false, cancel: async () => { o.cancels++; o.diskAtCancel = onDisk(o.mid)?.cycle?.cancelRequested ?? null; o.release?.({ error: 'cancelado' }); }, decide: () => { o.decides++; return new Promise((r) => { o.release = r; }); } };
+  const m = { id: `cx${++seq}`, demo: false, title: 'cancelar', objective: 'obj', workspaceId: 'ws0', createdAt: 'T0', tasks: [] }; db.missions.push(m); store.saveOrThrow(); o.mid = m.id;
+  const cy = mk(planner); assert.equal((await cy.start(m.id, 6)).status, 202); for (let i = 0; i < 200 && !o.decides; i++) await sleep(10);
+  assert.equal(o.decides, 1, 'pré-condição: ciclo ativo, Planner em andamento'); assert.ok(['planning', 'running'].includes(m.cycle.status)); assert.ok(!m.cycle.cancelRequested);
+  return { m, c: m.cycle, cy, o };
+}
+
+test('cancelamento de ciclo ativo: o pedido já está no disco quando o Planner é interrompido, e a recuperação após uma queda nessa janela termina "cancelled" sem executar nada', async () => {
+  const { m, c, cy, o } = await hangingCycle(), starts = execStarts, crashed = path.join(tmp, 'db-na-queda.json'), p = cy.cancel(m.id);
+  assert.equal(onDisk(m.id).cycle.cancelRequested, true, 'persistido de forma síncrona, antes de qualquer espera'); fs.copyFileSync(DB_FILE, crashed); // foto do disco na janela do pedido
+  assert.equal((await p).status, 200); await cy.idle(); assert.equal(c.status, 'cancelled'); assert.equal(o.cancels, 1); assert.equal(o.diskAtCancel, true, 'quando o Planner foi interrompido, o pedido JÁ estava no disco');
+  fs.copyFileSync(crashed, DB_FILE); assert.ok(['planning', 'running'].includes(onDisk(m.id).cycle.status), 'o disco da queda ainda tem o ciclo ativo'); assert.equal(onDisk(m.id).cycle.cancelRequested, true);
+  const cy2 = restart(scripted([])), c2 = live(m.id).cycle;
+  assert.equal(c2.status, 'cancelled', 'o pedido gravado não é desfeito pela queda'); assert.equal(c2.cancelRequested, true); assert.equal((await cy2.resume(m.id)).status, 409, 'cancelado é terminal'); assert.equal(execStarts, starts, 'nada foi executado');
+});
+
+test('cancelamento com o banco SEM gravar: não é recusado (continua protetor), o Planner é interrompido, a falta de gravação fica dita na atividade e, com o banco de volta, o pedido chega ao disco e o cancelamento se completa', async () => {
+  const { m, c, cy, o } = await hangingCycle(); fs.mkdirSync(BLOCK_TMP, { recursive: true });
+  let r; try { r = await quiet(() => cy.cancel(m.id)); await quiet(() => cy.idle()); } finally { fs.rmSync(BLOCK_TMP, { recursive: true, force: true }); }
+  assert.equal(r.status, 200, 'cancelar nunca é recusado por falha de disco'); assert.equal(o.cancels, 1, 'o Planner foi interrompido mesmo sem gravação'); assert.notEqual(o.diskAtCancel, true, 'o disco NÃO tinha o pedido nesse momento (não se finge persistência)');
+  assert.ok(db.activity.some((x) => x.missionId === m.id && /NÃO gravado no disco/.test(x.message)), 'a atividade registra que o pedido não foi gravado'); assert.equal(c.cancelRequested, true);
+  assert.equal(c.blockedCode, 'persistence_failed', 'erro real de E/S bloqueia o ciclo na hora (comportamento já existente); o cancelamento segue valendo');
+  assert.equal(store.save(), true); assert.equal(onDisk(m.id).cycle.cancelRequested, true, 'com o banco de volta o pedido chega ao disco');
+  assert.equal((await cy.cancel(m.id)).status, 200); assert.equal(c.status, 'cancelled'); assert.equal(onDisk(m.id).cycle.status, 'cancelled', 'e a pessoa consegue concluir o cancelamento do ciclo bloqueado');
+});
