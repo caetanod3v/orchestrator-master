@@ -1049,6 +1049,13 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
         if (round?.status === 'succeeded' && round.phase !== 'done' && round.report && !round.report.verificationsSkipped && (find(db.workspaces, m.workspaceId)?.verifications || []).length) {
           round.phase = 'done'; round.report.verificationsInterrupted = 'o servidor foi reiniciado durante a verificação';
         }
+        // Rodada bem-sucedida gravada SEM o parecer do sistema (queda entre salvar a rodada e avaliá-la): a ausência passaria no portão de conclusão como "rodada histórica" e o relato
+        // do Executor sozinho concluiria o ciclo. O parecer nunca foi feito, então fica INCONCLUSIVO até uma re-verificação/avaliação (mesma regra do ramo da rodada que estava "running").
+        // Só sem verificações reais configuradas: com elas, o portão já recusa por "verificação interrompida/não executada" (acima), e o fluxo de re-verificação não muda.
+        const configuredNow = (find(db.workspaces, m.workspaceId)?.verifications || []).length;
+        if (round?.status === 'succeeded' && round.report && !round.report.evidence && !configuredNow) {
+          round.report.evidence = { ...buildEvidence({ report: round.report, verification: roundVerification(round), configured: configuredNow, expectedResults: null, integrity: { status: 'unknown', reason: 'o servidor reiniciou antes da avaliação desta rodada' } }), at: store.now() };
+        }
         if (c.cancelRequested) { end(m, 'cancelled', 'Ciclo cancelado: o pedido de cancelamento foi feito antes de o servidor reiniciar e continua valendo.'); return; } // o cancelamento pedido não se desfaz por uma queda
         const broken = planProblem(c); // também sincroniza o estado das etapas com as rodadas recém-fechadas
         if (broken) { stop(m, 'plan_invalid', planInvalidReason(broken)); return; }

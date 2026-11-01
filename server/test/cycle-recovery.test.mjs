@@ -274,3 +274,26 @@ test('modo legado (sem plano, ORCH_CYCLE_PLAN desligado): a queda segue o fluxo 
   assert.equal(c.status, 'completed', c.blockedReason); assert.equal(planner.calls.length, 2); assert.equal(execStarts - starts, 1, 'só a tarefa nova que o Planner pediu'); assert.equal(c.rounds.length, 3); assert.ok(!c.plan); assert.ok(c.rounds.every((r) => r.planId === undefined));
   assert.equal(c.rounds[0].taskId, 'ta'); assert.match(planner.calls[0], /RESULTADO INCERTO/);
 });
+
+test('REGRESSÃO: rodada bem-sucedida gravada SEM o parecer do sistema (queda antes da avaliação) não vira "rodada histórica": a recuperação a deixa INCONCLUSIVA e o Planner não conclui sobre ela', async () => {
+  // O disco tem a rodada "succeeded" (gravada antes de assessRound) e nenhum `evidence`; workspace sem verificações configuradas, então nada marca a verificação como interrompida.
+  const ta = task('ta', 'completed'), r = round(1, 'a', 'ta', { verification: undefined, phase: undefined, report: report({ verifications: [] }) });
+  assert.equal(r.report.evidence, undefined);
+  const m = seed({ ws: 'ws0', rounds: [r], tasks: [ta] });
+  const starts = execStarts, planner = scripted([done(), blockedAns()]), cy = restart(planner), c = live(m.id).cycle;
+  assert.equal(c.blockedCode, 'restarted'); assert.equal(c.rounds[0].report.evidence.level, 'inconclusive'); assert.match(c.rounds[0].report.evidence.reasons.join(' '), /reiniciou antes da avaliação/);
+  assert.equal(onDisk(m.id).cycle.rounds[0].report.evidence.level, 'inconclusive', 'o parecer recuperado está no disco');
+  // Idempotência da PRÓPRIA regra: o ciclo volta a um estado elegível à recuperação (ativo, com o parecer já gravado) e um novo boot não recria nem altera o parecer.
+  const ev1 = JSON.stringify(c.rounds[0].report.evidence); await sleep(5); // se a regra recriasse o parecer, o `at` seria outro
+  Object.assign(c, { status: 'running', blockedCode: null, blockedReason: null, blocks: [] }); store.saveOrThrow();
+  restart(scripted([])); const c1 = live(m.id).cycle;
+  assert.equal(c1.blockedCode, 'restarted', 'a recuperação voltou a agir sobre o ciclo ativo'); assert.equal(JSON.stringify(c1.rounds[0].report.evidence), ev1, 'o parecer não foi recriado nem alterado'); assert.equal(c1.blocks.length, 1);
+  const cy2 = mk(planner); assert.equal((await cy2.resume(m.id)).status, 202); await cy2.idle(); const c2 = live(m.id).cycle;
+  assert.notEqual(c2.status, 'completed', 'o relato do Executor sozinho não conclui o ciclo'); assert.equal(c2.rejections.length, 1); assert.match(c2.rejections[0].problem, /evidência do sistema.*inconclusive/);
+  assert.equal(c2.blockedCode, 'planner_blocked'); assert.equal(c2.assurance, undefined); assert.equal(execStarts, starts, 'nada foi executado de novo');
+  // Saída humana: a aceitação explícita (Incremento 2.1) funciona sobre o parecer recuperado e continua honesta (inconclusive / self-declared, nunca verified).
+  const bad = cy2.acceptUnverified(m.id, { cycleId: c2.id, round: 1, evidenceLevel: 'verified', reason: 'Revisei o resultado manualmente e aceito.', confirm: true }); assert.equal(bad.status, 409, 'nível de evidência errado não aceita');
+  const acc = cy2.acceptUnverified(m.id, { cycleId: c2.id, round: 1, evidenceLevel: 'inconclusive', reason: 'Revisei o resultado manualmente e aceito.', confirm: true }); assert.equal(acc.status, 200, acc.error);
+  assert.equal(c2.status, 'completed'); assert.equal(c2.assurance, 'self-declared'); assert.equal(c2.acceptance.by, 'user'); assert.equal(c2.acceptance.evidence.level, 'inconclusive');
+  assert.equal(onDisk(m.id).cycle.acceptance.evidence.level, 'inconclusive'); assert.equal(execStarts, starts, 'aceitar não executa nada');
+});
