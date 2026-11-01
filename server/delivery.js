@@ -20,7 +20,7 @@
 //   currentWorkspace      SÓ existe quando há contexto congelado: mostra à parte a situação ATUAL ({ exists, verificationsChanged, source: 'current' }) sem alterar o histórico.
 import crypto from 'node:crypto';
 import { roundVerification } from './cycle.js';
-import { stepStatusFromRound } from './plan.js';
+import { stepStatusFromRound, retriesUsed } from './plan.js';
 
 export const DELIVERY_SCHEMA = 1;
 const MAX_FILES = 200, PER_ROUND_CAP = 50; // buildReport (cycle.js) já corta em 50 arquivos por rodada
@@ -162,7 +162,8 @@ export function buildDelivery(mission, workspace = null, { now = () => new Date(
   const manual = tasks.filter((t) => !t.auto);
   const files = filesSection(rounds, c ? [] : manual);
   const planSteps = arr(c?.plan?.steps).filter(isObj);
-  const stepsOut = planSteps.map((s) => { const r = rounds.filter((x) => x.planId === c.plan?.id && x.stepId === s.id).at(-1); return { id: s.id, title: clip(s.title, 200), dependsOn: arr(s.dependsOn), status: stepStatusFromRound(r), round: r?.n ?? null, uncertain: !!r?.report?.outcomeUncertain, executedByRound: !!r }; });
+  // attempts: rodadas gravadas com o planId e o stepId da etapa NO PLANO ATUAL (0 = nunca executada; ciclos antigos, que só têm uma rodada por etapa, dão 1). Derivado, nunca gravado.
+  const stepsOut = planSteps.map((s) => { const rs = rounds.filter((x) => x.planId === c.plan?.id && x.stepId === s.id), r = rs.at(-1); return { id: s.id, title: clip(s.title, 200), dependsOn: arr(s.dependsOn), status: stepStatusFromRound(r), round: r?.n ?? null, uncertain: !!r?.report?.outcomeUncertain, executedByRound: !!r, attempts: rs.length }; });
   const observed = {
     note: 'Registros do sistema sobre o que aconteceu. Observação não é verificação.',
     rounds: rounds.map((r) => ({
@@ -171,6 +172,7 @@ export function buildDelivery(mission, workspace = null, { now = () => new Date(
       uncertainOutcome: r.report?.outcomeUncertain ? clip(r.report.outcomeUncertain, 300) : null, errors: arr(r.report?.errors).slice(0, 5).map((e) => clip(e, 300)), blockers: arr(r.report?.blockers).slice(0, 5).map((e) => clip(e, 300)),
     })),
     steps: stepsOut,
+    retriesUsed: c ? retriesUsed({ rounds }) : 0, // retentativas automáticas do ciclo ATUAL, somando todos os planos dele (rodadas além da primeira de cada planId+stepId); ciclos arquivados não entram
     manualTasks: c ? [] : manual.map((t) => ({ taskId: t.id, title: clip(t.title, 200), status: t.status, exitCode: t.exitCode ?? null })),
     files: {
       source: 'git status/diff do workspace depois de cada execução (task.files)', ...files,

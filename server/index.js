@@ -14,7 +14,7 @@ import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle
 import { createClaudePlanner, plannerConfigFromEnv } from './planner.js';
 import { routingFromEnv, createRouter } from './routing.js';
 import { cycleLimitsFromEnv } from './limits.js';
-import { planModeFromEnv, stepRetriesFromEnv } from './plan.js';
+import { planModeFromEnv, stepRetriesFromEnv, MAX_STEP_ATTEMPTS } from './plan.js';
 import { setupChat } from './chat.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
@@ -77,6 +77,7 @@ app.get('/api/state', async (req, res) => {
     persistenceIncident: store.persistenceIncident(), // aditivo (M2): último incidente de gravação (início, nº de falhas, quando foi reconciliado); null se nunca houve
     persistence: store.persistenceStatus(), // aditivo: ok, código do último erro, quando falhou e quantas falhas seguidas (sem caminhos)
     settings: { cycleMaxIterations: DEFAULT_MAX_ITERATIONS, ...db.settings, cycleHardMax: HARD_MAX_ITERATIONS },
+    orchestration: { planMode: multiStepPlan, stepRetries, maxStepAttempts: MAX_STEP_ATTEMPTS, hardMaxIterations: HARD_MAX_ITERATIONS }, // aditivo (Marco A, I1): os MESMOS valores que o servidor usa (ORCH_CYCLE_PLAN, ORCH_CYCLE_MAX_STEP_RETRIES e os limites estruturais)
     activeWorkspace: find(db.workspaces, db.settings.activeWorkspaceId) || null,
     // costUsd/runs (legado: execuções reais que reportaram custo) + durationMs + tokens agregados por agente/missão/ciclo (ver usage.js); null sem nenhum dado
     usage: summarizeUsage(visibleMissions(), db.chat),
