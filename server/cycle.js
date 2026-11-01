@@ -29,7 +29,7 @@ import { MAX_PLAN_STEPS, validatePlanSteps } from './cycle-schema.js';
 import { snapshotWorkspace, hashesOf, diffHashes, checkExpected, buildEvidence, evidencePathProblem, CATEGORY_LABEL } from './evidence.js';
 import { syncPlan, nextStep, openSteps, planProblem, dependencyTaskIds, planProgress, newPlan } from './plan.js';
 import { evaluateTask, actionDigest, approvalProblem } from './policy.js';
-import { closingContext } from './delivery.js';
+import { closingContext, acceptanceDigest } from './delivery.js';
 
 // O que precisa acontecer para um ciclo parado por limite poder retomar. Os limites vêm do ambiente do servidor; a retomada nunca os altera.
 const LIMIT_HINT = {
@@ -302,7 +302,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   const assuranceOf = (round) => (round?.report?.evidence?.level === 'verified' ? 'verified' : 'self-declared');
 
   /** Checagens que dependem do contexto; devolvem o motivo da rejeição ou null. */
-  function semanticProblem(m, d) {
+  // `allowUnverified`: SÓ para a aceitação humana explícita (acceptUnverified). Dispensa exclusivamente o nível "inconclusive" da evidência; falha, verificação reprovada
+  // ou não executada, testes alterados sem revisão, etapas abertas e demais regras continuam valendo. O Planner nunca passa por aqui com isso ligado.
+  function semanticProblem(m, d, { allowUnverified = false } = {}) {
     const c = m.cycle, last = c.rounds.at(-1);
     if (d.decision === 'complete') {
       if (!last) return '"complete" sem nenhuma rodada executada: não há evidências';
@@ -323,7 +325,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       if (pend.length) return `"complete" rejeitado: arquivos de teste ou de configuração de validação foram alterados e não foram revisados por uma pessoa (${pend.slice(0, 5).map((x) => x.path).join(', ')}); a verificação real sobre testes alterados não prova a conclusão`;
       const ev = last.report.evidence; // parecer do SISTEMA (assessRound); rodada histórica sem parecer: valem só as regras acima, e nada é presumido (o rótulo fica "self-declared")
       if (ev?.level === 'failed') return `"complete" rejeitado: a evidência da última rodada falhou (${clip((ev.reasons ?? []).join('; '), 250)})`;
-      if (ev != null && ev.level !== 'verified') return `"complete" rejeitado: a evidência do sistema para a última rodada é "${clip(ev.level, 20)}", não "verified" (${clip((ev.reasons ?? []).join('; ') || 'sem motivos gravados', 250)}). O relato e os checks do Executor não substituem evidência independente. Para concluir, gere essa evidência (verificações reais configuradas e aprovadas e/ou "expectedFiles" conferidos pelo orquestrador, sem testes alterados pendentes de revisão) ou declare "blocked" pedindo intervenção humana`;
+      if (ev != null && ev.level !== 'verified' && !(allowUnverified && ev.level === 'inconclusive')) return `"complete" rejeitado: a evidência do sistema para a última rodada é "${clip(ev.level, 20)}", não "verified" (${clip((ev.reasons ?? []).join('; ') || 'sem motivos gravados', 250)}). O relato e os checks do Executor não substituem evidência independente. Para concluir, gere essa evidência (verificações reais configuradas e aprovadas e/ou "expectedFiles" conferidos pelo orquestrador, sem testes alterados pendentes de revisão) ou declare "blocked" pedindo intervenção humana`;
       const open = openSteps(c); // M4: um plano com etapas não concluídas nunca vira "concluído"
       if (open.length) return `"complete" rejeitado: o plano ainda tem etapas não concluídas (${open.map((st) => `${st.id}=${st.status}`).join(', ')}); conclua-as, proponha um novo plano ou declare "blocked"`;
     }
@@ -580,6 +582,54 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     }
     note(m, 'approval', `${approve ? 'Ação aprovada (ainda não executada)' : 'Ação rejeitada'}: ${clip(a.action.title, 100)}`);
     store.saveSoon(); bus.emit('cycle', { missionId: m.id, status: c.status, iteration: c.rounds.length });
+    return ok(c);
+  }
+
+  /**
+   * Aceitação HUMANA e explícita de uma conclusão SEM evidência "verified" (só evidência "inconclusive"). Nunca é chamada pelo Planner, pelo Executor, pela recuperação
+   * nem por retentativas: só a rota POST .../cycle/accept-unverified chega aqui. Não altera a evidência (continua inconclusive) nem o rótulo (continua self-declared);
+   * grava cycle.acceptance (auditável) com um resumo do estado visto. Falha ao gravar => tudo volta ao bloqueio anterior.
+   */
+  function acceptUnverified(missionId, { cycleId, round, evidenceLevel, reason, confirm } = {}) {
+    const m = mission(missionId), c = m?.cycle;
+    if (!m || !c) return fail(404, 'Missão ou ciclo não encontrado.');
+    if (confirm !== true) return fail(400, 'confirm deve ser true: a aceitação é uma decisão humana explícita.');
+    if (typeof reason !== 'string') return fail(400, 'O motivo da aceitação deve ser um texto.');
+    // quebras de linha normalizadas, caracteres de controle removidos; "úteis" = sem espaços/quebras (o limite máximo de 500 continua valendo sobre o texto normalizado)
+    const text = reason.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '').trim(), oneLine = text.replace(/\s*\n\s*/g, ' ');
+    if (text.replace(/\s/g, '').length < 10 || text.length > 500) return fail(400, 'Informe o motivo da aceitação (pelo menos 10 caracteres úteis e no máximo 500).');
+    if (typeof cycleId !== 'string' || cycleId !== c.id) return fail(409, 'O ciclo informado não é o ciclo atual desta missão; nada foi aceito.');
+    if (c.status !== 'blocked' || c.blockedCode !== 'planner_blocked' || loops.has(m.id)) return fail(409, 'Só um ciclo bloqueado pelo Planner (planner_blocked) e parado pode receber esta aceitação.');
+    const last = c.rounds.at(-1), ev = last?.report?.evidence;
+    if (!last || !Number.isInteger(round) || round !== last.n) return fail(409, 'A rodada informada não é a última rodada do ciclo; nada foi aceito.');
+    if (ev?.level === 'failed') return fail(409, 'A evidência da última rodada FALHOU: esta aceitação não pode contornar uma falha.');
+    if (ev?.level !== 'inconclusive') return fail(409, 'A aceitação só existe para evidência inconclusiva registrada pelo sistema; não há o que aceitar neste estado.');
+    if (evidenceLevel !== ev.level) return fail(409, `O nível de evidência informado (${clip(evidenceLevel, 20)}) não é o atual (${ev.level}); recarregue e revise.`);
+    // Mesmas barreiras da retomada: execução ativa/órfã, plano ou aprovações inconsistentes e aprovação pendente impedem concluir (nada é alterado).
+    if (starting || executor.isBusy() || planner.busy?.() || loops.size) return fail(409, busyReason());
+    const broken = planProblem(c);
+    if (broken) return fail(409, `${planInvalidReason(broken)} A aceitação foi recusada e nada foi alterado.`);
+    if ((c.approvals || []).some((a) => a?.status === 'pending')) return fail(409, 'Há uma aprovação pendente: aprove ou rejeite antes de aceitar a conclusão. Nada foi alterado.');
+    const apBroken = approvalProblem(c);
+    if (apBroken) return fail(409, `Registro de aprovações inconsistente: ${apBroken}. A aceitação foi recusada e nada foi alterado.`);
+    const problem = semanticProblem(m, { decision: 'complete' }, { allowUnverified: true });
+    if (problem) return fail(409, `Aceitação recusada: ${problem.replace(/^"complete" rejeitado: /, '')}`);
+    const storage = storageProblem(); if (storage) return storage;
+    const had = (k) => Object.prototype.hasOwnProperty.call(c, k), KEYS = ['status', 'finishedAt', 'finalSummary', 'assurance', 'acceptance', 'blockedCode', 'blockedReason', 'deliveryContext', 'delivery'];
+    const prev = Object.fromEntries(KEYS.filter(had).map((k) => [k, c[k]]));
+    const restore = () => { for (const k of KEYS) { if (k in prev) c[k] = prev[k]; else delete c[k]; } };
+    const at = store.now(), rec = { by: 'user', at, round: last.n, reason: text };
+    try {
+      c.acceptance = { v: 1, kind: 'unverified_acceptance', by: 'user', at, cycleId: c.id, round: last.n, reason: text, digest: acceptanceDigest(c, rec), priorBlock: { code: c.blockedCode, reason: clip(c.blockedReason, 300) }, evidence: { level: ev.level, reasons: (ev.reasons ?? []).slice(0, 8).map((x) => clip(x, 300)), at: ev.at ?? null } };
+      c.assurance = 'self-declared'; c.finalSummary = `Concluída por ACEITAÇÃO HUMANA sem evidência verificada: ${oneLine}`; c.blockedCode = null; c.blockedReason = null;
+      c.status = 'completed'; c.finishedAt = at; recordDeliveryContext(m);
+      store.saveOrThrow();
+    } catch (e) { // não gravou: TODO campo tocado volta exatamente ao bloqueio anterior (a aceitação não fica registrada)
+      restore();
+      return fail(503, `O banco não pôde ser gravado (${e?.code || e?.message || 'erro'}); a aceitação NÃO foi registrada e o ciclo continua bloqueado.`);
+    }
+    // Já gravado: a decisão vale e NUNCA é desfeita por efeitos posteriores (atividade e evento são informativos; se falharem, o disco e a memória continuam coerentes).
+    try { note(m, 'cycle', `Conclusão aceita por uma pessoa SEM evidência verificada (rodada ${last.n}): ${clip(oneLine, 200)}`, 'user'); emit(m); } catch { /* informativo */ }
     return ok(c);
   }
 
@@ -1007,7 +1057,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     }
   }
 
-  return { start, cancel, resume, decideApproval, recover, isPlanning: () => !!planner.busy?.(), idle: () => Promise.all([...loops.values()]) };
+  return { start, cancel, resume, decideApproval, acceptUnverified, recover, isPlanning: () => !!planner.busy?.(), idle: () => Promise.all([...loops.values()]) };
 }
 
 export function setupCycle(app, deps) {
@@ -1019,5 +1069,6 @@ export function setupCycle(app, deps) {
   app.post('/api/missions/:id/cycle/cancel', asyncRoute(async (req, res) => reply(res)(await cycle.cancel(req.params.id))));
   app.post('/api/missions/:id/cycle/resume', asyncRoute(async (req, res) => reply(res)(await cycle.resume(req.params.id, body(req)))));
   app.post('/api/missions/:id/cycle/approvals/:aid', asyncRoute(async (req, res) => reply(res)(cycle.decideApproval(req.params.id, req.params.aid, body(req)))));
+  app.post('/api/missions/:id/cycle/accept-unverified', asyncRoute(async (req, res) => reply(res)(cycle.acceptUnverified(req.params.id, body(req)))));
   return cycle;
 }

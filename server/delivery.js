@@ -18,6 +18,7 @@
 //                                              (e, se o ciclo já terminou, uma limitação diz que podem diferir dos vigentes no encerramento).
 //   mission.workspace.source e verified.configuredSource: 'frozen_at_close' (kind closing_context ou legacy_snapshot) ou 'current' (kind none).
 //   currentWorkspace      SÓ existe quando há contexto congelado: mostra à parte a situação ATUAL ({ exists, verificationsChanged, source: 'current' }) sem alterar o histórico.
+import crypto from 'node:crypto';
 import { roundVerification } from './cycle.js';
 import { stepStatusFromRound } from './plan.js';
 
@@ -27,6 +28,44 @@ const safeVerification = (r) => { try { return roundVerification(r); } catch { r
 const clip = (s, n) => String(s ?? '').slice(0, n);
 const arr = (v) => (Array.isArray(v) ? v : []);
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Resumo do que uma aceitação humana de conclusão NÃO verificada viu (cycle.acceptance.digest): ciclo, última rodada, parecer de evidência do sistema, resultado das
+ * verificações e alterações de testes pendentes. Se qualquer um mudar depois (rodada nova, parecer diferente, dado adulterado), a aceitação deixa de valer.
+ * `rec` (por, instante, rodada e motivo da decisão) também entra na base. É só detecção de mudança acidental ou parcial: o SHA-256 não tem segredo e NÃO prova autoria
+ * nem protege contra quem consegue editar o banco (que pode recalculá-lo).
+ * Nunca lança: dado malformado gera um resumo diferente (a aceitação deixa de valer), não uma exceção.
+ */
+export function acceptanceDigest(c, rec = null) {
+  const rounds = arr(c?.rounds).filter(isObj), last = rounds.at(-1), ev = isObj(last?.report?.evidence) ? last.report.evidence : null;
+  const basis = {
+    cycleId: c?.id ?? null, rounds: rounds.length, round: last?.n ?? null, reportStatus: last?.report?.status ?? null,
+    evidence: ev ? { level: ev.level ?? null, at: ev.at ?? null, reasons: arr(ev.reasons).map((x) => String(x)) } : null,
+    verifications: arr(last?.report?.verifications).filter(isObj).map((v) => [v.id ?? v.script ?? null, v.status ?? null]),
+    integrityPending: arr(c?.integrity?.pending).filter(isObj).map((p) => [p.path ?? null, p.hash ?? null]),
+    decision: isObj(rec) ? { by: rec.by ?? null, at: rec.at ?? null, round: rec.round ?? null, reason: typeof rec.reason === 'string' ? rec.reason : null } : null,
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(basis)).digest('hex');
+}
+
+/** Aceitação humana registrada no ciclo (cycle.acceptance) e se AINDA vale. Nada é inventado: sem registro => { recorded: false }. */
+function acceptanceSection(c) {
+  const a = c?.acceptance;
+  if (!isObj(a)) return { recorded: false, valid: false };
+  const why = [];
+  if (a.kind !== 'unverified_acceptance' || a.by !== 'user') why.push('o registro não é uma decisão humana de aceitação reconhecida');
+  if (c.status !== 'completed') why.push('o ciclo não está concluído');
+  if (a.cycleId !== c.id) why.push('o registro pertence a outro ciclo');
+  if (a.evidence?.level !== 'inconclusive') why.push('a aceitação só existe para evidência inconclusiva');
+  if (typeof a.reason !== 'string' || a.reason.trim().length < 10 || typeof a.at !== 'string' || !a.at) why.push('o registro da aceitação está incompleto (motivo ou instante ausente)');
+  const lastN = arr(c.rounds).filter(isObj).at(-1)?.n;
+  if (!Number.isInteger(a.round) || a.round !== lastN) why.push('a rodada aceita não é a última rodada do ciclo');
+  if (typeof a.digest !== 'string' || a.digest !== acceptanceDigest(c, a)) why.push('o estado do ciclo mudou depois da aceitação');
+  return {
+    recorded: true, valid: why.length === 0, kind: clip(a.kind, 40), by: clip(a.by, 20), at: a.at ?? null, cycleId: a.cycleId ?? null, round: a.round ?? null, reason: clip(a.reason, 500),
+    evidenceAtDecision: isObj(a.evidence) ? { level: clip(a.evidence.level, 20), reasons: arr(a.evidence.reasons).slice(0, 8).map((x) => clip(x, 300)) } : null, invalidReasons: why,
+  };
+}
 
 const STATE = { planning: 'in_progress', running: 'in_progress', blocked: 'blocked', cancelled: 'cancelled', limit_reached: 'limit_reached', completed: 'completed' };
 const TERMINAL = ['completed', 'cancelled', 'limit_reached'];
@@ -108,7 +147,8 @@ export function buildDelivery(mission, workspace = null, { now = () => new Date(
   // ---- declarado ----
   const declared = {
     note: 'Declarações de agentes. Não são prova de conclusão.',
-    plannerSummary: c && c.finalSummary ? { text: clip(c.finalSummary, 1500), evidence: arr(c.evidence).filter((x) => typeof x === 'string').map((x) => clip(x, 500)), origin: 'planner', label: 'declaração do Planner' } : null,
+    // Com aceitação humana registrada, `finalSummary` é o texto da DECISÃO DA PESSOA (cycle.acceptance), nunca uma declaração do Planner.
+    plannerSummary: c && c.finalSummary && !isObj(c.acceptance) ? { text: clip(c.finalSummary, 1500), evidence: arr(c.evidence).filter((x) => typeof x === 'string').map((x) => clip(x, 500)), origin: 'planner', label: 'declaração do Planner' } : null,
     cycleAssuranceLabel: c?.assurance ?? null, // rótulo gravado pelo próprio ciclo; NÃO é usado para calcular `assurance` abaixo
     executorReports: rounds.map((r) => ({
       round: r.n, origin: 'executor', summary: clip(r.report?.summary, 600), reportedStatus: r.report?.status ?? null,
@@ -116,7 +156,7 @@ export function buildDelivery(mission, workspace = null, { now = () => new Date(
     })),
     manualTaskReports: tasks.filter((t) => !t.auto && t.report).map((t) => ({ taskId: t.id, title: clip(t.title, 200), status: t.status, report: clip(t.report, 600), origin: 'executor' })),
   };
-  if (!declared.plannerSummary) limitations.push(c ? 'O Planner não gravou um resumo final (o ciclo não foi concluído por ele).' : 'Não há resumo declarado pelo Planner.');
+  if (!declared.plannerSummary) limitations.push(isObj(c?.acceptance) ? 'A conclusão não é uma declaração do Planner: ela consta como decisão humana de aceitação (veja "acceptance").' : c ? 'O Planner não gravou um resumo final (o ciclo não foi concluído por ele).' : 'Não há resumo declarado pelo Planner.');
 
   // ---- observado ----
   const manual = tasks.filter((t) => !t.auto);
@@ -170,6 +210,7 @@ export function buildDelivery(mission, workspace = null, { now = () => new Date(
   if (pending.length) limitations.push(`Arquivos de teste ou de configuração alterados e ainda não revisados por uma pessoa: ${pending.slice(0, 5).map((p) => p.path).join(', ')}.`);
 
   // ---- garantia sustentada pelos registros ----
+  const acceptance = acceptanceSection(c);
   const assurance = { level: 'not_applicable', basis: 'a missão não foi entregue', reasons: [] };
   if (delivered) {
     const lv = roundLevel(last), why = [];
@@ -179,17 +220,22 @@ export function buildDelivery(mission, workspace = null, { now = () => new Date(
     if (pending.length) why.push('há alterações em testes/configuração não revisadas');
     if (stepsOut.some((s) => s.status !== 'completed')) why.push('o plano tem etapas não concluídas');
     if (last?.report?.status !== 'success') why.push(`a última execução terminou como "${last?.report?.status ?? last?.status ?? 'sem relatório'}"`);
-    assurance.level = why.length ? 'unverified' : 'verified';
-    assurance.basis = lv.basis; assurance.reasons = why.length ? why : ['evidência do sistema da última rodada: verified'];
+    // Aceitação humana válida de evidência INCONCLUSIVA: rótulo próprio, nunca "verified"; os motivos do sistema continuam listados. Falha, ausência ou QUALQUER outro impedimento
+    // (verificação ausente, alterações pendentes, etapas abertas, execução sem sucesso): nunca. O único motivo tolerado é a própria evidência inconclusiva.
+    const acceptedByUser = why.length === 1 && acceptance.valid && lv.level === 'inconclusive';
+    assurance.level = !why.length ? 'verified' : acceptedByUser ? 'accepted_unverified' : 'unverified';
+    assurance.basis = lv.basis; assurance.reasons = why.length ? (acceptedByUser ? [...why, 'conclusão aceita explicitamente por uma pessoa SEM evidência verificada'] : why) : ['evidência do sistema da última rodada: verified'];
     if (why.length) limitations.push(`Conclusão SEM garantia verificada: ${why.join('; ')}.`);
+    if (acceptedByUser) limitations.push('Conclusão aceita por decisão humana explícita; o sistema NÃO verificou o trabalho (a evidência original continua inconclusiva).');
   }
+  if (acceptance.recorded && !acceptance.valid) limitations.push(`Há uma aceitação humana registrada, mas ela NÃO vale mais: ${acceptance.invalidReasons.join('; ')}.`);
 
   return {
     schemaVersion: DELIVERY_SCHEMA, generatedAt: now(), source: 'recomputed',
     mission: { id: m?.id ?? null, title: clip(m?.title, 200), objective: clip(m?.objective, 1000), demo: !!m?.demo, origin: m?.origin ?? null, createdAt: m?.createdAt ?? null, workspace: wsIdentity ? { ...wsIdentity, source: context ? 'frozen_at_close' : 'current' } : null },
     cycle: c ? { id: c.id ?? null, status: c.status, rounds: rounds.length, maxIterations: c.maxIterations ?? null, startedAt: c.startedAt ?? null, finishedAt: c.finishedAt ?? null, blockedCode: c.blockedCode ?? null, blockedReason: c.blockedReason ? clip(c.blockedReason, 500) : null } : null,
-    state: { code, delivered, reasons },
-    declared, observed, verified, assurance,
+    state: { code, delivered, reasons, acceptedUnverified: assurance.level === 'accepted_unverified' },
+    declared, observed, verified, assurance, acceptance,
     limitations: [...new Set(limitations)],
     context: context ? { kind: context.kind, recordedAt: context.recordedAt ?? null, cycleId: context.cycleId, finishedAt: context.finishedAt } : { kind: 'none', recordedAt: null },
     ...(context ? { currentWorkspace: { exists: !!workspace, verificationsChanged: !!workspace && JSON.stringify(currentConfigured) !== JSON.stringify(context.verifications), source: 'current' } } : {}),
