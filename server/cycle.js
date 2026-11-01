@@ -1054,6 +1054,9 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
         // Só sem verificações reais configuradas: com elas, o portão já recusa por "verificação interrompida/não executada" (acima), e o fluxo de re-verificação não muda.
         const configuredNow = (find(db.workspaces, m.workspaceId)?.verifications || []).length;
         if (round?.status === 'succeeded' && round.report && !round.report.evidence && !configuredNow) {
+          // Fecha também o resultado das verificações (o que runRound grava logo antes de avaliar): sem isso a etapa do plano ficaria "running" para sempre, sem execução alguma.
+          if (round.verification === undefined) round.verification = verificationOutcome(round.report, configuredNow);
+          round.phase = 'done';
           round.report.evidence = { ...buildEvidence({ report: round.report, verification: roundVerification(round), configured: configuredNow, expectedResults: null, integrity: { status: 'unknown', reason: 'o servidor reiniciou antes da avaliação desta rodada' } }), at: store.now() };
         }
         if (c.cancelRequested) { end(m, 'cancelled', 'Ciclo cancelado: o pedido de cancelamento foi feito antes de o servidor reiniciar e continua valendo.'); return; } // o cancelamento pedido não se desfaz por uma queda

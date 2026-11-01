@@ -297,3 +297,27 @@ test('REGRESSÃO: rodada bem-sucedida gravada SEM o parecer do sistema (queda an
   assert.equal(c2.status, 'completed'); assert.equal(c2.assurance, 'self-declared'); assert.equal(c2.acceptance.by, 'user'); assert.equal(c2.acceptance.evidence.level, 'inconclusive');
   assert.equal(onDisk(m.id).cycle.acceptance.evidence.level, 'inconclusive'); assert.equal(execStarts, starts, 'aceitar não executa nada');
 });
+
+test('REGRESSÃO (plano): rodada gravada antes da avaliação, sem verificações reais, NÃO deixa a etapa "running" para sempre: a recuperação a fecha como não comprovada e nada roda por cima', async () => {
+  const ta = task('ta', 'completed'), r = round(1, 'a', 'ta', { verification: undefined, phase: undefined, report: report({ verifications: [] }) });
+  const m = seed({ ws: 'ws0', steps: [step('a'), step('b', ['a'])], rounds: [r], tasks: [ta] });
+  assert.equal(live(m.id).cycle.plan.steps[0].status, 'running', 'no disco a etapa aparece como em execução (a avaliação da rodada nunca foi gravada)');
+  const starts = execStarts, planner = scripted([blockedAns()]), cy = restart(planner), c = live(m.id).cycle;
+  assert.equal(c.blockedCode, 'restarted'); assert.deepEqual(statuses(c), { a: 'unverified', b: 'queued' }, 'sem execução ativa e sem prova: não concluída, e b (depende de a) não roda');
+  assert.equal(c.rounds[0].phase, 'done'); assert.equal(c.rounds[0].verification, 'none'); assert.equal(c.rounds[0].report.evidence.level, 'inconclusive');
+  assert.match(c.blockedReason, /não concluídas: a/); assert.deepEqual(onDisk(m.id).cycle.plan.steps.map((s) => s.status), ['unverified', 'queued'], 'o estado recuperado está no disco');
+  assert.equal((await cy.resume(m.id)).status, 202); await cy.idle();
+  assert.equal(execStarts, starts, 'nada foi executado: nem a etapa a de novo, nem b'); assert.equal(planner.calls.length, 1, 'o Planner decide; nenhuma etapa elegível'); assert.equal(c.blockedCode, 'planner_blocked'); assert.equal(c.rounds.length, 1);
+});
+
+test('REGRESSÃO (rodada "running" sem baseline): a tarefa terminou como concluída, mas sem verificações reais nem estado de referência o sistema nunca avaliou — a recuperação deixa INCONCLUSIVA e o relato do Executor não conclui o ciclo', async () => {
+  const ta = task('ta', 'completed'), m = seed({ ws: 'ws0', rounds: [runningRound(1, 'a', 'ta')], tasks: [ta] });
+  assert.equal(live(m.id).cycle.integrity, undefined, 'pré-condição: ciclo sem estado de referência dos testes'); assert.equal(live(m.id).cycle.rounds[0].status, 'running');
+  const starts = execStarts, planner = scripted([done(), blockedAns()]), cy = restart(planner), c = live(m.id).cycle, rd = c.rounds[0];
+  assert.equal(c.blockedCode, 'restarted'); assert.equal(rd.status, 'succeeded', 'o resultado gravado da tarefa é aproveitado'); assert.equal(rd.phase, 'done'); assert.equal(rd.verification, 'none');
+  assert.equal(rd.report.evidence.level, 'inconclusive'); assert.match(rd.report.evidence.reasons.join(' '), /reiniciou antes da avaliação/);
+  assert.equal(onDisk(m.id).cycle.rounds[0].report.evidence.level, 'inconclusive', 'o parecer recuperado está no disco');
+  assert.equal((await cy.resume(m.id)).status, 202); await cy.idle();
+  assert.notEqual(c.status, 'completed', 'o relato do Executor sozinho não conclui'); assert.equal(c.rejections.length, 1); assert.match(c.rejections[0].problem, /evidência do sistema.*inconclusive/);
+  assert.equal(c.blockedCode, 'planner_blocked'); assert.equal(c.assurance, undefined); assert.equal(execStarts, starts, 'a execução não se repete'); assert.equal(c.rounds.length, 1);
+});
