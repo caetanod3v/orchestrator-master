@@ -4,6 +4,7 @@ import { useCycleActions } from '../cycle-actions.js';
 import DeliveryReport from './DeliveryReport.jsx';
 import { roundAttempts, stepAttempts, attemptLabel } from '../orchestration-view.js';
 import SupervisionLog from './SupervisionLog.jsx';
+import WorktreePanel from './WorktreePanel.jsx';
 import { Btn, Status, Icon, statusLabel, PersistenceNote, VERIFICATION_LABEL, DECISION_LABEL, EVIDENCE_BASIS } from './ui.jsx';
 
 const CODE = {
@@ -189,6 +190,7 @@ export default function CyclePanel({ mission }) {
       )}
       {c && <DeliveryReport mission={mission} />}
       {c?.supervision?.length > 0 && <SupervisionLog entries={c.supervision} />}
+      {(state?.worktrees?.items ?? []).some((w) => w.missionId === mission.id) && <WorktreePanel mission={mission} />}
       {c?.plan?.steps?.length > 0 && <Plan plan={c.plan} rounds={c.rounds} maxAttempts={maxAttempts} />}
       {c?.rounds.length > 0 && <div className="rounds">{c.rounds.map((r) => <Round key={r.n} r={r} attempt={attempts[r.n]} maxAttempts={maxAttempts} />)}</div>}
     </div>

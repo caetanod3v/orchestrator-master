@@ -48,7 +48,9 @@ export function buildPrompt(mission, task) {
   ].filter(Boolean).join('\n');
 }
 
-export function setupExecution(app, { db, executor, verifier = null, orphanTools = {} }) {
+export function setupExecution(app, { db, executor, verifier = null, orphanTools = {}, workspaceOf = null }) {
+  // Marco C: as tarefas do CICLO usam o workspace efetivo (o worktree isolado, quando há); tarefas manuais e o resto continuam no workspace cadastrado.
+  const workspaceFor = (mission, task) => (task?.auto && workspaceOf ? workspaceOf(mission) : find(db.workspaces, mission.workspaceId) || null);
   const emitTask = (mission, task) => bus.emit('task', { missionId: mission.id, taskId: task.id, status: task.status });
   // SSE `usage`: métricas da tarefa (task.tokenUsage); acessórias, então nunca interrompem a execução nem a finalização.
   const emitUsage = (mission, task) => {
@@ -116,12 +118,12 @@ export function setupExecution(app, { db, executor, verifier = null, orphanTools
     const probe = await executor.probe();
     if (aborted()) return aborted();
     const check = () => runBlockers({
-      mission, task, workspace: find(db.workspaces, mission.workspaceId) || null,
+      mission, task, workspace: workspaceFor(mission, task),
       validateDir, busy: executor.isBusy(), cliAvailable: probe.available,
     });
     let why = check();
     if (why) return { ok: false, reason: why };
-    const workspace = find(db.workspaces, mission.workspaceId);
+    const workspace = workspaceFor(mission, task);
     // M9: ponto comum de execução (ciclo e tarefa manual): o que a política NEGA nunca inicia a CLI. (A aprovação de ações sensíveis do ciclo é tratada em cycle.js; a tarefa manual já exige a autorização humana explícita.)
     const verdict = evaluateTask({ title: task.title, instructions: task.instructions ?? '', acceptance: task.acceptance ?? [], expectedFiles: [] }, { workspace, protectedDirs: [store.dataDir] });
     if (verdict.decision === 'deny') return { ok: false, reason: `Negada pela política: ${verdict.summary.why.join(' ')}` };

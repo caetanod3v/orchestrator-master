@@ -73,6 +73,7 @@ export function validateDb(d) {
   if (!isObj(d.settings)) return '"settings" ausente ou inválido';
   for (const k of ['workspaces', 'missions', 'activity']) if (!Array.isArray(d[k])) return `"${k}" ausente ou não é uma lista`;
   if (d.workspaces.some((w) => !isObj(w) || typeof w.id !== 'string' || typeof w.path !== 'string')) return 'há workspace sem id/path';
+  if (d.worktrees !== undefined && (!Array.isArray(d.worktrees) || d.worktrees.some((w) => !isObj(w) || typeof w.id !== 'string'))) return '"worktrees" inválido';
   for (const m of d.missions) {
     if (!isObj(m) || typeof m.id !== 'string' || !Array.isArray(m.tasks)) return 'há missão sem id ou sem lista de tarefas';
     if (m.tasks.some((t) => !isObj(t))) return `a missão ${m.id} tem tarefa inválida`;

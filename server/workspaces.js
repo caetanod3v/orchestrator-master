@@ -33,6 +33,7 @@ export function workspaceRemovalBlocker(db, workspaceId) {
   if (missions.some((m) => m.tasks.some((t) => t.status === 'running'))) return 'Há uma execução em andamento neste workspace.';
   if (missions.some((m) => ACTIVE_CYCLE.includes(m.cycle?.status))) return 'Há um ciclo em andamento neste workspace; aguarde ou cancele o ciclo antes de remover o workspace.';
   if (missions.some((m) => m.cycle?.status === 'blocked')) return 'Há um ciclo bloqueado neste workspace; cancele o ciclo antes de remover o workspace.';
+  if ((db.worktrees || []).some((w) => w.workspaceId === workspaceId && w.state !== 'removed' && w.state !== 'failed')) return 'Há worktrees isolados deste workspace que ainda não foram removidos; integre ou limpe-os antes de remover o workspace.';
   return null;
 }
 

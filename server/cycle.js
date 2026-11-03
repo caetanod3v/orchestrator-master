@@ -261,7 +261,7 @@ function buildPlannerPrompt({ mission, workspace, listing, cycle, feedback, mult
   ].filter((x) => x !== '').join('\n');
 }
 
-export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null, multiStep = false, stepRetries = 0, supervision = null, watchdogTickMs = 2000, persistRetryMs = PERSIST_RETRY_MS }) { // multiStep (M4): o Planner pode propor um plano de várias etapas (ORCH_CYCLE_PLAN=on; plan.js); false = fluxo de sempre. // limits: incremento D (limites.js); null = sem limites (como antes); persistRetryMs: só testes
+export function createCycle({ db, executor, planner, startTaskRun, verifier = null, listFiles = listWorkspace, router = null, limits = null, multiStep = false, stepRetries = 0, supervision = null, worktrees = null, worktreeIsolation = false, watchdogTickMs = 2000, persistRetryMs = PERSIST_RETRY_MS }) { // multiStep (M4): o Planner pode propor um plano de várias etapas (ORCH_CYCLE_PLAN=on; plan.js); false = fluxo de sempre. // limits: incremento D (limites.js); null = sem limites (como antes); persistRetryMs: só testes
   const loops = new Map();
   // Configuração de orquestração (I4): `multiStep` e `stepRetries` são valores fixos (testes) OU funções lidas a cada laço (drive). O laço em andamento usa o instantâneo tirado no início dele
   // (confs): uma mudança de configuração só vale para o próximo laço (nova rodada de planejamento, retomada ou novo ciclo), nunca no meio de uma execução.
@@ -370,7 +370,15 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   }
   let starting = null; // reserva síncrona (missionId) enquanto start() aguarda o probe
   const mission = (id) => find(db.missions, id);
-  const wsOf = (m) => find(db.workspaces, m.workspaceId);
+  // Marco C: com worktrees, o workspace EFETIVO do ciclo é o worktree isolado dele (null se ficou inutilizável: falha fechada, nunca o workspace principal).
+  const wsOf = (m) => (worktrees ? worktrees.workspaceFor(m) : find(db.workspaces, m.workspaceId));
+  const baseWs = (m) => find(db.workspaces, m.workspaceId); // workspace CADASTRADO (antes de existir o ciclo novo; um ciclo antigo pode apontar para um worktree que já não existe)
+  const isolating = () => !!(typeof worktreeIsolation === 'function' ? worktreeIsolation() : worktreeIsolation);
+  /** Rastreio da rodada no worktree (evidência = árvore Git do conteúdo). Nunca interrompe o ciclo: sem o registro, a integração é recusada por falta de evidência. */
+  async function noteWorktreeRound(m, round) {
+    const id = m.cycle?.worktreeId; if (!id || !worktrees) return;
+    try { await worktrees.noteRound(id, { round: round.n, status: round.status, level: round.report?.evidence?.level ?? null }); } catch (e) { try { note(m, 'cycle', `Rastreio do worktree não registrado (${clip(e?.message, 120)}); a integração ficará sem evidência.`); } catch { /* informativo */ } }
+  }
 
   // `strict`: a gravação precisa ser CONFIRMADA (store.saveOrThrow); sem ele o contrato é o de sempre (um save() que devolve false não interrompe: o próximo
   // portão de persistência, antes de avançar, cuida disso). Erro real de E/S sai marcado como falha de persistência (ver launch()).
@@ -536,11 +544,15 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   /** Roda as verificações reais configuradas e grava os resultados NOVOS em report.verifications. */
   async function verifyRound(m, round, task, report) {
     const c = m.cycle;
-    const items = wsOf(m)?.verifications || [];
+    const ws = wsOf(m), items = ws?.verifications || [];
+    // Marco C: o worktree é um checkout frio (sem node_modules). Sem ambiente preparado de forma explícita a verificação é RECUSADA com um motivo claro (status "blocked": nunca "pass", nunca no workspace principal).
+    const env = ws?.worktreeId && worktrees ? worktrees.environmentFor(ws.worktreeId) : null;
         round.phase = 'verifying'; emit(m);
         for (const item of items) {
           if (c.cancelRequested) break;
-          const res = await verifier.run(wsOf(m), item);
+          const res = env && !env.ok
+            ? { id: item?.id ?? item?.script, script: item?.script, required: !!item?.required, command: `npm run ${item?.script}`, source: 'backend', status: 'blocked', reason: `Ambiente do worktree não preparado: ${env.reason}`, exitCode: null, durationMs: 0, outputTail: '', truncated: false }
+            : await verifier.run(wsOf(m), item);
           report.verifications.push(res);
           const line = `[verificação] ${res.command} -> ${res.status}${res.exitCode != null ? ` (código ${res.exitCode})` : ''} em ${(res.durationMs / 1000).toFixed(1)} s${res.reason ? ` · ${res.reason}` : ''}`;
           task.logTotal = (task.logTotal || 0) + 1; task.log.push(line);
@@ -804,6 +816,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       return end(m, 'cancelled', 'Ciclo cancelado antes de iniciar a execução.');
     }
     if (!r.ok) { task.status = 'failed'; task.authorized = false; task.error = r.reason; round.status = 'failed'; round.finishedAt = store.now(); round.report = buildReport(task); round.verification = verificationOutcome(round.report, (wsOf(m)?.verifications || []).length); return stop(m, 'cannot_start', `Não foi possível iniciar a execução: ${r.reason}`); }
+    if (c.worktreeId && worktrees) { try { worktrees.markInUse(c.worktreeId, { round: n, taskId: task.id }); } catch { /* rastreio acessório */ } }
     await r.finished;
 
     const report = buildReport(task);
@@ -823,7 +836,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     }
     round.verification = verificationOutcome(report, items.length);
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
-    assessRound(m, round, before); emit(m); // M8: parecer do SISTEMA (evidência, arquivos esperados, integridade dos testes), gravado antes de qualquer decisão; sem gravação o portão de persistência impede o avanço
+    assessRound(m, round, before); emit(m); await noteWorktreeRound(m, round); // M8: parecer do SISTEMA (evidência, arquivos esperados, integridade dos testes), gravado antes de qualquer decisão; sem gravação o portão de persistência impede o avanço
     if (ctx?.watchdog) return stopWatchdog(m, ctx); // o vigia (tempo total / sem saída) já decidiu: evidência e estado ficam gravados; nada é decidido nem repetido por cima
     let sup = null, entry = null; const cf = confOf(m);
     const halt = (code, reason) => { if (entry && entry.applied?.state === 'pending') applied(entry, { state: entry.action === 'block' ? 'stopped' : 'not_applied', by: code, reason }); return stop(m, code, reason); }; // o ciclo parou por outra proteção DEPOIS da recomendação: retry/replan NÃO foram iniciados
@@ -902,6 +915,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     let failure = null;
     try { return await driveLoop(m, ctx); } catch (e) { failure = e ?? new Error('erro desconhecido'); throw e; } finally {
       if (timer) clearInterval(timer);
+      if (c.worktreeId && worktrees) { try { worktrees.release(c.worktreeId, failure ? 'loop_error' : (c.status === 'cancelled' ? 'cancelled' : (c.blockedCode ?? c.status))); } catch { /* rastreio acessório */ } } // Marco C: nenhuma execução continua; o ambiente não fica "em uso" para sempre
       // erro interno/de persistência: o bloqueio só é gravado depois (launch), então o motivo real é o da exceção, não o estado anterior do ciclo
       if (failure) settleSup(c, failure.persistence === true ? 'persistence_failed' : 'internal_error', `${failure.persistence === true ? 'falha de persistência' : 'erro interno do ciclo'}: ${failure.message ?? failure}`, { keepResume: true });
       else settleSup(c, c.status === 'cancelled' ? 'cancelled' : (c.blockedCode ?? c.status), 'o laço terminou antes de a ação recomendada ocorrer', { keepResume: true });
@@ -1037,7 +1051,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   function startBlocker(m) {
     if (mission(m.id) !== m) return fail(404, 'Missão não encontrada.');
     if (m.cycle && (ACTIVE.includes(m.cycle.status) || m.cycle.status === 'blocked')) return fail(409, 'Já existe um ciclo ativo ou bloqueado nesta missão: retome ou cancele.');
-    const ws = wsOf(m);
+    const ws = baseWs(m);
     if (!ws) return fail(409, 'A missão não tem workspace cadastrado.');
     const v = validateDir(ws.path);
     if (!v.ok) return fail(409, `Workspace inválido: ${v.error}`);
@@ -1058,7 +1072,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       const v = validatePlanSteps(plan.steps);
       if (!v.ok) return fail(400, `Plano inválido: ${v.error}`);
       if (v.steps.length > max) return fail(400, `O plano tem ${v.steps.length} etapas e o limite de rodadas é ${max}: cada etapa usa uma rodada.`);
-      const noEvidence = wsOf(m) && evidencePathProblem(v.steps, wsOf(m)); // M8: etapa que nada poderia comprovar não é executada
+      const noEvidence = baseWs(m) && evidencePathProblem(v.steps, baseWs(m)); // M8: etapa que nada poderia comprovar não é executada
       if (noEvidence) return fail(400, `Plano sem como ser comprovado: ${noEvidence}`);
       seed = { rationale: String(plan.rationale ?? '').slice(0, 1500) || 'Plano aprovado pelo usuário.', steps: v.steps };
     }
@@ -1071,19 +1085,29 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     try {
       const probe = await executor.probe();
       if (!probe.available) return fail(409, 'Claude Code não foi encontrado no PATH.');
-      return startBlocker(m) || begin(m, max, seed); // revalida: durante o await a missão, o workspace ou o executor podem ter mudado
+      let wt = null; // Marco C: ambiente isolado ANTES do ciclo; se não puder ser criado/validado, o ciclo NÃO começa (nunca cai no workspace principal)
+      if (isolating()) {
+        if (!worktrees) return fail(409, 'O isolamento por worktree está ligado, mas o gerenciador de worktrees não está disponível.');
+        const pre = startBlocker(m); if (pre) return pre;
+        const w = await worktrees.ensureFor(m, baseWs(m)); if (!w.ok) return fail(w.status ?? 409, `${w.error} Nada foi iniciado.`);
+        wt = w.record.id;
+      }
+      return startBlocker(m) || begin(m, max, seed, wt); // revalida: durante o await a missão, o workspace ou o executor podem ter mudado
     } finally { starting = null; } // begin() é síncrono: ao liberar, o ciclo já está registrado em loops (ou foi revertido)
   }
 
-  function begin(m, max, seed = null) {
+  function begin(m, max, seed = null, worktreeId = null) {
     const prev = { cycle: m.cycle, pastCycles: m.pastCycles };
     if (m.cycle) { m.pastCycles = [m.cycle, ...(m.pastCycles || [])].slice(0, 5); }
     m.cycle = {
       id: store.uid('cyc'), status: 'planning', maxIterations: max, rounds: [], plannerCalls: 0, consecutiveFailures: 0, consecutiveNoProgress: 0,
       humanNotes: [], rejections: [], blocks: [], blockedCode: null, blockedReason: null, finalSummary: null, evidence: null, cancelRequested: false, startedAt: store.now(), finishedAt: null,
+      ...(worktreeId ? { worktreeId } : {}),
       ...(seed ? { plan: newPlan({ id: store.uid('plan'), at: store.now(), rationale: seed.rationale, steps: seed.steps }) } : {}),
     };
+    if (worktreeId && worktrees) worktrees.link(worktreeId, m.cycle.id); // o ambiente passa a pertencer a ESTE ciclo (gravado junto com ele)
     return launchOrRollback(m, `Ciclo autônomo iniciado por um humano (limite: ${max} rodadas${seed ? `; plano aprovado de ${seed.steps.length} etapa(s)` : ''})`, 'iniciar o ciclo', () => {
+      if (worktreeId && worktrees) worktrees.link(worktreeId, null);
       m.cycle = prev.cycle;
       if (prev.pastCycles === undefined) delete m.pastCycles; else m.pastCycles = prev.pastCycles;
     }) || { status: 202, cycle: m.cycle };

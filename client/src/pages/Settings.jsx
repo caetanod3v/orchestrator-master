@@ -4,6 +4,7 @@ import { useStore } from '../store.jsx';
 import { Panel } from '../components/ui.jsx';
 import { orchestrationForm, hasActiveCycle, RETRY_CHOICES, retryChoiceLabel } from '../orchestration-view.js';
 import { supervisionForm, minutesLabel, resumeLabel } from '../supervision-view.js';
+import { worktreeForm } from '../worktree-view.js';
 
 export default function Settings() {
   const { state, missions, act } = useStore();
@@ -11,6 +12,7 @@ export default function Settings() {
   const s = state.settings;
   const form = orchestrationForm(state.orchestration, { activeCycle: hasActiveCycle(missions) });
   const sform = supervisionForm(state.supervision, { activeCycle: hasActiveCycle(missions) });
+  const wform = worktreeForm(state.worktrees, { activeCycle: hasActiveCycle(missions) });
   const put = (body) => act(() => api.put('/api/settings', body));
   const src = (f) => <p className="dim small">{f.sourceLabel}{f.reason && ` · ${f.reason}`}</p>;
   return (
@@ -69,12 +71,24 @@ export default function Settings() {
           <ul className="plain small">{sform.notes.map((n) => <li key={n} className="dim">{n}</li>)}</ul>
         </Panel>
       )}
+      {wform && (
+        <Panel title="Worktrees isolados">
+          <label className="check">
+            <input type="checkbox" data-testid="wt-enabled" checked={wform.enabled} disabled={wform.disabled} onChange={(e) => put({ worktreeIsolation: e.target.checked })} />
+            Executar cada ciclo em um worktree Git isolado (a branch e o workspace principais não são alterados)
+          </label>
+          {src(wform)}
+          {wform.pending > 0 && <p className="stale" data-testid="wt-pending">{wform.pending} worktree(s) com trabalho ainda não integrado ou inconsistente(s): veja o painel do ciclo da missão.</p>}
+          {wform.unregistered.length > 0 && <p className="stale" data-testid="wt-unregistered">O Git conhece worktrees do orquestrador ausentes do banco ({wform.unregistered.join(', ')}); nada foi alterado.</p>}
+          <ul className="plain small">{wform.notes.map((n) => <li key={n} className="dim">{n}</li>)}</ul>
+        </Panel>
+      )}
       <Panel title="Segurança">
         <ul className="plain small rules">
           <li>Sem execução arbitrária de comandos. O servidor executa, com argumentos fixos e sem usar shell na chamada: <span className="mono">claude --version</span> (detecção); <span className="mono">claude -p</span> (Planner, sem ferramentas, e Executor, com as ferramentas Read, Edit, Write, Glob e Grep; Bash e acesso à web não estão entre elas); <span className="mono">git status</span> e <span className="mono">git diff --numstat</span> (somente leitura); e <span className="mono">npm run test|build|lint|typecheck</span>, só para scripts aprovados por um humano em Espaços de trabalho e cujo texto não mudou desde a aprovação; a chamada do servidor não usa shell, mas o npm executa o conteúdo do script (código do projeto, inclusive o que o Executor editou). Também usa utilitários do sistema para identificar e encerrar o processo de uma execução.</li>
           <li>Sem <span className="mono">--dangerously-skip-permissions</span> ou equivalentes; pedidos de permissão do Claude Code são negados automaticamente.</li>
           <li>Alcance das restrições do Claude Code: valem para as ferramentas disponíveis. Planner e Executor carregam as configurações de usuário (<span className="mono">--setting-sources user</span>) e o orquestrador não desativa hooks, então hooks definidos nessa configuração podem executar comandos. Para servidores MCP, é passado <span className="mono">--strict-mcp-config</span> sem <span className="mono">--mcp-config</span>, o que, segundo a documentação da CLI, ignora as demais configurações de MCP.</li>
-          <li>O orquestrador não faz commit nem push (as ferramentas do Executor não incluem shell).</li>
+          <li>O Executor não faz commit nem push (as ferramentas dele não incluem shell). O orquestrador nunca faz push; só com o isolamento por worktree ligado ele registra um snapshot (commit) na branch do worktree e integra à branch de destino, e apenas por ação humana explícita e autorizada.</li>
           <li>Requisições de origens externas ao localhost são recusadas.</li>
           <li>Executor: <b>{state.executor.available ? `Claude Code ${state.executor.version} detectado` : 'Claude Code não detectado no PATH'}</b>.</li>
         </ul>
