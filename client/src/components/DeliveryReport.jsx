@@ -52,6 +52,21 @@ export default function DeliveryReport({ mission }) {
               <li key={s.id}><span className="n">{s.id}</span> <span className="grow">{s.title}</span> <Status value={s.status} label={s.label} />
                 <span className="dim"> · {s.attemptsText}</span>{s.uncertain && <span className="s-interrupted"> · resultado incerto</span>}</li>))}</ul></div>
         )}
+        {v.integration && (
+          <div data-testid="delivery-integration"><div className="k">Integração</div>
+            <div><Status value={v.integration.value} label={v.integration.label} /></div>
+            {v.integration.reasons.map((r, i) => <div key={i} className="dim">↳ {r}</div>)}
+            {v.integration.limitation && <p className="stale" data-testid="delivery-integration-limitation">{v.integration.limitation}</p>}
+            <ul className="plain">{v.integration.worktrees.map((w) => (
+              <li key={w.id} data-testid="delivery-integration-worktree"><span className="n">{w.id}</span> <span className="dim">{w.relationLabel}</span> <Status value={w.value} label={w.label} />
+                <div className="dim">{w.branch} → {w.baseBranch}</div>
+                {w.commitText && <div className="dim">{w.commitText}</div>}
+                {w.digestText && <div className="dim">{w.digestText}</div>}
+                {w.authorizedText && <div className="dim">{w.authorizedText}</div>}
+                <div className="dim">{w.attemptText}{w.attemptProblems.length > 0 && ` (${w.attemptProblems.join(', ')})`}</div>
+                {w.diagnostic && <div className="s-blocked">diagnóstico: {w.diagnostic}</div>}
+                {w.reasons.map((r, i) => <div key={i} className="dim">↳ {r}</div>)}</li>))}</ul></div>
+        )}
         {v.hasLimitations && (
           <div className="stale" data-testid="delivery-limitations"><b>Limitações da garantia</b>
             <ul className="plain">{v.limitations.map((l, i) => <li key={i}>{l}</li>)}</ul></div>

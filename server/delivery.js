@@ -114,7 +114,49 @@ function filesSection(rounds, tasks) {
  * @param {object|null} workspace  workspace cadastrado da missão (para saber quais verificações reais existem)
  * @param {{now?:()=>string, context?:object|null}} [opts]  `context`: contexto histórico JÁ validado (ver frozenContextOf); sem ele vale a configuração ATUAL do workspace
  */
-export function buildDelivery(mission, workspace = null, { now = () => new Date().toISOString(), context = null } = {}) {
+// ---- Integração (Marco C -> D): derivada dos registros de worktree da missão (opts.worktrees = db.worktrees). Só descreve; nunca altera entrega, garantia nem aceitação. ----
+// Sem worktree ligado ao ciclo atual ou a um anterior (e sem `cycle.worktreeId`) devolve null: o relatório fica idêntico ao contrato anterior.
+// Informação ausente fica null; "integrated" exige estado integrado COM o commit registrado.
+const lastOf = (list) => [...arr(list)].reverse().find(isObj) ?? null;
+export function integrationOf(mission, worktrees) {
+  const c = isObj(mission?.cycle) ? mission.cycle : null;
+  const past = new Set(arr(mission?.pastCycles).filter(isObj).map((x) => x.id).filter((x) => typeof x === 'string'));
+  const mine = arr(worktrees).filter((w) => isObj(w) && w.missionId === mission?.id && typeof w.cycleId === 'string'
+    && ((c && w.cycleId === c.id && (c.worktreeId === undefined || c.worktreeId === w.id)) || past.has(w.cycleId)));
+  if (!mine.length && !(c && typeof c.worktreeId === 'string')) return null;
+  const items = mine.map((w) => {
+    const attempts = arr(w.attempts), last = lastOf(attempts), doneAtt = lastOf(attempts.filter((x) => isObj(x) && x.kind === 'integrate' && x.outcome === 'integrated'));
+    const reasons = []; let status = 'pending';
+    const hasCommit = typeof w.integratedCommit === 'string' && w.integratedCommit.length > 0;
+    if (w.state === 'integrated' || (w.state === 'removed' && hasCommit)) {
+      if (hasCommit) status = 'integrated';
+      else { status = 'blocked'; reasons.push('o registro diz "integrado", mas o commit de integração não foi gravado: não é possível confirmar'); }
+    } else if (w.state === 'removed') { status = 'blocked'; reasons.push('o worktree foi removido sem integração registrada'); }
+    else if (w.state === 'inconsistent') { status = 'blocked'; reasons.push('o registro do worktree está inconsistente com o Git'); }
+    else if (w.state === 'failed') { status = 'blocked'; reasons.push('o worktree não chegou a ser criado'); }
+    if (status !== 'integrated') {
+      if (last?.result === 'conflict') { status = 'blocked'; reasons.push(`a última checagem encontrou conflito em: ${arr(last.conflicts).slice(0, 5).map((f) => clip(f, 120)).join(', ') || 'arquivos não listados'}`); }
+      if (last?.outcome === 'inconsistent') { status = 'blocked'; reasons.push('a última tentativa de integração terminou em estado inesperado da branch de destino'); }
+      if (isObj(w.diagnostic)) { status = 'blocked'; reasons.push(`diagnóstico: ${clip(w.diagnostic.reason, 300)}`); }
+      if (status === 'pending') reasons.push(w.state === 'in_use' ? 'a execução ainda está em andamento no worktree' : 'o trabalho está no worktree e ainda não foi integrado à branch de destino');
+    }
+    return {
+      id: w.id, cycleId: w.cycleId, relation: c && w.cycleId === c.id ? 'current' : 'past', state: w.state, status, reasons,
+      branch: clip(w.branch, 80), baseBranch: clip(w.baseBranch, 80), baseCommit: w.baseCommit ?? null, headCommit: w.headCommit ?? null,
+      integratedCommit: hasCommit ? w.integratedCommit : null,
+      integration: status === 'integrated' ? { commit: w.integratedCommit, digest: typeof doneAtt?.digest === 'string' ? doneAtt.digest : null, authorizedBy: doneAtt?.authorizedBy ?? null, at: doneAtt?.at ?? null } : null,
+      lastAttempt: last ? { kind: last.kind ?? null, result: last.result ?? null, outcome: last.outcome ?? null, at: last.at ?? null, problems: arr(last.problems).filter(isObj).slice(0, 8).map((p) => clip(p.code, 60)) } : null,
+      diagnostic: isObj(w.diagnostic) ? { code: clip(w.diagnostic.code, 60), reason: clip(w.diagnostic.reason, 300), at: w.diagnostic.at ?? null } : null,
+    };
+  });
+  const current = items.filter((x) => x.relation === 'current');
+  let status, reasons = [];
+  if (c && typeof c.worktreeId === 'string' && !current.length) { status = 'blocked'; reasons = ['o ciclo foi executado em um worktree, mas o registro dele não está disponível: a integração não pode ser confirmada']; }
+  else { const set = current.length ? current : items; status = set.some((x) => x.status === 'blocked') ? 'blocked' : set.some((x) => x.status === 'pending') ? 'pending' : 'integrated'; reasons = set.flatMap((x) => x.reasons).slice(0, 5); }
+  return { status, reasons, worktrees: items, note: 'Derivado dos registros de worktree. Descreve onde o trabalho está; não altera a entrega nem a garantia.' };
+}
+
+export function buildDelivery(mission, workspace = null, { now = () => new Date().toISOString(), context = null, worktrees = null } = {}) {
   const m = mission, c = isObj(m?.cycle) ? m.cycle : null;
   const rounds = c ? arr(c.rounds).filter(isObj) : [], tasks = arr(m?.tasks).filter(isObj);
   const limitations = [];
@@ -232,12 +274,16 @@ export function buildDelivery(mission, workspace = null, { now = () => new Date(
   }
   if (acceptance.recorded && !acceptance.valid) limitations.push(`Há uma aceitação humana registrada, mas ela NÃO vale mais: ${acceptance.invalidReasons.join('; ')}.`);
 
+  const integration = integrationOf(m, worktrees);
+  if (integration && delivered && integration.status !== 'integrated') limitations.push(`Missão concluída, mas o trabalho NÃO está integrado à branch de destino (integração: ${integration.status}${integration.reasons[0] ? `; ${integration.reasons[0]}` : ''}).`);
+
   return {
     schemaVersion: DELIVERY_SCHEMA, generatedAt: now(), source: 'recomputed',
     mission: { id: m?.id ?? null, title: clip(m?.title, 200), objective: clip(m?.objective, 1000), demo: !!m?.demo, origin: m?.origin ?? null, createdAt: m?.createdAt ?? null, workspace: wsIdentity ? { ...wsIdentity, source: context ? 'frozen_at_close' : 'current' } : null },
     cycle: c ? { id: c.id ?? null, status: c.status, rounds: rounds.length, maxIterations: c.maxIterations ?? null, startedAt: c.startedAt ?? null, finishedAt: c.finishedAt ?? null, blockedCode: c.blockedCode ?? null, blockedReason: c.blockedReason ? clip(c.blockedReason, 500) : null } : null,
     state: { code, delivered, reasons, acceptedUnverified: assurance.level === 'accepted_unverified' },
     declared, observed, verified, assurance, acceptance,
+    ...(integration ? { integration } : {}),
     limitations: [...new Set(limitations)],
     context: context ? { kind: context.kind, recordedAt: context.recordedAt ?? null, cycleId: context.cycleId, finishedAt: context.finishedAt } : { kind: 'none', recordedAt: null },
     ...(context ? { currentWorkspace: { exists: !!workspace, verificationsChanged: !!workspace && JSON.stringify(currentConfigured) !== JSON.stringify(context.verifications), source: 'current' } } : {}),

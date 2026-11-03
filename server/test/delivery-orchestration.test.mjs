@@ -106,3 +106,50 @@ test('/api/state.orchestration: com ORCH_CYCLE_PLAN=on e ORCH_CYCLE_MAX_STEP_RET
   assert.deepEqual((await stateWith({ ORCH_CYCLE_PLAN: 'off', ORCH_CYCLE_MAX_STEP_RETRIES: 'off' })).orchestration, { planMode: false, stepRetries: 0, maxStepAttempts: 3, hardMaxIterations: 10, source: { planMode: 'env', stepRetries: 'env' } });
   assert.equal((await stateWith({ ORCH_CYCLE_MAX_STEP_RETRIES: '0' })).orchestration.stepRetries, 0);
 });
+
+// ---------- Marco D: integração (worktrees) no relatório de entrega ----------
+const wt = (over = {}) => ({ id: 'wt_aaaaaaaa', missionId: 'mx', cycleId: 'cy1', state: 'finished', branch: 'orch/wt_aaaaaaaa', baseBranch: 'main', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40), integratedCommit: null, attempts: [], ...over });
+const done = () => cyc('completed', [rnd(1)], null);
+const withWt = (list, cycle = done(), over = {}) => buildDelivery(mis(cycle, over), null, { worktrees: list });
+
+test('Marco D: sem worktree o relatório NÃO tem "integration" e é idêntico ao contrato anterior (inclusive com registros de outras missões)', () => {
+  const base = buildDelivery(mis(done()), null, { now: () => 'T' }), other = buildDelivery(mis(done()), null, { now: () => 'T', worktrees: [wt({ missionId: 'outra' }), wt({ cycleId: 'cy_x' })] });
+  assert.equal('integration' in base, false); assert.deepEqual(other, base);
+});
+
+test('Marco D: ciclo concluído com trabalho ainda no worktree => integration.pending + limitação explícita; delivered, assurance e acceptance NÃO mudam', () => {
+  const base = buildDelivery(mis(done()), null), r = withWt([wt()]);
+  assert.equal(r.integration.status, 'pending'); assert.equal(r.integration.worktrees[0].relation, 'current'); assert.equal(r.integration.worktrees[0].integration, null);
+  assert.ok(r.limitations.some((l) => /NÃO está integrado/.test(l)));
+  assert.deepEqual([r.state.delivered, r.assurance, r.acceptance], [base.state.delivered, base.assurance, base.acceptance]);
+});
+
+test('Marco D: integrado — commit, digest e autorização vêm da tentativa registrada; sem tentativa, ficam null (indisponível, não inventado); sem commit NÃO é confirmado', () => {
+  const att = { kind: 'integrate', outcome: 'integrated', digest: 'd'.repeat(32), authorizedBy: 'user', at: 'T9' };
+  let r = withWt([wt({ state: 'integrated', integratedCommit: 'c'.repeat(40), attempts: [att] })]);
+  assert.equal(r.integration.status, 'integrated'); assert.deepEqual(r.integration.worktrees[0].integration, { commit: 'c'.repeat(40), digest: 'd'.repeat(32), authorizedBy: 'user', at: 'T9' }); assert.equal(r.limitations.some((l) => /NÃO está integrado/.test(l)), false);
+  r = withWt([wt({ state: 'integrated', integratedCommit: 'c'.repeat(40) })]); assert.equal(r.integration.status, 'integrated'); assert.deepEqual([r.integration.worktrees[0].integration.digest, r.integration.worktrees[0].integration.authorizedBy], [null, null]);
+  r = withWt([wt({ state: 'integrated' })]); assert.equal(r.integration.status, 'blocked'); assert.match(r.integration.worktrees[0].reasons[0], /não é possível confirmar/); assert.ok(r.limitations.some((l) => /NÃO está integrado/.test(l)));
+  r = withWt([wt({ state: 'removed', integratedCommit: 'c'.repeat(40) })]); assert.equal(r.integration.status, 'integrated'); r = withWt([wt({ state: 'removed' })]); assert.equal(r.integration.status, 'blocked');
+});
+
+test('Marco D: blocked — inconsistente, conflito, tentativa inesperada e diagnóstico, com a razão', () => {
+  assert.equal(withWt([wt({ state: 'inconsistent' })]).integration.status, 'blocked');
+  let r = withWt([wt({ attempts: [{ kind: 'check', result: 'conflict', conflicts: ['a.txt'] }] })]); assert.equal(r.integration.status, 'blocked'); assert.match(r.integration.reasons[0], /conflito em: a\.txt/);
+  r = withWt([wt({ attempts: [{ kind: 'integrate', outcome: 'inconsistent' }] })]); assert.equal(r.integration.status, 'blocked');
+  r = withWt([wt({ diagnostic: { code: 'inspection_failed', reason: 'git ausente', at: 'T' } })]); assert.equal(r.integration.status, 'blocked'); assert.equal(r.integration.worktrees[0].diagnostic.reason, 'git ausente'); assert.match(r.integration.reasons[0], /git ausente/);
+  assert.equal(withWt([wt({ attempts: [{ kind: 'check', result: 'invalid', problems: [{ code: 'evidence_stale' }] }] })]).integration.status, 'pending', 'checagem recusada sem conflito segue pendente');
+});
+
+test('Marco D: ciclo em pastCycles — o worktree do ciclo anterior aparece como "past" e não esconde o estado do ciclo atual; worktree declarado e ausente é indisponível', () => {
+  const past = { ...done(), id: 'cy_old' }, cur = { ...cyc('completed', [rnd(1)], null), id: 'cy2' };
+  const r = withWt([wt({ id: 'wt_bbbbbbbb', cycleId: 'cy_old', state: 'inconsistent' }), wt({ id: 'wt_cccccccc', cycleId: 'cy2', state: 'integrated', integratedCommit: 'c'.repeat(40) })], cur, { pastCycles: [past] });
+  assert.deepEqual(r.integration.worktrees.map((x) => [x.id, x.relation]), [['wt_bbbbbbbb', 'past'], ['wt_cccccccc', 'current']]); assert.equal(r.integration.status, 'integrated', 'o estado geral é o do ciclo atual');
+  const lost = withWt([], { ...done(), worktreeId: 'wt_dddddddd' }); assert.equal(lost.integration.status, 'blocked'); assert.match(lost.integration.reasons[0], /não está disponível/); assert.ok(lost.limitations.some((l) => /NÃO está integrado/.test(l)));
+  assert.equal(withWt([wt({ id: 'wt_eeeeeeee' })], { ...done(), worktreeId: 'wt_dddddddd' }).integration.status, 'blocked', 'ciclo que declara outro worktree não casa por semelhança');
+});
+
+test('Marco D: ciclo NÃO concluído não ganha limitação de "concluída sem integração" e o relatório tolera dado malformado', () => {
+  const r = withWt([wt()], cyc('blocked', [rnd(1)], null)); assert.equal(r.state.delivered, false); assert.equal(r.limitations.some((l) => /NÃO está integrado/.test(l)), false); assert.equal(r.integration.status, 'pending');
+  assert.doesNotThrow(() => withWt([null, 7, { missionId: 'mx', cycleId: 'cy1', attempts: 'x', diagnostic: 5 }]));
+});

@@ -172,3 +172,36 @@ test('atualização após mudança relevante: a sequência real do ciclo (inicia
   const final = deliveryView(h.loader.state.report);
   assert.deepEqual([final.headline.value, final.assurance.value, final.retries.used, final.steps[0].attempts], ['completed', 'verified', 1, 2]);
 });
+
+// ---------- Marco D: seção Integração (somente leitura) ----------
+const WT = (over = {}) => ({ id: 'wt_aaaaaaaa', missionId: 'mx', cycleId: 'cy1', state: 'finished', branch: 'orch/wt_aaaaaaaa', baseBranch: 'main', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40), integratedCommit: null, attempts: [], ...over });
+const viewWt = (worktrees, cycle = done(), over) => deliveryView(JSON.parse(JSON.stringify(buildDelivery(mis(cycle, over), WS, { worktrees }))));
+
+test('Integração: sem "integration" a seção não existe e o restante do modelo é o mesmo', () => {
+  const v = view(done()); assert.equal(v.integration, null); assert.equal(viewWt([]).integration, null); assert.equal(viewWt([WT({ missionId: 'outra' })]).integration, null);
+});
+
+test('Integração: PENDENTE nunca é sucesso, mesmo com ciclo concluído e garantia verificada; a limitação vai para a seção, sem duplicar', () => {
+  const v = viewWt([WT()]); assert.equal(v.headline.delivered, true); assert.equal(v.assurance.value, 'verified');
+  assert.equal(v.integration.status, 'pending'); assert.equal(v.integration.value, 'unverified'); assert.equal(v.integration.confirmed, false); assert.match(v.integration.label, /NÃO foi integrado/);
+  assert.match(v.integration.limitation, /NÃO está integrado/); assert.equal(v.limitations.some((l) => /NÃO está integrado/.test(l)), false);
+  const w = v.integration.worktrees[0]; assert.deepEqual([w.relation, w.relationLabel, w.commit, w.commitText, w.digestText], ['current', 'ciclo atual', null, null, null]); assert.equal(w.attemptText, 'última tentativa: nenhuma registrada');
+});
+
+test('Integração: INTEGRADO mostra commit, digest e autorização; dado ausente vira "não informado", nunca confirmação', () => {
+  const att = { kind: 'integrate', result: 'mergeable', outcome: 'integrated', digest: 'd'.repeat(32), authorizedBy: 'user', at: 'T9' };
+  let v = viewWt([WT({ state: 'integrated', integratedCommit: 'c'.repeat(40), attempts: [att] })]); let w = v.integration.worktrees[0];
+  assert.deepEqual([v.integration.value, v.integration.confirmed, w.commit], ['completed', true, 'c'.repeat(12)]); assert.match(w.digestText, /d{32}/); assert.match(w.authorizedText, /user em T9/); assert.match(w.attemptText, /integração · pode integrar · integrada/);
+  v = viewWt([WT({ state: 'integrated', integratedCommit: 'c'.repeat(40) })]); w = v.integration.worktrees[0]; assert.equal(v.integration.confirmed, true); assert.equal(w.digestText, 'digest da autorização: não informado'); assert.equal(w.authorizedText, 'autorização: não informada');
+  v = viewWt([WT({ state: 'integrated' })]); assert.equal(v.integration.confirmed, false); assert.equal(v.integration.value, 'blocked'); assert.equal(v.integration.worktrees[0].commit, null);
+});
+
+test('Integração: BLOQUEADO mostra diagnóstico e motivos; ciclo anterior é distinguido; estado desconhecido nunca é sucesso', () => {
+  const v = viewWt([WT({ id: 'wt_bbbbbbbb', cycleId: 'cy_old', state: 'integrated', integratedCommit: 'c'.repeat(40) }), WT({ diagnostic: { code: 'inspection_failed', reason: 'git ausente', at: 'T' }, attempts: [{ kind: 'check', result: 'conflict', conflicts: ['a.txt'], problems: [{ code: 'target_dirty' }] }] })],
+    { ...done(), id: 'cy1' }, { pastCycles: [{ ...done(), id: 'cy_old' }] });
+  assert.equal(v.integration.value, 'blocked'); assert.deepEqual(v.integration.worktrees.map((w) => w.relationLabel), ['ciclo anterior', 'ciclo atual']);
+  const cur = v.integration.worktrees[1]; assert.match(cur.diagnostic, /inspection_failed: git ausente/); assert.match(cur.attemptText, /checagem · conflito/); assert.deepEqual(cur.attemptProblems, ['target_dirty']); assert.ok(cur.reasons.some((r) => /conflito em: a\.txt/.test(r)));
+  const odd = deliveryView({ state: { code: 'completed', delivered: true }, integration: { status: 'ok??', worktrees: [{ id: 'x', status: 'zzz' }] } });
+  assert.equal(odd.integration.confirmed, false); assert.equal(odd.integration.value, 'failed'); assert.equal(odd.integration.worktrees[0].value, 'failed');
+  assert.equal(deliveryView({ state: { code: 'completed' }, integration: 'x' }).integration, null);
+});

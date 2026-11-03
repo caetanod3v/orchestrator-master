@@ -89,6 +89,40 @@ export function createDeliveryLoader({ fetchReport, onChange = () => {} }) {
   };
 }
 
+// ---- Integração (Marco D): só apresenta report.integration; ausente => null (a seção nem aparece). Pendente e dado ausente nunca viram sucesso. ----
+const INTEGRATION = {
+  integrated: ['completed', 'Integrado à branch de destino'], pending: ['unverified', 'Pendente: o trabalho ainda NÃO foi integrado'], blocked: ['blocked', 'Bloqueado: a integração não pode ser confirmada'],
+};
+const RELATION = { current: 'ciclo atual', past: 'ciclo anterior' };
+const ATTEMPT_KIND = { check: 'checagem', integrate: 'integração' };
+const ATTEMPT_RESULT = { mergeable: 'pode integrar', conflict: 'conflito', invalid: 'não integrável agora' };
+const ATTEMPT_OUTCOME = { integrated: 'integrada', refused: 'recusada', started: 'iniciada, sem desfecho registrado', failed_unchanged: 'falhou (destino intacto)', interrupted_unchanged: 'interrompida (destino intacto)', inconsistent: 'terminou em estado inesperado' };
+const short = (s) => (typeof s === 'string' && s ? s.slice(0, 12) : null);
+const NOT_INTEGRATED = /^Missão concluída, mas o trabalho NÃO está integrado/;
+export function integrationView(report) {
+  const x = isObj(report) ? report.integration : undefined;
+  if (!isObj(x)) return null;
+  const [value, label] = INTEGRATION[x.status] ?? ['failed', 'Estado de integração não reconhecido (não é confirmação)'];
+  const worktrees = arr(x.worktrees).filter(isObj).map((w) => {
+    const [wv, wl] = INTEGRATION[w.status] ?? ['failed', 'Estado não reconhecido'];
+    const i = isObj(w.integration) ? w.integration : null, a = isObj(w.lastAttempt) ? w.lastAttempt : null, d = isObj(w.diagnostic) ? w.diagnostic : null;
+    const confirmed = w.status === 'integrated' && !!short(w.integratedCommit);
+    return {
+      id: text(w.id, 40), relation: w.relation === 'past' ? 'past' : 'current', relationLabel: RELATION[w.relation] ?? 'ciclo não informado', cycleId: w.cycleId ? text(w.cycleId, 60) : null,
+      value: wv, label: wl, state: text(w.state, 30), branch: text(w.branch, 80), baseBranch: text(w.baseBranch, 80),
+      commit: confirmed ? short(w.integratedCommit) : null, commitText: w.status === 'integrated' ? (confirmed ? `commit integrado: ${short(w.integratedCommit)}` : 'commit de integração: não informado') : null,
+      digestText: w.status === 'integrated' ? (i?.digest ? `digest da autorização: ${text(i.digest, 64)}` : 'digest da autorização: não informado') : null,
+      authorizedText: w.status === 'integrated' ? (i?.authorizedBy ? `autorizada por: ${text(i.authorizedBy, 60)}${i.at ? ` em ${text(i.at, 40)}` : ''}` : 'autorização: não informada') : null,
+      attemptText: a ? `última tentativa: ${ATTEMPT_KIND[a.kind] ?? 'não informada'}${a.result ? ` · ${ATTEMPT_RESULT[a.result] ?? text(a.result, 30)}` : ''}${a.outcome ? ` · ${ATTEMPT_OUTCOME[a.outcome] ?? text(a.outcome, 30)}` : ''}${a.at ? ` · ${text(a.at, 40)}` : ''}` : 'última tentativa: nenhuma registrada',
+      attemptProblems: a ? arr(a.problems).map((p) => text(p, 60)) : [],
+      diagnostic: d ? `${d.code ? `${text(d.code, 60)}: ` : ''}${text(d.reason, 300)}` : null,
+      reasons: arr(w.reasons).filter((r) => typeof r === 'string' && r).map((r) => text(r, 400)),
+    };
+  });
+  return { value, label, status: x.status ?? null, confirmed: x.status === 'integrated', reasons: arr(x.reasons).filter((r) => typeof r === 'string' && r).map((r) => text(r, 400)), worktrees,
+    limitation: arr(report.limitations).find((l) => typeof l === 'string' && NOT_INTEGRATED.test(l)) ?? null };
+}
+
 /** Modelo de exibição de um relatório do servidor. Devolve null se não for um relatório (nada é inventado). */
 export function deliveryView(report) {
   if (!isObj(report) || !isObj(report.state)) return null;
@@ -98,7 +132,9 @@ export function deliveryView(report) {
   const completed = report.state.code === 'completed';
   const observed = isObj(report.observed) ? report.observed : {};
   const verified = isObj(report.verified) ? report.verified : {};
-  const limitations = arr(report.limitations).filter((x) => typeof x === 'string' && x).map((x) => text(x, 600));
+  const integration = integrationView(report);
+  // a limitação "concluída sem integração" aparece na seção Integração (não duplicada na lista geral)
+  const limitations = arr(report.limitations).filter((x) => typeof x === 'string' && x && !(integration && NOT_INTEGRATED.test(x))).map((x) => text(x, 600));
   const steps = arr(observed.steps).filter(isObj).map((s) => ({
     id: text(s.id, 40), title: text(s.title, 200), status: s.status, label: statusLabel(s.status), attempts: count(s.attempts), attemptsText: attemptsText(s.attempts),
     retries: count(s.attempts) ? Math.max(0, s.attempts - 1) : 0, uncertain: !!s.uncertain, executed: !!s.executedByRound,
@@ -121,7 +157,7 @@ export function deliveryView(report) {
     assurance: { value: aKey, label: aLabel, level: assuranceIn.level ?? null, basis: assuranceIn.basis ? text(assuranceIn.basis, 300) : null, reasons: arr(assuranceIn.reasons).map((x) => text(x, 400)) },
     steps, hasSteps: steps.length > 0,
     retries: { used: count(observed.retriesUsed), text: retriesText(observed.retriesUsed) },
-    limitations, hasLimitations: limitations.length > 0,
+    limitations, hasLimitations: limitations.length > 0, integration,
     evidence, verifications, missing: arr(verified.missing).filter(isObj).map((m) => ({ script: text(m.script, 60), required: !!m.required, reason: text(m.reason, 200) })),
     rounds: count(report.cycle?.rounds), maxIterations: count(report.cycle?.maxIterations),
   };

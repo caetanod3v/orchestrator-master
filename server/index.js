@@ -153,7 +153,7 @@ app.get('/api/missions/:id', (req, res) => {
 app.get('/api/missions/:id/delivery', (req, res) => {
   const m = find(db.missions, req.params.id);
   if (!m) return bad(res, 'Missão não encontrada.', 404);
-  const r = deliveryOf(m, find(db.workspaces, m.workspaceId) || null);
+  const r = deliveryOf(m, find(db.workspaces, m.workspaceId) || null, { worktrees: db.worktrees });
   if (!r.ok) return bad(res, r.error, 500);
   res.json(r.report);
 });
