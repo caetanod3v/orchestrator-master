@@ -153,3 +153,50 @@ test('Marco D: ciclo NÃO concluído não ganha limitação de "concluída sem i
   const r = withWt([wt()], cyc('blocked', [rnd(1)], null)); assert.equal(r.state.delivered, false); assert.equal(r.limitations.some((l) => /NÃO está integrado/.test(l)), false); assert.equal(r.integration.status, 'pending');
   assert.doesNotThrow(() => withWt([null, 7, { missionId: 'mx', cycleId: 'cy1', attempts: 'x', diagnostic: 5 }]));
 });
+
+// ---------- Marco E (E5): preparação de ambiente no relatório de entrega ----------
+const prep = (over = {}) => ({ state: 'ready', approval: { id: 'apr_1', digest: 'd'.repeat(64), approvedAt: 'T1', authorizedBy: 'user', consumedAt: 'T1' }, command: 'npm ci --ignore-scripts --no-audit --no-fund', dependencies: 2, exitCode: 0, durationMs: 4200, startedAt: 'T1', finishedAt: 'T2', outputTail: 'SAIDA-BRUTA-NAO-EXPOR', ...over });
+const prepOf = (wtOver, env, cycle = done()) => { const r = buildDelivery(mis(cycle), null, { worktrees: [wt(wtOver)], environments: env === undefined ? null : { wt_aaaaaaaa: env } }); return { r, p: r.integration.worktrees[0].preparation }; };
+
+test('E5: sem preparação registrada => "none" (sem limitação extra); sem worktree o relatório continua IDÊNTICO e sem integration', () => {
+  const { r, p } = prepOf({}); assert.deepEqual([p.state, p.evidence, p.verified, p.worktreeBlocked], ['none', 'none', false, false]); assert.equal(r.limitations.some((l) => /Preparação do ambiente/.test(l)), false);
+  const base = buildDelivery(mis(done()), null, { now: () => 'T' }), other = buildDelivery(mis(done()), null, { now: () => 'T', worktrees: [], environments: { x: { ok: true } } }); assert.deepEqual(other, base); assert.equal('integration' in other, false);
+});
+
+test('E5: ready SÓ é "verificado" com código de saída 0 + checagem ATUAL do backend; sem a checagem, ou com ela negativa, não conta', () => {
+  let { r, p } = prepOf({ prepare: prep() }, { ok: true, code: 'prepared' }); assert.deepEqual([p.state, p.evidence, p.verified], ['ready', 'verified', true]); assert.deepEqual([p.dependencies, p.exitCode, p.approval.authorizedBy, p.approval.digest], [2, 0, 'user', 'd'.repeat(64)]); assert.equal(r.limitations.some((l) => /Preparação do ambiente/.test(l)), false);
+  ({ r, p } = prepOf({ prepare: prep() })); assert.deepEqual([p.state, p.evidence, p.verified], ['ready', 'not_verified', false]); assert.match(p.reasons[0], /não está disponível.*não conta como verificado/); assert.ok(r.limitations.some((l) => /Preparação do ambiente.*ready.*não conta como verificação/.test(l)));
+  ({ p } = prepOf({ prepare: prep() }, { ok: false, code: 'dependencies_incomplete' })); assert.deepEqual([p.state, p.verified], ['inconclusive', false]); assert.match(p.reasons[0], /dependencies_incomplete/);
+  for (const bad of [{ exitCode: 1 }, { exitCode: null }, { finishedAt: null }]) { ({ p } = prepOf({ prepare: prep(bad) }, { ok: true })); assert.deepEqual([p.state, p.verified], ['inconclusive', false], JSON.stringify(bad)); }
+});
+
+test('E5: planned, approved e running são OBSERVADOS (nada concluído); running ocupa o worktree', () => {
+  let { p } = prepOf({ prepare: prep({ state: 'running', exitCode: null, finishedAt: null }), op: { kind: 'prepare', at: 'T' } }, { ok: true }); assert.deepEqual([p.state, p.evidence, p.verified, p.worktreeBlocked], ['running', 'observed', false, true]);
+  ({ p } = prepOf({ prepare: prep({ state: 'approved', exitCode: null, finishedAt: null }) })); assert.deepEqual([p.state, p.evidence, p.verified, p.worktreeBlocked], ['approved', 'observed', false, false]);
+  ({ p } = prepOf({ prepare: prep({ state: 'running', exitCode: null, finishedAt: null }) })); assert.equal(p.state, 'approved', 'running sem operação no registro: execução não confirmada'); assert.match(p.reasons[0], /não foi confirmada/);
+  ({ p } = prepOf({ prepare: prep({ state: 'planned' }) })); assert.deepEqual([p.state, p.evidence], ['planned', 'observed']);
+});
+
+test('E5: failed, interrupted e inconclusive são DISTINTOS e nunca sucesso; interrompida não vira pronta mesmo com o ambiente presente; inconclusive mantém o bloqueio', () => {
+  let { r, p } = prepOf({ prepare: prep({ state: 'failed', exitCode: 3, reason: 'npm ci terminou com código 3' }) }, { ok: true }); assert.deepEqual([p.state, p.evidence, p.verified, p.exitCode], ['failed', 'not_verified', false, 3]); assert.match(p.reasons[0], /código 3/);
+  ({ p } = prepOf({ prepare: prep({ state: 'interrupted', exitCode: null, reason: 'o servidor foi reiniciado' }) }, { ok: true, code: 'prepared' })); assert.deepEqual([p.state, p.evidence, p.verified], ['interrupted', 'not_verified', false]); assert.match(p.reasons[0], /NÃO é um ambiente pronto, mesmo que haja node_modules/);
+  ({ r, p } = prepOf({ state: 'ready', op: { kind: 'prepare', at: 'T' }, prepare: prep({ state: 'running' }), diagnostic: { code: 'preparation_inconclusive', reason: 'sem registro do processo', at: 'T' } }, { ok: true }));
+  assert.deepEqual([p.state, p.evidence, p.verified, p.worktreeBlocked], ['inconclusive', 'not_verified', false, true]); assert.match(p.reasons[0], /continua BLOQUEADO/); assert.match(p.reasons[1], /sem registro do processo/); assert.ok(r.limitations.some((l) => /inconclusive/.test(l)));
+  ({ p } = prepOf({ prepare: prep({ state: 'zzz' }) })); assert.deepEqual([p.state, p.verified], ['inconclusive', false]);
+  ({ p } = prepOf({ prepare: prep({ state: 'interrupted' }) })); const f = prepOf({ prepare: prep({ state: 'failed' }) }).p; assert.notEqual(p.state, f.state);
+});
+
+test('E5: delivered, assurance, acceptance e a seção de integração NÃO mudam por causa da preparação; nada sensível é exposto', () => {
+  const base = buildDelivery(mis(done()), null, { worktrees: [wt()] });
+  for (const [over, env] of [[{ prepare: prep() }, { ok: true }], [{ prepare: prep({ state: 'failed' }) }, null], [{ prepare: prep({ state: 'interrupted' }) }, null], [{ op: { kind: 'prepare', at: 'T' }, prepare: prep({ state: 'running' }) }, null]]) {
+    const r = buildDelivery(mis(done()), null, { worktrees: [wt(over)], environments: env ? { wt_aaaaaaaa: env } : null });
+    assert.deepEqual([r.state, r.assurance, r.acceptance, r.declared, r.observed, r.verified], [base.state, base.assurance, base.acceptance, base.declared, base.observed, base.verified]); assert.equal(r.integration.status, base.integration.status);
+  }
+  const SEG = 'tok-SEGREDO-9999', leak = buildDelivery(mis(done()), null, { worktrees: [wt({ path: 'C:/privado/x', prepare: prep({ state: 'failed', reason: `falhou em https://u:${SEG}@reg.example/x token=${SEG}`, outputTail: `GET https://u:${SEG}@h/ ${SEG}`, env: { NPM_TOKEN: SEG } }), diagnostic: { code: 'preparation_inconclusive', reason: `proc ${SEG}` } })], environments: null });
+  const json = JSON.stringify(leak); assert.ok(!json.includes('SAIDA-BRUTA'), 'saída bruta'); assert.ok(!json.includes('outputTail')); assert.ok(!json.includes('NPM_TOKEN')); assert.ok(!json.includes('C:/privado')); assert.ok(!json.includes(`u:${SEG}`), 'userinfo de URL'); assert.ok(!/token=tok-SEGREDO/.test(json));
+});
+
+test('E5: a rota passa a checagem atual do ambiente só dos worktrees que dizem "ready" (index.js)', () => {
+  const src = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.js'), 'utf8').replace(/\r\n/g, '\n');
+  assert.match(src, /deliveryOf\(m, [^\n]*environments: Object\.fromEntries\([^\n]*w\.prepare\?\.state === 'ready'[^\n]*worktrees\.environmentFor\(w\.id\)/);
+});

@@ -97,6 +97,21 @@ const RELATION = { current: 'ciclo atual', past: 'ciclo anterior' };
 const ATTEMPT_KIND = { check: 'checagem', integrate: 'integração' };
 const ATTEMPT_RESULT = { mergeable: 'pode integrar', conflict: 'conflito', invalid: 'não integrável agora' };
 const ATTEMPT_OUTCOME = { integrated: 'integrada', refused: 'recusada', started: 'iniciada, sem desfecho registrado', failed_unchanged: 'falhou (destino intacto)', interrupted_unchanged: 'interrompida (destino intacto)', inconsistent: 'terminou em estado inesperado' };
+const PREP_LABEL = {
+  none: ['idle', 'Nenhuma preparação de ambiente registrada'], planned: ['unverified', 'Plano criado, sem execução'], approved: ['running', 'Aprovada: execução não confirmada'], running: ['running', 'Em execução (nada concluído ainda)'],
+  ready: ['completed', 'Ambiente preparado e verificado pelo backend'], failed: ['failed', 'A preparação falhou'], interrupted: ['interrupted', 'Interrompida: NÃO é um ambiente pronto'], inconclusive: ['blocked', 'Inconclusiva: o worktree continua bloqueado'],
+};
+/** Preparação de ambiente de um worktree (report.integration.worktrees[].preparation). Ausente => null. "ready" só vale como verificado com verified === true; senão é "não verificado". */
+export function preparationView(x) {
+  if (!isObj(x)) return null;
+  const [value0, label0] = PREP_LABEL[x.state] ?? ['failed', 'Estado de preparação não reconhecido (não é confirmação)'];
+  const verified = x.state === 'ready' && x.verified === true;
+  const notVerifiedReady = x.state === 'ready' && !verified;
+  return { state: PREP_LABEL[x.state] ? x.state : 'unknown', value: notVerifiedReady ? 'unverified' : value0, label: notVerifiedReady ? 'Registrada como pronta, mas NÃO verificada neste relatório' : label0, verified, evidence: text(x.evidence, 20),
+    worktreeBlocked: x.worktreeBlocked === true, reasons: arr(x.reasons).filter((r) => typeof r === 'string' && r).map((r) => text(r, 400)),
+    detail: [x.dependencies != null ? `${x.dependencies} dependência(s)` : null, Number.isInteger(x.exitCode) ? `código de saída ${x.exitCode}` : null, Number.isFinite(x.durationMs) ? `${Math.round(x.durationMs / 1000)} s` : null, isObj(x.approval) && x.approval.approvedAt ? `aprovada em ${text(x.approval.approvedAt, 40)}` : null].filter(Boolean).join(' · '),
+    approvalDigest: isObj(x.approval) && typeof x.approval.digest === 'string' ? text(x.approval.digest, 64) : null };
+}
 const short = (s) => (typeof s === 'string' && s ? s.slice(0, 12) : null);
 const NOT_INTEGRATED = /^Missão concluída, mas o trabalho NÃO está integrado/;
 export function integrationView(report) {
@@ -117,6 +132,7 @@ export function integrationView(report) {
       attemptProblems: a ? arr(a.problems).map((p) => text(p, 60)) : [],
       diagnostic: d ? `${d.code ? `${text(d.code, 60)}: ` : ''}${text(d.reason, 300)}` : null,
       reasons: arr(w.reasons).filter((r) => typeof r === 'string' && r).map((r) => text(r, 400)),
+      preparation: preparationView(w.preparation),
     };
   });
   return { value, label, status: x.status ?? null, confirmed: x.status === 'integrated', reasons: arr(x.reasons).filter((r) => typeof r === 'string' && r).map((r) => text(r, 400)), worktrees,

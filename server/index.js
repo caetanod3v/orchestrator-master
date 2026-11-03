@@ -153,7 +153,7 @@ app.get('/api/missions/:id', (req, res) => {
 app.get('/api/missions/:id/delivery', (req, res) => {
   const m = find(db.missions, req.params.id);
   if (!m) return bad(res, 'Missão não encontrada.', 404);
-  const r = deliveryOf(m, find(db.workspaces, m.workspaceId) || null, { worktrees: db.worktrees });
+  const r = deliveryOf(m, find(db.workspaces, m.workspaceId) || null, { worktrees: db.worktrees, environments: Object.fromEntries((db.worktrees || []).filter((w) => w.missionId === m.id && w.prepare?.state === 'ready').map((w) => { const e = worktrees.environmentFor(w.id); return [w.id, { ok: e.ok, code: e.code }]; })) }); // E5: checagem ATUAL do ambiente só dos que dizem "ready"
   if (!r.ok) return bad(res, r.error, 500);
   res.json(r.report);
 });

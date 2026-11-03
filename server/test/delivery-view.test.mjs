@@ -9,7 +9,7 @@ import path from 'node:path';
 process.env.ORCH_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-deliv-view-')); // delivery.js -> cycle.js -> store.js: nunca os dados reais
 after(() => fs.rmSync(process.env.ORCH_DATA_DIR, { recursive: true, force: true }));
 const { buildDelivery } = await import('../delivery.js');
-const { deliveryView, deliveryKey, createDeliveryLoader, attemptsText, retriesText, orchestrationNote } = await import('../../client/src/delivery-view.js');
+const { deliveryView, preparationView, deliveryKey, createDeliveryLoader, attemptsText, retriesText, orchestrationNote } = await import('../../client/src/delivery-view.js');
 
 // ---------- fixtures (formato gravado pelo servidor) ----------
 const REAL_PASS = { id: 'test', script: 'test', required: true, command: 'npm run test', source: 'backend', status: 'pass', exitCode: 0, durationMs: 5, outputTail: '', truncated: false, reason: null };
@@ -204,4 +204,25 @@ test('Integração: BLOQUEADO mostra diagnóstico e motivos; ciclo anterior é d
   const odd = deliveryView({ state: { code: 'completed', delivered: true }, integration: { status: 'ok??', worktrees: [{ id: 'x', status: 'zzz' }] } });
   assert.equal(odd.integration.confirmed, false); assert.equal(odd.integration.value, 'failed'); assert.equal(odd.integration.worktrees[0].value, 'failed');
   assert.equal(deliveryView({ state: { code: 'completed' }, integration: 'x' }).integration, null);
+});
+
+// ---------- Marco E (E5): preparação de ambiente na interface do relatório ----------
+const PW = (over = {}) => ({ id: 'wt_aaaaaaaa', missionId: 'mx', cycleId: 'cy1', state: 'finished', branch: 'orch/wt_aaaaaaaa', baseBranch: 'main', baseCommit: 'a'.repeat(40), headCommit: 'b'.repeat(40), integratedCommit: null, attempts: [], ...over });
+const PP = (over = {}) => ({ state: 'ready', approval: { digest: 'd'.repeat(64), approvedAt: 'T1', authorizedBy: 'user' }, dependencies: 2, exitCode: 0, durationMs: 3000, startedAt: 'T1', finishedAt: 'T2', ...over });
+const prepView = (wtOver, env) => deliveryView(JSON.parse(JSON.stringify(buildDelivery(mis(done()), WS, { worktrees: [PW(wtOver)], environments: env ? { wt_aaaaaaaa: env } : null })))).integration.worktrees[0].preparation;
+
+test('E5 (UI): sem informação de preparação o modelo antigo não ganha nada; "none" é mostrado como nenhuma preparação registrada', () => {
+  assert.equal(deliveryView({ state: { code: 'completed' }, integration: { status: 'pending', worktrees: [{ id: 'x', status: 'pending' }] } }).integration.worktrees[0].preparation, null);
+  const n = prepView({}); assert.deepEqual([n.state, n.value, n.verified], ['none', 'idle', false]); assert.match(n.label, /Nenhuma preparação/);
+});
+
+test('E5 (UI): só "ready" verificado é mostrado como preparado; ready sem checagem, approved/running, failed, interrupted e inconclusive nunca parecem sucesso', () => {
+  let v = prepView({ prepare: PP() }, { ok: true, code: 'prepared' }); assert.deepEqual([v.state, v.value, v.verified, v.evidence], ['ready', 'completed', true, 'verified']); assert.match(v.label, /preparado e verificado pelo backend/); assert.match(v.detail, /2 dependência\(s\) · código de saída 0 · 3 s · aprovada em T1/);
+  v = prepView({ prepare: PP() }); assert.deepEqual([v.state, v.value, v.verified], ['ready', 'unverified', false]); assert.match(v.label, /NÃO verificada/);
+  v = prepView({ prepare: PP({ state: 'approved', exitCode: null, finishedAt: null }) }); assert.deepEqual([v.state, v.value, v.verified], ['approved', 'running', false]);
+  v = prepView({ op: { kind: 'prepare', at: 'T' }, prepare: PP({ state: 'running' }) }); assert.deepEqual([v.state, v.worktreeBlocked, v.verified], ['running', true, false]);
+  v = prepView({ prepare: PP({ state: 'failed', reason: 'npm ci terminou com código 3' }) }); assert.deepEqual([v.state, v.value, v.verified], ['failed', 'failed', false]);
+  v = prepView({ prepare: PP({ state: 'interrupted', reason: 'reiniciado' }) }, { ok: true }); assert.deepEqual([v.state, v.value, v.verified], ['interrupted', 'interrupted', false]); assert.match(v.label, /NÃO é um ambiente pronto/);
+  v = prepView({ op: { kind: 'prepare', at: 'T' }, prepare: PP({ state: 'running' }), diagnostic: { code: 'preparation_inconclusive', reason: 'sem registro' } }); assert.deepEqual([v.state, v.value, v.worktreeBlocked, v.verified], ['inconclusive', 'blocked', true, false]); assert.match(v.label, /continua bloqueado/); assert.ok(v.reasons.some((r) => /sem registro/.test(r)));
+  const odd = preparationView({ state: 'sucesso!!', verified: true }); assert.deepEqual([odd.state, odd.value, odd.verified], ['unknown', 'failed', false]); assert.equal(preparationView('x'), null);
 });

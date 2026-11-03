@@ -21,6 +21,7 @@
 import crypto from 'node:crypto';
 import { roundVerification } from './cycle.js';
 import { stepStatusFromRound, retriesUsed } from './plan.js';
+import { redactSecrets } from './worktrees.js';
 
 export const DELIVERY_SCHEMA = 1;
 const MAX_FILES = 200, PER_ROUND_CAP = 50; // buildReport (cycle.js) já corta em 50 arquivos por rodada
@@ -117,8 +118,41 @@ function filesSection(rounds, tasks) {
 // ---- Integração (Marco C -> D): derivada dos registros de worktree da missão (opts.worktrees = db.worktrees). Só descreve; nunca altera entrega, garantia nem aceitação. ----
 // Sem worktree ligado ao ciclo atual ou a um anterior (e sem `cycle.worktreeId`) devolve null: o relatório fica idêntico ao contrato anterior.
 // Informação ausente fica null; "integrated" exige estado integrado COM o commit registrado.
+// ---- Preparação de ambiente (Marco E, E5): estado REAL gravado no registro do worktree (prepare, op, diagnostic). Descreve; nunca altera entrega, garantia nem aceitação. ----
+// state: none | planned | approved | running | ready | failed | interrupted | inconclusive. `planned` NUNCA é gravado pelo backend (o plano é só leitura): só apareceria se um registro o trouxesse.
+// evidence: verified (SÓ ready + código de saída 0 + checagem ATUAL do ambiente pelo backend em `env`) | observed (planned/approved/running: nada concluído) | not_verified (failed, interrupted,
+// inconclusive, ready sem a checagem) | none. Sem `env`, "ready" nunca é "verified". Interrompido NUNCA vira sucesso, mesmo com node_modules presente (o ambiente nem é consultado para ele).
+// Nunca expõe a saída bruta do processo (outputTail), variáveis de ambiente nem caminhos; motivos passam por redactSecrets.
+export function preparationOf(w, env = null) {
+  const p = isObj(w?.prepare) ? w.prepare : null, d = isObj(w?.diagnostic) ? w.diagnostic : null, opPrep = isObj(w?.op) && w.op.kind === 'prepare', inconclusiveDiag = !!d && d.code === 'preparation_inconclusive';
+  if (!p && !opPrep && !inconclusiveDiag) return { state: 'none', evidence: 'none', verified: false, worktreeBlocked: false, reasons: ['nenhuma preparação de ambiente registrada para este worktree'], approval: null };
+  const safe = (x, n = 300) => redactSecrets(clip(x, n));
+  const ap = isObj(p?.approval) ? p.approval : null;
+  const out = {
+    approval: ap ? { digest: typeof ap.digest === 'string' ? clip(ap.digest, 64) : null, approvedAt: ap.approvedAt ?? null, authorizedBy: ap.authorizedBy ?? null, consumedAt: ap.consumedAt ?? null } : null,
+    command: p?.command ? clip(p.command, 120) : null, dependencies: Number.isInteger(p?.dependencies) ? p.dependencies : null, exitCode: Number.isInteger(p?.exitCode) ? p.exitCode : null,
+    durationMs: Number.isFinite(p?.durationMs) ? p.durationMs : null, startedAt: p?.startedAt ?? null, finishedAt: p?.finishedAt ?? null,
+  };
+  const done = (state, evidence, reasons, extra = {}) => ({ state, evidence, verified: evidence === 'verified', worktreeBlocked: false, reasons, ...out, ...extra });
+  if (inconclusiveDiag) return done('inconclusive', 'not_verified', ['o resultado da preparação não pôde ser comprovado e o worktree continua BLOQUEADO (nada foi liberado por dúvida)', `diagnóstico: ${safe(d.reason)}`], { worktreeBlocked: true });
+  if (opPrep) return done('running', 'observed', ['preparação em execução: nada foi concluído nem verificado ainda; o worktree está ocupado'], { worktreeBlocked: true });
+  switch (p?.state) {
+    case 'ready': {
+      if (!(p.exitCode === 0 && typeof p.finishedAt === 'string')) return done('inconclusive', 'not_verified', ['o registro diz "ready", mas sem código de saída 0 e instante de conclusão: não é possível confirmar']);
+      if (isObj(env) && env.ok === true) return done('ready', 'verified', ['ambiente conferido pelo backend (as dependências declaradas estão presentes no node_modules do worktree; as versões instaladas não são conferidas)']);
+      if (isObj(env)) return done('inconclusive', 'not_verified', [`o registro diz "ready", mas a checagem ATUAL do ambiente não confirma (${clip(env.code, 60) || 'sem código'}); não conta como preparado`]);
+      return done('ready', 'not_verified', ['o registro diz "ready", mas a checagem atual do ambiente não está disponível neste relatório: não conta como verificado']);
+    }
+    case 'failed': return done('failed', 'not_verified', [`a preparação falhou${p.reason ? `: ${safe(p.reason)}` : ''}; a verificação continua bloqueada`]);
+    case 'interrupted': return done('interrupted', 'not_verified', [`preparação interrompida${p.reason ? `: ${safe(p.reason)}` : ''}; NÃO é um ambiente pronto, mesmo que haja node_modules`]);
+    case 'planned': return done('planned', 'observed', ['plano criado, sem execução']);
+    case 'approved': return done('approved', 'observed', ['aprovação registrada; a execução não foi confirmada']);
+    case 'running': return done('approved', 'observed', ['aprovação registrada, mas não há operação em andamento no registro: a execução não foi confirmada']);
+    default: return done('inconclusive', 'not_verified', ['estado de preparação não reconhecido no registro: não é possível confirmar']);
+  }
+}
 const lastOf = (list) => [...arr(list)].reverse().find(isObj) ?? null;
-export function integrationOf(mission, worktrees) {
+export function integrationOf(mission, worktrees, environments = null) {
   const c = isObj(mission?.cycle) ? mission.cycle : null;
   const past = new Set(arr(mission?.pastCycles).filter(isObj).map((x) => x.id).filter((x) => typeof x === 'string'));
   const mine = arr(worktrees).filter((w) => isObj(w) && w.missionId === mission?.id && typeof w.cycleId === 'string'
@@ -147,6 +181,7 @@ export function integrationOf(mission, worktrees) {
       integration: status === 'integrated' ? { commit: w.integratedCommit, digest: typeof doneAtt?.digest === 'string' ? doneAtt.digest : null, authorizedBy: doneAtt?.authorizedBy ?? null, at: doneAtt?.at ?? null } : null,
       lastAttempt: last ? { kind: last.kind ?? null, result: last.result ?? null, outcome: last.outcome ?? null, at: last.at ?? null, problems: arr(last.problems).filter(isObj).slice(0, 8).map((p) => clip(p.code, 60)) } : null,
       diagnostic: isObj(w.diagnostic) ? { code: clip(w.diagnostic.code, 60), reason: clip(w.diagnostic.reason, 300), at: w.diagnostic.at ?? null } : null,
+      preparation: preparationOf(w, isObj(environments) && isObj(environments[w.id]) ? environments[w.id] : null),
     };
   });
   const current = items.filter((x) => x.relation === 'current');
@@ -156,7 +191,7 @@ export function integrationOf(mission, worktrees) {
   return { status, reasons, worktrees: items, note: 'Derivado dos registros de worktree. Descreve onde o trabalho está; não altera a entrega nem a garantia.' };
 }
 
-export function buildDelivery(mission, workspace = null, { now = () => new Date().toISOString(), context = null, worktrees = null } = {}) {
+export function buildDelivery(mission, workspace = null, { now = () => new Date().toISOString(), context = null, worktrees = null, environments = null } = {}) {
   const m = mission, c = isObj(m?.cycle) ? m.cycle : null;
   const rounds = c ? arr(c.rounds).filter(isObj) : [], tasks = arr(m?.tasks).filter(isObj);
   const limitations = [];
@@ -274,7 +309,8 @@ export function buildDelivery(mission, workspace = null, { now = () => new Date(
   }
   if (acceptance.recorded && !acceptance.valid) limitations.push(`Há uma aceitação humana registrada, mas ela NÃO vale mais: ${acceptance.invalidReasons.join('; ')}.`);
 
-  const integration = integrationOf(m, worktrees);
+  const integration = integrationOf(m, worktrees, environments);
+  for (const x of integration?.worktrees ?? []) if (x.relation === 'current' && x.preparation.state !== 'none' && !x.preparation.verified) limitations.push(`Preparação do ambiente do worktree ${x.id}: ${x.preparation.state}${x.preparation.reasons[0] ? ` (${x.preparation.reasons[0]})` : ''}; não conta como verificação.`);
   if (integration && delivered && integration.status !== 'integrated') limitations.push(`Missão concluída, mas o trabalho NÃO está integrado à branch de destino (integração: ${integration.status}${integration.reasons[0] ? `; ${integration.reasons[0]}` : ''}).`);
 
   return {

@@ -65,6 +65,11 @@ export default function DeliveryReport({ mission }) {
                 {w.authorizedText && <div className="dim">{w.authorizedText}</div>}
                 <div className="dim">{w.attemptText}{w.attemptProblems.length > 0 && ` (${w.attemptProblems.join(', ')})`}</div>
                 {w.diagnostic && <div className="s-blocked">diagnóstico: {w.diagnostic}</div>}
+                {w.preparation && (
+                  <div data-testid="delivery-preparation" data-state={w.preparation.state}><span className="k">ambiente</span> <Status value={w.preparation.value} label={w.preparation.label} />
+                    {w.preparation.detail && <span className="dim"> · {w.preparation.detail}</span>}
+                    {w.preparation.reasons.map((r, i) => <div key={i} className="dim">↳ {r}</div>)}</div>
+                )}
                 {w.reasons.map((r, i) => <div key={i} className="dim">↳ {r}</div>)}</li>))}</ul></div>
         )}
         {v.hasLimitations && (
