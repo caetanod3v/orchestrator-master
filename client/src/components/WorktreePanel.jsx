@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { worktreeView } from '../worktree-view.js';
+import { worktreeView, revalidateOutcome } from '../worktree-view.js';
 import { Btn, Status } from './ui.jsx';
 
 /** Apresentação pura (testável sem rede): cada ambiente, suas tentativas e as ações que o servidor aceitaria agora. */
-export function WorktreeView({ rows, busy = false, onAction = () => {} }) {
+export function WorktreeView({ rows, busy = false, onAction = () => {}, onRevalidate = () => {}, results = {} }) {
   const [authorized, setAuthorized] = useState({});
   if (!rows.length) return null;
   return (
@@ -19,6 +19,8 @@ export function WorktreeView({ rows, busy = false, onAction = () => {} }) {
             <div className="dim mono">{w.path}</div>
             {w.baseDirty && <div className="stale">O workspace principal tinha alterações não commitadas quando o worktree foi criado: elas NÃO estão no worktree.</div>}
             {w.note && <div className="dim">{w.note}</div>}
+            {w.diagnostic && <div className="stale" data-testid="worktree-diagnostic">Diagnóstico: {w.diagnostic}</div>}
+            {results[w.id] && <div className={results[w.id].ok ? 'dim' : 'stale'} data-testid="worktree-revalidate-result" data-kind={results[w.id].kind}>{results[w.id].text}</div>}
             {w.attempts.slice(-3).map((a) => (
               <div key={a.key} className="dim" data-testid="worktree-attempt">
                 ↳ {a.kind}: <b>{a.resultLabel}</b>{a.outcomeLabel && ` · ${a.outcomeLabel}`}{a.concurrent && ' · a branch de destino andou desde a base'}
@@ -29,6 +31,7 @@ export function WorktreeView({ rows, busy = false, onAction = () => {} }) {
               </div>
             ))}
             <div className="actions">
+              {w.canRevalidate && <Btn disabled={busy} onClick={() => onRevalidate(w.id)} title="Reconfere o registro com o Git; não apaga nem corrige nada">{busy ? 'Revalidando…' : 'Revalidar'}</Btn>}
               {w.canCheck && <Btn disabled={busy} onClick={() => onAction(w.id, 'check', {}, 'Integração checada (nada foi alterado).')}>Checar integração</Btn>}
               {w.canSnapshot && <Btn disabled={busy} onClick={() => onAction(w.id, 'snapshot', {}, 'Snapshot registrado na branch do worktree.')}>Registrar snapshot</Btn>}
               {w.canCleanup && <Btn disabled={busy} onClick={() => onAction(w.id, 'cleanup', {}, 'Worktree removido.')}>Limpar worktree</Btn>}
@@ -54,10 +57,20 @@ export function WorktreeView({ rows, busy = false, onAction = () => {} }) {
 export default function WorktreePanel({ mission }) {
   const { state, act, notify } = useStore();
   const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState({});
   const rows = worktreeView(state?.worktrees?.items, { missionId: mission.id });
   const onAction = async (id, op, body, ok) => {
     setBusy(true);
     try { const r = await act(async () => { await api.post(`/api/worktrees/${id}/${op}`, body); return true; }); if (r) notify(ok); } finally { setBusy(false); }
   };
-  return <WorktreeView rows={rows} busy={busy} onAction={onAction} />;
+  // Revalidar: um clique por vez (busy); o painel é atualizado por act() (refresh) e o resultado fica visível na linha. Erro de requisição: mantém o estado e mostra a falha.
+  const onRevalidate = async (id) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const resp = await act(() => api.post(`/api/worktrees/${id}/revalidate`, {}));
+      if (resp) { const o = revalidateOutcome(resp); setResults((p) => ({ ...p, [id]: o })); notify(o.text, o.ok ? 'info' : 'error'); }
+    } finally { setBusy(false); }
+  };
+  return <WorktreeView rows={rows} busy={busy} onAction={onAction} onRevalidate={onRevalidate} results={results} />;
 }

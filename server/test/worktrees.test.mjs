@@ -324,3 +324,19 @@ test('W9 — digest CORRETO mas SEM checagem registrada: a integração é recus
   const c = await w.mgr.check(rec.id); assert.equal(c.attempt.result, 'mergeable'); assert.equal(c.attempt.digest, digest, 'a fórmula independente reproduz o digest real');
   const ok = await w.mgr.integrate(rec.id, { digest }); assert.equal(ok.ok, true, ok.error); assert.equal(rec.state, 'integrated'); assert.equal(w.head(), wtHead);
 });
+
+test('Revalidar (interface): botão só para inconsistente/com diagnóstico e resultado recovered | blocked | inconclusive nunca confundidos', async () => {
+  const view = await import('../../client/src/worktree-view.js');
+  const w = world(), rec = await ready(w); const rows = () => view.worktreeView([w.mgr.describe(rec)]);
+  assert.equal(rows()[0].canRevalidate, false, 'ambiente saudável não oferece revalidar');
+  rec.state = 'inconsistent'; assert.equal(rows()[0].canRevalidate, true);
+  rec.state = 'finished'; rec.diagnostic = { code: 'inspection_failed', reason: 'git ausente', at: 'T' }; assert.equal(rows()[0].canRevalidate, true); assert.match(rows()[0].diagnostic, /inspection_failed: git ausente/); rec.diagnostic = null;
+  // resultados reais do gerenciador (mesmos campos que a rota devolve)
+  fs.renameSync(rec.path, `${rec.path}.fora`); await w.mgr.revalidate(rec.id); assert.equal(rec.state, 'inconsistent');
+  let o = view.revalidateOutcome(await w.mgr.revalidate(rec.id)); assert.deepEqual([o.kind, o.ok], ['blocked', false]); assert.match(o.text, /Continua bloqueado: .*path_missing/);
+  fs.renameSync(`${rec.path}.fora`, rec.path);
+  o = view.revalidateOutcome(await w.mgr.revalidate(rec.id)); assert.deepEqual([o.kind, o.ok], ['recovered', true]); assert.match(o.text, /Recuperado/);
+  // inconclusivo e formatos inesperados: nunca sucesso
+  o = view.revalidateOutcome({ recovered: false, inconclusive: true, blocked: { code: 'inspection_failed', reason: 'tempo esgotado', inconclusive: true } }); assert.deepEqual([o.kind, o.ok], ['inconclusive', false]); assert.match(o.text, /tempo esgotado/);
+  assert.equal(view.revalidateOutcome({ blocked: { reason: 'x' } }).ok, false); assert.equal(view.revalidateOutcome({ problems: [{ code: 'path_missing' }] }).ok, false); assert.equal(view.revalidateOutcome(null).kind, 'ok');
+});

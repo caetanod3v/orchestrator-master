@@ -20,6 +20,16 @@ export const EVENT = {
   cleanup_started: 'limpeza iniciada', cleanup_refused: 'limpeza recusada', removed: 'removido', inconsistent: 'marcado inconsistente',
 };
 
+/** Resultado de POST /api/worktrees/:id/revalidate em texto e tipo: recovered (recuperado) | blocked (continua bloqueado, com o motivo) | inconclusive (o Git não respondeu: NÃO é sucesso) | ok (nada a recuperar). */
+export function revalidateOutcome(resp) {
+  const r = isObj(resp) ? resp : {}, b = isObj(r.blocked) ? r.blocked : null, reason = b ? txt(b.reason, 300) : '';
+  if (r.recovered === true) return { kind: 'recovered', ok: true, text: `Recuperado: o Git confirmou o ambiente${r.recoveredTo ? ` (agora "${txt(r.recoveredTo, 30)}")` : ''}.` };
+  if (r.inconclusive === true || b?.inconclusive === true) return { kind: 'inconclusive', ok: false, text: `Não foi possível determinar o estado (o Git não respondeu)${reason ? `: ${reason}` : ''}. Nada foi alterado; tente de novo quando o Git voltar a responder.` };
+  if (b) return { kind: 'blocked', ok: false, text: `Continua bloqueado${reason ? `: ${reason}` : ''}. Nada foi alterado.` };
+  const probs = arr(r.problems).filter(isObj).map((p) => txt(p.code, 40));
+  return probs.length ? { kind: 'blocked', ok: false, text: `Continua com problemas: ${probs.join(', ')}. Nada foi alterado.` } : { kind: 'ok', ok: true, text: 'Revalidado: o registro bate com o Git.' };
+}
+
 const attemptView = (a, i) => ({
   key: `${i}-${a.id ?? 'x'}`, kind: a.kind === 'integrate' ? 'integração' : 'checagem', result: a.result ?? null, resultLabel: RESULT[a.result] ?? txt(a.result, 30), concurrent: !!a.concurrent, fastForward: !!a.fastForward,
   conflicts: arr(a.conflicts).map((c) => txt(c, 200)).slice(0, 20), overlap: arr(a.overlap).map((c) => txt(c, 200)).slice(0, 20),
@@ -43,6 +53,9 @@ export function worktreeView(items, { missionId = null } = {}) {
       // Só oferece integrar com o digest da ÚLTIMA tentativa, se ela foi uma checagem que deu "pode integrar". O servidor recusa se algo mudou depois.
       authorization: idle && last && last.kind === 'checagem' && last.result === 'mergeable' && last.digest ? { digest: last.digest, summary: `${short(last.wtHead)} → ${txt(w.baseBranch, 60)} (${short(last.targetHead)})${last.fastForward ? ', avanço direto' : ', commit de integração'}${last.concurrent ? ', com alterações concorrentes combináveis' : ''}` } : null,
       canCleanup: idle || w.state === 'integrated',
+      // Só leitura + revalidar: oferecido a quem está inconsistente ou tem diagnóstico (o Git não pôde conferir). O servidor decide o resultado.
+      diagnostic: isObj(w.diagnostic) ? `${w.diagnostic.code ? `${txt(w.diagnostic.code, 40)}: ` : ''}${txt(w.diagnostic.reason, 300)}` : null,
+      canRevalidate: w.state === 'inconsistent' || (isObj(w.diagnostic) && w.state !== 'removed'),
       note: w.state === 'inconsistent' ? 'O registro não bate mais com o Git. Nada é corrigido nem removido automaticamente; inspecione o repositório.' : w.state === 'finished' ? 'Nada é integrado sozinho: verifique, registre o snapshot e autorize.' : null,
     };
   });
