@@ -324,7 +324,7 @@ test('I4 — no ciclo isolado, projeto com dependências e worktree frio: a veri
   const cy = mkCycle(planner([planAns(step('a', 'a.txt')), done()])); assert.equal((await cy.start(r.m.id, 6)).status, 202); await cy.idle();
   const c = r.m.cycle, rec = mgrC.get(c.worktreeId); assert.ok(rec);
   assert.equal(c.status, 'blocked'); assert.equal(c.blockedCode, 'verification_blocked', `${c.blockedCode}: ${c.blockedReason}`); assert.notEqual(c.assurance, 'verified');
-  const v = c.rounds[0].report.verifications; assert.equal(v.length, 1); assert.equal(v[0].status, 'blocked'); assert.equal(v[0].source, 'backend'); assert.match(v[0].reason, /Ambiente do worktree não preparado/); assert.match(v[0].reason, /npm ci/);
+  const v = c.rounds[0].report.verifications; assert.equal(v.length, 1); assert.equal(v[0].status, 'blocked'); assert.equal(v[0].source, 'backend'); assert.match(v[0].reason, /Ambiente do worktree não preparado/); assert.equal(v[0].code, 'dependencies_not_prepared', 'a interface decide pelo código, não pelo texto'); assert.match(v[0].reason, /npm ci/);
   assert.equal(v[0].exitCode, null); assert.notEqual(v[0].status, 'pass'); assert.deepEqual(verCalls, [], 'o verificador (nem o simulado) foi chamado: nada foi "verificado"');
   assert.equal(fs.existsSync(path.join(r.dir, 'a.txt')), false); assert.equal(r.status(), ''); assert.equal(G(r.dir, 'rev-parse', 'HEAD'), head); assert.equal(fs.existsSync(path.join(rec.path, 'node_modules')), false);
   const chk = await mgrC.check(rec.id); assert.notEqual(chk.attempt.result, 'mergeable', 'sem verificação real não há integração');

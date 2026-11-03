@@ -551,7 +551,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
         for (const item of items) {
           if (c.cancelRequested) break;
           const res = env && !env.ok
-            ? { id: item?.id ?? item?.script, script: item?.script, required: !!item?.required, command: `npm run ${item?.script}`, source: 'backend', status: 'blocked', reason: `Ambiente do worktree não preparado: ${env.reason}`, exitCode: null, durationMs: 0, outputTail: '', truncated: false }
+            ? { id: item?.id ?? item?.script, script: item?.script, required: !!item?.required, command: `npm run ${item?.script}`, source: 'backend', status: 'blocked', code: env.code, reason: `Ambiente do worktree não preparado: ${env.reason}`, exitCode: null, durationMs: 0, outputTail: '', truncated: false }
             : await verifier.run(wsOf(m), item);
           report.verifications.push(res);
           const line = `[verificação] ${res.command} -> ${res.status}${res.exitCode != null ? ` (código ${res.exitCode})` : ''} em ${(res.durationMs / 1000).toFixed(1)} s${res.reason ? ` · ${res.reason}` : ''}`;

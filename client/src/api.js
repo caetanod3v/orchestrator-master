@@ -6,7 +6,7 @@ async function req(method, url, body) {
   });
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Erro ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Erro ${res.status}`), { status: res.status, ...(data.code ? { code: data.code } : {}) });
   return data;
 }
 export const api = {
