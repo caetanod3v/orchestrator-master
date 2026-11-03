@@ -8,13 +8,15 @@
 //   - recupera após queda SEM relançar missões e sem remover nada;
 //   - separa SEMPRE "o Git respondeu que algo é inválido/sujo" de "o Git não pôde responder" (ausente, tempo esgotado, saída ilegível): o segundo caso nunca vale como limpo,
 //     nunca invalida registros por si só e nunca autoriza uma ação destrutiva; o registro fica bloqueado com a razão até o Git voltar a responder.
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import * as store from './store.js';
 import { asyncRoute } from './async-route.js';
+import { resolveNpmCli } from './verify.js';
+import { killTreeSync, waitGone } from './orphans.js';
 
 // ---------- configuração (ambiente > configurações > padrão DESLIGADO) ----------
 export const WORKTREE_ENV = 'ORCH_WORKTREE_ISOLATION';
@@ -192,8 +194,28 @@ function planPrepareUnsafe({ id, dir, branch, baseCommit }) {
   return { ok: true, plan, digest, notes };
 }
 
+// ---------- Marco E (E2): execução CONTROLADA da preparação (só com o digest aprovado) ----------
+// Comando e argumentos são FIXOS (PREPARE_ARGS); nada vem do cliente nem do agente. O processo roda no worktree, com ambiente limpo e configuração do npm neutralizada.
+const PREPARE_TIMEOUT_MS = 600_000, PREPARE_MAX_OUTPUT = 256 * 1024, PREPARE_TAIL = 1500;
+const SECRET_ENV = /key|token|secret|passw|credential|auth/i;
+const PROXY_ENV = /^(http_proxy|https_proxy|all_proxy|no_proxy)$/i; // proxies do ambiente nunca valem na preparação (podem carregar credenciais)
+/** Remove credenciais de um texto ANTES de ele ser gravado ou exibido: userinfo de URLs (scheme://usuario:senha@host), pares _authToken/_auth/password/token=valor e os VALORES literais de `secrets` (proxy, tokens do ambiente). Idempotente. */
+export function redactSecrets(text, secrets = []) {
+  let s = String(text ?? '');
+  for (const v of [...secrets].filter((x) => typeof x === 'string' && x.length >= 4).sort((a, b) => b.length - a.length)) s = s.split(v).join('***');
+  return s.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi, '$1***@').replace(/((?:_auth(?:token)?|_password|password|token)\s*[=:]\s*)[^\s,;]+/gi, '$1***');
+}
+const defaultPrepareSpec = (args) => { const cli = resolveNpmCli(); return cli ? { command: process.execPath, args: [cli, ...args] } : null; }; // node + npm-cli.js: sem shell
+/** Ambiente LIMPO: sem segredos, sem NENHUMA npm_* (config, lifecycle, package), sem NODE_OPTIONS/NODE_PATH; configuração de usuário e global do npm apontam para arquivos VAZIOS do orquestrador. */
+function prepareEnv(cfgDir) {
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) if (!SECRET_ENV.test(k) && !PROXY_ENV.test(k) && !/^npm_/i.test(k) && !/^(NODE_OPTIONS|NODE_PATH|INIT_CWD|PREFIX)$/i.test(k)) env[k] = v;
+  return { ...env, CI: '1', npm_config_ignore_scripts: 'true', npm_config_userconfig: path.join(cfgDir, 'user.npmrc'), npm_config_globalconfig: path.join(cfgDir, 'global.npmrc'),
+    npm_config_audit: 'false', npm_config_fund: 'false', npm_config_update_notifier: 'false', NO_UPDATE_NOTIFIER: '1' };
+}
+
 /** `runGit` existe para os testes injetarem falhas do Git (ausente, tempo esgotado, saída inválida); o servidor usa sempre o Git real. */
-export function createWorktreeManager({ db, root = null, now = store.now, runGit = git } = {}) {
+export function createWorktreeManager({ db, root = null, now = store.now, runGit = git, track = null, prepareSpec = defaultPrepareSpec, spawnProc = spawn, prepareTimeoutMs = PREPARE_TIMEOUT_MS, maxOutputBytes = PREPARE_MAX_OUTPUT } = {}) {
   db.worktrees ??= [];
   const G = runGit;
   const all = () => db.worktrees;
@@ -317,7 +339,7 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
     const repo = await resolveRepo(workspace.path, G);
     if (repo.error) return fail(409, `Worktree não criado: ${repo.error}.`);
     for (const r of all()) {
-      if (r.missionId !== m.id || r.workspaceId !== workspace.id || r.cycleId !== null || r.state !== 'ready' || r.baseCommit !== repo.commit || r.baseBranch !== repo.branch) continue;
+      if (r.op || r.missionId !== m.id || r.workspaceId !== workspace.id || r.cycleId !== null || r.state !== 'ready' || r.baseCommit !== repo.commit || r.baseBranch !== repo.branch) continue;
       const problems = await inspect(r), unk = unknownOf(problems);
       if (unk) return fail(409, `Worktree não reaproveitado: ${unk}.`);
       if (problems.length) continue;
@@ -335,6 +357,71 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
     const problems = await inspect(r);
     if (problems.length) return refusal('worktree_invalid', `O worktree não passou na validação (${problems.map((p) => p.code).join(', ')}); nada foi planejado.`);
     return planPrepare(r);
+  }
+
+  // ---------- E2: aprovação + execução da preparação ----------
+  let preparing = null; // id do worktree em preparação (uma por vez neste servidor)
+  /** Executa `npm ci` FIXO no worktree se (e só se) o plano ATUAL tem o digest recebido. Devolve 202 assim que o processo foi iniciado e registrado; `finished` resolve ao terminar. */
+  async function prepare(id, { digest } = {}) {
+    const r = get(id); if (!r) return fail(404, 'Worktree não encontrado.');
+    if (typeof digest !== 'string' || !/^[0-9a-f]{64}$/.test(digest)) return fail(400, 'A preparação exige o digest do plano devolvido por prepare/plan.');
+    return withLock(norm(r.repoPath), async () => {
+      const no = (code, error, status = 409) => ({ ok: false, status, code, error, record: r });
+      if (preparing) return no('preparation_in_progress', `Já há uma preparação em andamento (${preparing}); aguarde terminar. Nada foi executado.`);
+      if (r.op || !['ready', 'finished'].includes(r.state)) return no('worktree_not_preparable', `O worktree está em "${r.state}"${r.op ? ` (operação ${r.op.kind} em andamento)` : ''}; nada foi executado.`);
+      if (['planning', 'running'].includes(mission(r)?.cycle?.status)) return no('cycle_active', 'O ciclo desta missão está ativo; aguarde terminar. Nada foi executado.');
+      const problems = await inspect(r);
+      if (problems.length) return no('worktree_invalid', `O worktree não passou na validação (${problems.map((p) => p.code).join(', ')}); nada foi executado.`);
+      const p = planPrepare(r); // RECALCULADO agora: o que vale é o plano de agora, nunca um guardado
+      if (!p.ok) return no(p.code, p.error);
+      if (p.digest !== digest) return no('digest_mismatch', 'A aprovação não corresponde ao plano atual (algo mudou depois de aprovado). Gere o plano de novo; nada foi executado.');
+      if (environmentFor(r.id).ok) return no('environment_already_prepared', 'O ambiente do worktree já está preparado (ou o projeto não precisa de dependências); nada foi executado.');
+      const spec = prepareSpec([...PREPARE_ARGS]);
+      if (!spec) return no('npm_unavailable', 'O npm não foi encontrado junto ao Node; nada foi executado.');
+      // aprovação CONSUMIDA e gravada ANTES de qualquer processo; se não gravar, nada roda e tudo volta ao que era
+      const keep = { op: r.op, prepare: r.prepare, history: r.history, updatedAt: r.updatedAt }, at = now();
+      r.op = { kind: 'prepare', at, prevState: r.state, digest }; r.prepare = { state: 'running', approval: { id: store.uid('apr'), digest, approvedAt: at, authorizedBy: 'user', consumedAt: at }, command: p.plan.command, dependencies: p.plan.dependencies.count, lockfileSha256: p.plan.lockfile.sha256, startedAt: at };
+      audit(r, 'prepare_approved', { digest: digest.slice(0, 12), dependencies: p.plan.dependencies.count });
+      try { store.saveOrThrow(); } catch (e) { Object.assign(r, keep); if (keep.prepare === undefined) delete r.prepare; return no('persistence_failed', `O banco não pôde ser gravado (${e?.code || e?.message || 'erro'}); a preparação NÃO foi iniciada.`, 503); }
+      const prevState = r.op.prevState, t0 = Date.now();
+      const secrets = Object.entries(process.env).filter(([k, v]) => (SECRET_ENV.test(k) || PROXY_ENV.test(k)) && typeof v === 'string' && v.length >= 4).map(([, v]) => v); // valores do ambiente que nunca podem ir para o banco
+      const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-prep-env-'));
+      let tracked = null, done = false, state = { timedOut: false, overflow: false, bytes: 0, tail: '' };
+      preparing = r.id;
+      let resolveFinished; const finished = new Promise((res) => { resolveFinished = res; });
+      const conclude = ({ exitCode = null, spawnError = null, trackError = null } = {}) => {
+        if (done) return; done = true;
+        try { tracked?.release(); } catch { /* informativo */ }
+        try { fs.rmSync(cfgDir, { recursive: true, force: true }); } catch { /* temporário do orquestrador */ }
+        let status = 'failed', reason = null;
+        if (trackError) reason = `não foi possível registrar o processo (${trackError}); ele foi encerrado`;
+        else if (spawnError) reason = `falha ao iniciar o npm: ${clip(spawnError.message, 160)}`;
+        else if (state.timedOut) reason = `tempo máximo excedido (${Math.round(prepareTimeoutMs / 1000)} s)`;
+        else if (state.overflow) reason = `a saída excedeu ${maxOutputBytes} bytes; processo encerrado`;
+        else if (exitCode !== 0) reason = `npm ci terminou com código ${exitCode}`;
+        else { const env = environmentFor(r.id); if (env.ok) status = 'ready'; else reason = `npm ci terminou com código 0, mas o ambiente ficou incompleto: ${env.reason}`; }
+        // sanitizado ANTES de gravar: o banco, /api/state e as respostas nunca recebem credenciais
+        r.prepare = { ...r.prepare, state: status, finishedAt: now(), durationMs: Date.now() - t0, exitCode, reason: reason === null ? null : redactSecrets(reason, secrets), outputTail: clip(redactSecrets(state.tail.trim().slice(-PREPARE_TAIL), secrets), PREPARE_TAIL) };
+        r.op = null; r.state = prevState; preparing = null; // falha: node_modules NÃO é apagado e a verificação continua bloqueada (environmentFor)
+        audit(r, status === 'ready' ? 'prepare_ready' : 'prepare_failed', { reason: r.prepare.reason ?? undefined, exitCode });
+        saveSoft(); resolveFinished({ status, reason: r.prepare.reason, exitCode });
+      };
+      let child;
+      try {
+        fs.writeFileSync(path.join(cfgDir, 'user.npmrc'), ''); fs.writeFileSync(path.join(cfgDir, 'global.npmrc'), '');
+        child = spawnProc(spec.command, spec.args, { cwd: real(r.path) ?? r.path, shell: false, windowsHide: true, env: prepareEnv(cfgDir), stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) { conclude({ spawnError: e }); return { ok: true, status: 202, record: r, finished }; }
+      child.on('error', (e) => conclude({ spawnError: e }));
+      try { tracked = track?.('preparer', child.pid, { missionId: r.missionId, worktreeId: r.id }) ?? null; } catch (e) { // filho sem registro não pode ficar vivo
+        try { killTreeSync(child.pid); waitGone(child.pid, 2000); } catch { /* melhor esforço */ }
+        conclude({ trackError: e?.code || e?.message || 'erro' }); return { ok: true, status: 202, record: r, finished };
+      }
+      const timer = setTimeout(() => { state.timedOut = true; try { killTreeSync(child.pid); } catch { /* o 'close' conclui */ } }, prepareTimeoutMs);
+      const feed = (chunk) => { state.bytes += chunk.length; state.tail = (state.tail + chunk.toString('utf8')).slice(-PREPARE_TAIL * 2); if (state.bytes > maxOutputBytes && !state.overflow) { state.overflow = true; try { killTreeSync(child.pid); } catch { /* idem */ } } };
+      child.stdout?.on('data', feed); child.stderr?.on('data', feed);
+      child.on('close', (code) => { clearTimeout(timer); conclude({ exitCode: code }); });
+      return { ok: true, status: 202, record: r, finished };
+    });
   }
 
   const link = (id, cycleId) => { const r = get(id); if (!r) return false; r.cycleId = cycleId; audit(r, cycleId ? 'linked' : 'unlinked', { cycleId }); return true; };
@@ -685,10 +772,10 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
   }
 
   const describe = (r) => ({ id: r.id, missionId: r.missionId, cycleId: r.cycleId, workspaceId: r.workspaceId, path: r.path, branch: r.branch, baseBranch: r.baseBranch, baseCommit: r.baseCommit, headCommit: r.headCommit,
-    integratedCommit: r.integratedCommit ?? null, state: r.state, op: r.op ? { kind: r.op.kind, at: r.op.at } : null, current: r.current, baseDirty: !!r.baseDirty, diagnostic: r.diagnostic ?? null, rounds: (r.rounds ?? []).slice(-5), attempts: (r.attempts ?? []).slice(-5), history: (r.history ?? []).slice(-20), createdAt: r.createdAt, updatedAt: r.updatedAt });
+    integratedCommit: r.integratedCommit ?? null, state: r.state, op: r.op ? { kind: r.op.kind, at: r.op.at } : null, current: r.current, baseDirty: !!r.baseDirty, diagnostic: r.diagnostic ?? null, prepare: r.prepare ? { ...r.prepare, reason: r.prepare.reason == null ? null : redactSecrets(r.prepare.reason), outputTail: r.prepare.outputTail == null ? r.prepare.outputTail : redactSecrets(r.prepare.outputTail) } : null, rounds: (r.rounds ?? []).slice(-5), attempts: (r.attempts ?? []).slice(-5), history: (r.history ?? []).slice(-20), createdAt: r.createdAt, updatedAt: r.updatedAt });
   const list = ({ missionId = null } = {}) => all().filter((r) => !missionId || r.missionId === missionId).map(describe);
 
-  return { create, ensureFor, planPrepare: planPrepareFor, link, get, list, describe, workspaceFor, environmentFor, markInUse, noteRound, release, check, snapshot, integrate, cleanup, revalidate, recover, inspect };
+  return { create, ensureFor, planPrepare: planPrepareFor, prepare, link, get, list, describe, workspaceFor, environmentFor, markInUse, noteRound, release, check, snapshot, integrate, cleanup, revalidate, recover, inspect };
 }
 
 // ---------- API ----------
@@ -706,6 +793,12 @@ export function setupWorktrees(app, { db, manager }) {
     const r = await manager.planPrepare(req.params.id);
     if (r.ok) return res.json({ plan: r.plan, digest: r.digest, notes: r.notes });
     return res.status(r.status).json({ error: r.error, ...(r.code ? { code: r.code } : {}) });
+  }));
+  // E2: só o digest do plano vem do cliente; comando, argumentos, caminho e ambiente são do servidor. 202 = processo iniciado e registrado (o resultado fica em worktree.prepare).
+  app.post('/api/worktrees/:id/prepare', asyncRoute(async (req, res) => {
+    const r = await manager.prepare(req.params.id, { digest: body(req).digest });
+    if (!r.ok) return res.status(r.status).json({ error: r.error, ...(r.code ? { code: r.code } : {}), ...(r.record ? { worktree: manager.describe(r.record) } : {}) });
+    return res.status(202).json({ started: true, worktree: manager.describe(r.record) });
   }));
   app.post('/api/worktrees/:id/revalidate', asyncRoute(async (req, res) => reply(res, 200, (r) => ({ problems: r.problems, recovered: !!r.recovered, recoveredTo: r.recoveredTo ?? null, inconclusive: !!r.inconclusive, blocked: r.blocked ?? null }))(await manager.revalidate(req.params.id))));
 }
