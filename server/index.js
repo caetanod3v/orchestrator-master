@@ -45,7 +45,7 @@ const HOST = '127.0.0.1'; // somente local
 // Trava de instância ANTES de qualquer operação que possa tocar o banco (load, setupExecution, recover): uma 2ª instância sai sem alterar nada.
 const lock = acquireInstanceLock({ dir: store.dataDir, autoRelease: true });
 if (!lock.ok) { console.error(`[orchestrator] ${lock.message}`); process.exit(1); }
-installShutdown({ lock, executor: claudeCodeExecutor, children: [planner, verifier], store }); // ao sair: encerra os filhos (executor, Planner, verificador), grava o que está pendente e libera a trava
+installShutdown({ lock, executor: claudeCodeExecutor, children: [planner, verifier, { killActiveSync: () => worktrees.killActiveSync() }], store }); // ao sair: encerra os filhos (executor, Planner, verificador), grava o que está pendente e libera a trava
 const db = store.load();
 // Configuração efetiva de planejamento e retentativas (I4): ambiente > db.settings > padrão (desligados). Lida a cada mensagem do chat e a cada laço do ciclo.
 const orchestration = () => resolveOrchestration({ settings: db.settings });
@@ -53,8 +53,8 @@ const orchestration = () => resolveOrchestration({ settings: db.settings });
 const supervision = () => resolveSupervision({ settings: db.settings });
 // Worktrees isolados (Marco C): execução do ciclo fora do workspace principal. Padrão DESLIGADO (ambiente > configurações > padrão). A recuperação só concilia o registro com o Git: não relança missões nem remove nada.
 const worktreeIsolation = () => resolveWorktreeIsolation({ settings: db.settings });
-const worktrees = createWorktreeManager({ db });
-const worktreeRecovery = await worktrees.recover();
+const worktrees = createWorktreeManager({ db, track: childRegistry.track, children: childRegistry });
+let worktreeRecovery = { settled: [], inconsistent: [], unregistered: [], unverified: [] }; // E3: preenchido logo DEPOIS do reclaim dos processos filhos (abaixo)
 const app = express();
 // Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO em POST/PUT/PATCH/DELETE (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).
 // ANTES do parser de JSON: uma requisição recusada nem chega a ter o corpo lido (e um corpo malformado vindo de origem externa dá 403, não 400).
@@ -290,7 +290,8 @@ if (fs.existsSync(dist)) {
 }
 
 const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor, verifier, workspaceOf: (m) => worktrees.workspaceFor(m) });
-childRegistry.reclaim({ executor: claudeCodeExecutor }); // órfãos do Planner/verificador: depois dos do Executor, antes de qualquer ciclo (setupCycle) e de ouvir a porta
+childRegistry.reclaim({ executor: claudeCodeExecutor });
+worktreeRecovery = await worktrees.recover(); // E3: a conciliação dos worktrees (inclusive `prepare` interrompido) só roda DEPOIS do reclaim: ela depende de saber se o preparador ainda vive // órfãos do Planner/verificador: depois dos do Executor, antes de qualquer ciclo (setupCycle) e de ouvir a porta
 setupVerification(app, { db, verifier });
 setupWorkspaceRemoval(app, { db });
 const cycle = setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: () => orchestration().planMode, stepRetries: () => orchestration().stepRetries, supervision: () => supervisionMs(supervision()), worktrees, worktreeIsolation: () => worktreeIsolation().enabled });

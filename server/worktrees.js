@@ -215,7 +215,7 @@ function prepareEnv(cfgDir) {
 }
 
 /** `runGit` existe para os testes injetarem falhas do Git (ausente, tempo esgotado, saída inválida); o servidor usa sempre o Git real. */
-export function createWorktreeManager({ db, root = null, now = store.now, runGit = git, track = null, prepareSpec = defaultPrepareSpec, spawnProc = spawn, prepareTimeoutMs = PREPARE_TIMEOUT_MS, maxOutputBytes = PREPARE_MAX_OUTPUT } = {}) {
+export function createWorktreeManager({ db, root = null, now = store.now, runGit = git, track = null, children = null, prepareSpec = defaultPrepareSpec, spawnProc = spawn, prepareTimeoutMs = PREPARE_TIMEOUT_MS, maxOutputBytes = PREPARE_MAX_OUTPUT } = {}) {
   db.worktrees ??= [];
   const G = runGit;
   const all = () => db.worktrees;
@@ -361,6 +361,13 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
 
   // ---------- E2: aprovação + execução da preparação ----------
   let preparing = null; // id do worktree em preparação (uma por vez neste servidor)
+  let activeChild = null; // { pid, tracked } do preparador em execução (para o encerramento do servidor)
+  /** Saída do servidor: encerra o npm da preparação (no Windows com a árvore; em POSIX só o PID principal) e só apaga o registro se o processo sumiu. */
+  function killActiveSync() {
+    const a = activeChild; if (!a?.pid) return;
+    try { killTreeSync(a.pid); } catch { /* melhor esforço */ }
+    if (waitGone(a.pid, 1500) && a.tracked) { try { a.tracked.release(); } catch { /* idem */ } a.tracked = null; }
+  }
   /** Executa `npm ci` FIXO no worktree se (e só se) o plano ATUAL tem o digest recebido. Devolve 202 assim que o processo foi iniciado e registrado; `finished` resolve ao terminar. */
   async function prepare(id, { digest } = {}) {
     const r = get(id); if (!r) return fail(404, 'Worktree não encontrado.');
@@ -391,6 +398,7 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
       let resolveFinished; const finished = new Promise((res) => { resolveFinished = res; });
       const conclude = ({ exitCode = null, spawnError = null, trackError = null } = {}) => {
         if (done) return; done = true;
+        activeChild = null;
         try { tracked?.release(); } catch { /* informativo */ }
         try { fs.rmSync(cfgDir, { recursive: true, force: true }); } catch { /* temporário do orquestrador */ }
         let status = 'failed', reason = null;
@@ -416,6 +424,8 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
         try { killTreeSync(child.pid); waitGone(child.pid, 2000); } catch { /* melhor esforço */ }
         conclude({ trackError: e?.code || e?.message || 'erro' }); return { ok: true, status: 202, record: r, finished };
       }
+      activeChild = { pid: child.pid, tracked };
+      if (tracked?.pid) { r.prepare = { ...r.prepare, process: { pid: child.pid, recordedAt: now() } }; saveSoft(); } // evidência no PRÓPRIO registro de que o PID foi gravado no child-registry (sem ela, uma queda depois do spawn e antes do registro não é distinguível de "nunca iniciou")
       const timer = setTimeout(() => { state.timedOut = true; try { killTreeSync(child.pid); } catch { /* o 'close' conclui */ } }, prepareTimeoutMs);
       const feed = (chunk) => { state.bytes += chunk.length; state.tail = (state.tail + chunk.toString('utf8')).slice(-PREPARE_TAIL * 2); if (state.bytes > maxOutputBytes && !state.overflow) { state.overflow = true; try { killTreeSync(child.pid); } catch { /* idem */ } } };
       child.stdout?.on('data', feed); child.stderr?.on('data', feed);
@@ -643,9 +653,9 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
     return withLock(norm(r.repoPath), async () => {
       if (r.state === 'removed') return { ok: true, record: r, problems: [] };
       if (r.op) {
-        const s = await settle(r);
-        if (s.unverified) { diag(r, 'inspection_failed', s.unverified); saveSoft(); return { ok: true, record: r, problems: [], inconclusive: true, blocked: { code: 'inspection_failed', reason: s.unverified, inconclusive: true } }; }
-        r.diagnostic = null; saveSoft(); return { ok: true, record: r, problems: [] };
+        const wasPrepare = r.op.kind === 'prepare', s = await settle(r);
+        if (s.unverified) { const code = s.code ?? 'inspection_failed'; diag(r, code, s.unverified); saveSoft(); return { ok: true, record: r, problems: [], inconclusive: true, blocked: { code, reason: s.unverified, inconclusive: true } }; } // nunca declara sucesso com a preparação inconclusiva
+        r.diagnostic = null; saveSoft(); return { ok: true, record: r, problems: [], ...(wasPrepare ? { prepareInterrupted: true } : {}) };
       }
       if (r.state === 'creating') return { ok: true, record: r, problems: [] };
       if (r.state === 'inconsistent') return reconcile(r);
@@ -729,6 +739,20 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
       const op = r.op; r.op = null;
       if (!fs.existsSync(r.path)) { r.state = 'removed'; audit(r, 'cleanup_completed_after_restart'); }
       else { r.state = op.prevState ?? 'finished'; audit(r, 'cleanup_interrupted_kept'); }
+    } else if (r.op?.kind === 'prepare') {
+      // E3: preparação interrompida por queda/reinício. O worktree só é liberado se o child-registry (já conferido no boot, ANTES desta conciliação) não tem mais nenhum
+      // preparador vivo ou de identidade incerta para ele. Na dúvida, op e bloqueio ficam. A aprovação consumida é preservada e nunca reaproveitada.
+      if (preparing === r.id) return { unverified: 'a preparação está em andamento neste servidor; aguarde terminar', code: 'preparation_in_progress' };
+      if (!children?.check || children.reclaimed?.() !== true) return { unverified: 'os processos preparadores registrados ainda não foram conferidos; a preparação pode estar em execução', code: 'preparation_inconclusive' };
+      const st = children.check(r.id);
+      if (st.blocking.length) return { unverified: `o processo preparador (PID ${st.blocking.map((x) => x.pid).join(', ')}) pode ainda estar ativo (${st.blocking.map((x) => x.outcome).join(', ')}); o worktree continua bloqueado e nada foi liberado`, code: 'preparation_inconclusive' };
+      const how = children.lastOutcome?.(r.id) ?? st.released[0]?.outcome ?? null, op = r.op;
+      // FAIL-CLOSED: a op é gravada ANTES do spawn e o PID só é registrado DEPOIS dele. Sem registro nem marca de PID gravado, o servidor pode ter caído nessa janela com o npm já em execução: ausência de registro NÃO prova que nada foi iniciado.
+      if (!r.prepare?.process && !st.released.length && !how) return { unverified: 'não há registro do processo preparador: o servidor pode ter caído depois de iniciar o npm e antes de gravar o PID, então não é possível provar que ele não existe; o worktree continua bloqueado', code: 'preparation_inconclusive' };
+      const HOW = { killed: 'o processo preparador foi encerrado no boot', gone: 'o processo preparador já não existia', reused: 'o PID gravado pertencia a outro processo, que não foi tocado' };
+      r.prepare = { ...(r.prepare ?? {}), state: 'interrupted', finishedAt: now(), exitCode: null, reason: redactSecrets(`o servidor foi reiniciado durante a preparação (${HOW[how] ?? 'sem registro de processo'}); o resultado não pôde ser comprovado e a aprovação anterior não será reutilizada`) };
+      r.op = null; r.state = ['ready', 'finished'].includes(op.prevState) ? op.prevState : 'ready';
+      audit(r, 'prepare_interrupted', { reason: r.prepare.reason });
     } else if (r.state === 'in_use') {
       // a execução foi interrompida pela queda: o resultado é DESCONHECIDO; a evidência dessa rodada nunca vale
       const cur = r.current; r.current = null; r.state = 'finished';
@@ -748,7 +772,7 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
       if (r.state === 'removed') continue;
       try {
         const from = r.state, s = await settle(r);
-        if (s.unverified) { out.unverified.push({ id: r.id, reason: s.unverified }); diag(r, 'inspection_failed', s.unverified); continue; }
+        if (s.unverified) { out.unverified.push({ id: r.id, reason: s.unverified }); diag(r, s.code ?? 'inspection_failed', s.unverified); continue; }
         if (r.diagnostic) r.diagnostic = null;
         if (r.state !== from) out.settled.push({ id: r.id, from, to: r.state });
         if (r.state === 'inconsistent') out.inconsistent.push(r.id);
@@ -775,7 +799,7 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
     integratedCommit: r.integratedCommit ?? null, state: r.state, op: r.op ? { kind: r.op.kind, at: r.op.at } : null, current: r.current, baseDirty: !!r.baseDirty, diagnostic: r.diagnostic ?? null, prepare: r.prepare ? { ...r.prepare, reason: r.prepare.reason == null ? null : redactSecrets(r.prepare.reason), outputTail: r.prepare.outputTail == null ? r.prepare.outputTail : redactSecrets(r.prepare.outputTail) } : null, rounds: (r.rounds ?? []).slice(-5), attempts: (r.attempts ?? []).slice(-5), history: (r.history ?? []).slice(-20), createdAt: r.createdAt, updatedAt: r.updatedAt });
   const list = ({ missionId = null } = {}) => all().filter((r) => !missionId || r.missionId === missionId).map(describe);
 
-  return { create, ensureFor, planPrepare: planPrepareFor, prepare, link, get, list, describe, workspaceFor, environmentFor, markInUse, noteRound, release, check, snapshot, integrate, cleanup, revalidate, recover, inspect };
+  return { create, ensureFor, planPrepare: planPrepareFor, prepare, killActiveSync, link, get, list, describe, workspaceFor, environmentFor, markInUse, noteRound, release, check, snapshot, integrate, cleanup, revalidate, recover, inspect };
 }
 
 // ---------- API ----------

@@ -10,13 +10,15 @@ import { reclaimOrphans, ORPHAN_NOTE } from './orphans.js';
 import { pidAlive } from './instance-lock.js';
 
 export const CHILD_KEY = 'childProcesses';
-export const CHILD_KINDS = Object.freeze(['planner', 'verifier']);
-const LABEL = { planner: 'Planner', verifier: 'verificação real' };
+export const CHILD_KINDS = Object.freeze(['planner', 'verifier', 'preparer']);
+const LABEL = { planner: 'Planner', verifier: 'verificação real', preparer: 'preparação de ambiente' };
 
 const NOOP = Object.freeze({ pid: null, release() {} });
 
 /** `store` e `orphanTools` só são injetados nos testes; o servidor usa os padrões. */
 export function createChildRegistry({ store = realStore, orphanTools = {} } = {}) {
+  let reclaimedOnce = false; // o boot já conferiu os registros deixados por um servidor anterior?
+  const lastOutcome = new Map(); // worktreeId -> resultado do reclaim do boot (gone | killed | reused | unverified | kill_failed)
   /** Lista viva do banco carregado (cria o campo em bancos antigos). Sem banco carregado => null. */
   const list = () => {
     const db = store.get();
@@ -59,6 +61,7 @@ export function createChildRegistry({ store = realStore, orphanTools = {} } = {}
    * Nunca lança por causa de um registro malformado.
    */
   function reclaim({ executor } = {}) {
+    reclaimedOnce = true;
     const l = list();
     if (!l || !l.length) return [];
     const recs = l.filter((r) => r && typeof r === 'object');
@@ -66,6 +69,9 @@ export function createChildRegistry({ store = realStore, orphanTools = {} } = {}
     const keep = [];
     results.forEach((res, i) => {
       const rec = recs[i], what = LABEL[rec.kind] ?? 'processo filho';
+      // identidade da operação preservada no resultado (quem chamou sabe a qual missão/worktree/registro ele se refere)
+      Object.assign(res, { kind: rec.kind, recordId: rec.id ?? null, missionId: rec.missionId ?? null, worktreeId: rec.worktreeId ?? null });
+      if (rec.worktreeId) lastOutcome.set(rec.worktreeId, res.outcome);
       store.log('execution', `Processo órfão (${what}, PID ${res.pid}) — ${res.outcome}: ${ORPHAN_NOTE[res.outcome]}${res.detail ? ` (${res.detail})` : ''}`, {
         orphan: res.outcome, process: rec.kind, ...(rec.missionId ? { missionId: rec.missionId } : {}), agent: rec.kind === 'planner' ? 'planner' : 'executor',
       });
@@ -79,5 +85,25 @@ export function createChildRegistry({ store = realStore, orphanTools = {} } = {}
     return results;
   }
 
-  return { track, reclaim, pending: () => [...(list() ?? [])] };
+  /** Registros `preparer` ainda existentes de um worktree (depois do reclaim do boot só sobram os vivos ou de identidade não confirmada). */
+  const byWorktree = (worktreeId) => (list() ?? []).filter((r) => r && r.kind === 'preparer' && r.worktreeId === worktreeId);
+
+  /**
+   * Reconfere os registros `preparer` de um worktree SEM encerrar nada: gone/reused => o registro sai (não há processo preparador ativo); qualquer outro
+   * resultado (vivo com identidade confirmada, unverified, kill_failed) => BLOQUEIA. A identidade é a de sempre (orphans.js): mesmo PID com hora de criação
+   * próxima da registrada; não prova que o processo é o npm correto.
+   */
+  function check(worktreeId) {
+    const mine = byWorktree(worktreeId);
+    if (!mine.length) return { blocking: [], released: [] };
+    const results = reclaimOrphans(mine.map((r) => ({ pid: r.pid, startedAt: r.startedAt })), { ...orphanTools, kill: () => {}, wait: () => false });
+    const blocking = [], released = [];
+    results.forEach((res, i) => {
+      if (res.outcome === 'gone' || res.outcome === 'reused') { released.push({ ...res, recordId: mine[i].id }); drop(mine[i]); } else blocking.push({ ...res, recordId: mine[i].id });
+    });
+    if (released.length) { try { store.save(); } catch { /* o registro restante é inofensivo */ } }
+    return { blocking, released };
+  }
+
+  return { track, reclaim, byWorktree, check, reclaimed: () => reclaimedOnce, lastOutcome: (worktreeId) => lastOutcome.get(worktreeId) ?? null, pending: () => [...(list() ?? [])] };
 }
