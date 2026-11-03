@@ -95,6 +95,103 @@ export async function treeOf(wtPath) {
   } finally { try { fs.rmSync(idx, { force: true }); } catch { /* temporário */ } }
 }
 
+// ---------- Marco E (E1): PLANO de preparação do ambiente do worktree (somente leitura; nada é instalado nem executado) ----------
+// O plano descreve o `npm ci` FUTURO a partir SÓ dos arquivos versionados do worktree (nunca do workspace principal) e tem um digest que cobre tudo o que importa
+// (identidade do worktree, manifesto, lockfile, .npmrc efetivo, comando fixo). Qualquer coisa fora do que é suportado é RECUSADA com motivo explícito.
+export const PREPARE_ARGS = Object.freeze(['ci', '--ignore-scripts', '--no-audit', '--no-fund']);
+const OTHER_LOCKS = ['pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock', 'npm-shrinkwrap.json'];
+const NPMRC_ALLOWED = new Set(['fund', 'audit', 'engine-strict', 'loglevel']); // chaves inofensivas; `registry` e `@escopo:registry` são tratadas à parte
+const NPMRC_SENSITIVE = /^\/\/|_auth|password|token|username/i;
+const DEFAULT_REGISTRY = 'https://registry.npmjs.org/';
+const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
+const refusal = (code, error) => ({ ok: false, status: 409, code, error });
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/** Lê um arquivo da raiz do worktree: precisa ser arquivo comum (nunca link) e pequeno. */
+function readRoot(dir, name, max) {
+  const f = path.join(dir, name); let st;
+  try { st = fs.lstatSync(f); } catch { return { missing: true }; }
+  if (!st.isFile() || st.isSymbolicLink()) return { unsafe: true };
+  if (st.size > max) return { tooBig: true };
+  try { return { buf: fs.readFileSync(f) }; } catch { return { unreadable: true }; }
+}
+/** .npmrc do PROJETO: só registry (https, sem credenciais) e poucas chaves inofensivas. Credenciais, variáveis de ambiente e qualquer outra chave => recusa (o valor nunca é repetido). */
+function parseNpmrc(text) {
+  const out = { registry: null, scoped: [] };
+  const url = (v) => { try { const u = new URL(v); return u.protocol === 'https:' && !u.username && !u.password && !u.search && !u.hash ? u.href : null; } catch { return null; } };
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim(); if (!line || line.startsWith('#') || line.startsWith(';')) continue;
+    const i = line.indexOf('='); if (i < 1) return { error: refusal('npmrc_invalid', 'O .npmrc tem uma linha que não é "chave=valor"; nada foi planejado.') };
+    const key = line.slice(0, i).trim(), val = line.slice(i + 1).trim().replace(/^(["'])(.*)\1$/, '$2');
+    if (NPMRC_SENSITIVE.test(key)) return { error: refusal('npmrc_sensitive', 'O .npmrc do projeto contém configuração de credencial (valor omitido); credenciais nunca fazem parte do plano. Remova-a do arquivo versionado.') };
+    if (/\$\{/.test(val)) return { error: refusal('npmrc_not_allowed', 'O .npmrc usa variável de ambiente; o resultado dependeria da máquina e não é reproduzível.') };
+    const scope = /^(@[a-z0-9-~][a-z0-9-._~]*):registry$/.exec(key);
+    if (key === 'registry' || scope) {
+      const u = url(val); if (!u) return { error: refusal('npmrc_invalid', `O registry do .npmrc (${scope ? scope[1] : 'padrão'}) não é uma URL https válida sem credenciais (valor omitido).`) };
+      if (scope) out.scoped.push({ scope: scope[1], url: u }); else out.registry = u;
+    } else if (!NPMRC_ALLOWED.has(key)) return { error: refusal('npmrc_not_allowed', `O .npmrc usa uma chave não permitida ("${clip(key, 40)}"); só registry, @escopo:registry, fund, audit, engine-strict e loglevel são aceitas.`) };
+  }
+  out.scoped.sort((a, b) => a.scope.localeCompare(b.scope));
+  return out;
+}
+/** Plano a partir do DIRETÓRIO do worktree. `id` identifica o worktree no digest. Nunca lança; nunca escreve. */
+export function planPrepare({ id, path: dir, branch, baseCommit }) {
+  try { return planPrepareUnsafe({ id, dir, branch, baseCommit }); } catch (e) { return refusal('plan_failed', `Não foi possível montar o plano (${clip(e?.message, 80)}); nada foi planejado.`); }
+}
+function planPrepareUnsafe({ id, dir, branch, baseCommit }) {
+  const mf = readRoot(dir, 'package.json', 1 << 20);
+  if (mf.missing) return refusal('package_json_missing', 'O worktree não tem package.json na raiz; não há o que preparar.');
+  if (mf.unsafe || mf.tooBig || mf.unreadable) return refusal('file_unsafe', 'O package.json da raiz não é um arquivo comum legível de tamanho razoável.');
+  for (const n of OTHER_LOCKS) if (fs.existsSync(path.join(dir, n))) return refusal('unsupported_manager', `Encontrado "${n}": só npm (package-lock.json) é suportado; nenhum outro gerenciador é usado como substituto.`);
+  let pkg; try { pkg = JSON.parse(mf.buf.toString('utf8')); } catch { return refusal('package_invalid', 'O package.json não é um JSON válido.'); }
+  if (!isObj(pkg)) return refusal('package_invalid', 'O package.json não é um objeto.');
+  if (typeof pkg.packageManager === 'string' && !/^npm@/.test(pkg.packageManager)) return refusal('unsupported_manager', `O package.json declara packageManager "${clip(pkg.packageManager, 40)}"; só npm é suportado.`);
+  if (pkg.workspaces !== undefined) return refusal('workspaces_unsupported', 'Projetos com "workspaces" ainda não são suportados na preparação.');
+  const lk = readRoot(dir, 'package-lock.json', 64 << 20);
+  if (lk.missing) return refusal('lockfile_missing', 'Falta o package-lock.json na raiz: sem lockfile a instalação não é reproduzível e nada foi planejado.');
+  if (lk.unsafe || lk.tooBig || lk.unreadable) return refusal('file_unsafe', 'O package-lock.json não é um arquivo comum legível de tamanho razoável.');
+  let lock; try { lock = JSON.parse(lk.buf.toString('utf8')); } catch { return refusal('lockfile_invalid', 'O package-lock.json não é um JSON válido.'); }
+  if (!isObj(lock) || ![2, 3].includes(lock.lockfileVersion) || !isObj(lock.packages) || !isObj(lock.packages[''])) return refusal('lockfile_invalid', 'O package-lock.json precisa ter lockfileVersion 2 ou 3 com a seção "packages".');
+  // consistência manifesto x lockfile (o que o `npm ci` exige), sem instalar nada
+  const map = (o, k) => (isObj(o?.[k]) ? o[k] : {});
+  const root = lock.packages[''], diff = [];
+  for (const s of ['dependencies', 'devDependencies', 'optionalDependencies']) { const a = map(pkg, s), b = map(root, s); for (const n of new Set([...Object.keys(a), ...Object.keys(b)])) if (a[n] !== b[n]) diff.push(`${s}:${clip(n, 60)}`); }
+  if (diff.length) return refusal('lockfile_inconsistent', `O package-lock.json não corresponde ao package.json (${diff.slice(0, 5).join(', ')}${diff.length > 5 ? ', …' : ''}); atualize o lockfile e versione-o.`);
+  const items = [];
+  for (const s of ['dependencies', 'devDependencies']) for (const [n, spec] of Object.entries(map(pkg, s))) items.push({ name: n, spec: clip(spec, 120), section: s });
+  items.sort((a, b) => a.name.localeCompare(b.name) || a.section.localeCompare(b.section));
+  const absent = items.filter((x) => !isObj(lock.packages[`node_modules/${x.name}`])).map((x) => x.name);
+  if (absent.length) return refusal('lockfile_inconsistent', `O package-lock.json não resolve: ${absent.slice(0, 5).join(', ')}.`);
+  // .npmrc do projeto (opcional)
+  const rc = readRoot(dir, '.npmrc', 64 << 10);
+  let npmrc = { present: false, sha256: null, registry: { url: DEFAULT_REGISTRY, source: 'default' }, scopedRegistries: [] };
+  if (rc.unsafe || rc.tooBig || rc.unreadable) return refusal('file_unsafe', 'O .npmrc não é um arquivo comum legível de tamanho razoável.');
+  if (rc.buf) { const p = parseNpmrc(rc.buf.toString('utf8')); if (p.error) return p.error; npmrc = { present: true, sha256: sha256(rc.buf), registry: p.registry ? { url: p.registry, source: '.npmrc' } : npmrc.registry, scopedRegistries: p.scoped }; }
+  // hosts de onde o lockfile manda baixar
+  const hosts = new Set(), odd = new Set(); let nonHttps = false;
+  const nameOf = (k) => k.replace(/^.*node_modules\//, '');
+  for (const [k, v] of Object.entries(lock.packages)) {
+    if (!isObj(v)) continue;
+    if (typeof v.resolved === 'string') { try { const u = new URL(v.resolved); hosts.add(u.host); if (u.protocol !== 'https:') nonHttps = true; if (/^git/.test(u.protocol) || /^git\+/.test(v.resolved)) odd.add(nameOf(k)); } catch { odd.add(nameOf(k)); } }
+    if (v.link === true) odd.add(nameOf(k));
+  }
+  const warnings = ['Usa a rede: o `npm ci` baixa código de terceiros.', 'Roda com --ignore-scripts: scripts de instalação não são executados; pacotes que dependem deles (build nativo) podem ficar incompletos.'];
+  const defHost = new URL(npmrc.registry.url).host;
+  if (npmrc.registry.source !== 'default') warnings.push(`Registry diferente do padrão: ${npmrc.registry.url}`);
+  if (npmrc.scopedRegistries.length) warnings.push(`Registries por escopo: ${npmrc.scopedRegistries.map((x) => `${x.scope} → ${x.url}`).join(', ')}`);
+  if ([...hosts].some((h) => h !== defHost && !npmrc.scopedRegistries.some((x) => new URL(x.url).host === h))) warnings.push('O lockfile baixa de hosts diferentes do registry configurado.');
+  if (nonHttps) warnings.push('O lockfile contém URLs que não são https.');
+  if (odd.size) warnings.push(`Dependências de fonte não-registry (git/link): ${[...odd].sort().slice(0, 5).join(', ')}.`);
+  const plan = {
+    v: 1, worktree: { id, path: norm(dir), branch, baseCommit }, manager: 'npm', args: [...PREPARE_ARGS], command: `npm ${PREPARE_ARGS.join(' ')}`,
+    manifest: { sha256: sha256(mf.buf) }, lockfile: { name: 'package-lock.json', version: lock.lockfileVersion, packages: Object.keys(lock.packages).length, sha256: sha256(lk.buf) },
+    dependencies: { count: items.length, items }, npmrc, resolvedHosts: [...hosts].sort(), warnings,
+  };
+  const digest = sha256(JSON.stringify(plan));
+  const notes = fs.existsSync(path.join(dir, 'node_modules')) ? ['O worktree já tem node_modules: o `npm ci` o removeria e reinstalaria (o plano não apaga nada).'] : [];
+  return { ok: true, plan, digest, notes };
+}
+
 /** `runGit` existe para os testes injetarem falhas do Git (ausente, tempo esgotado, saída inválida); o servidor usa sempre o Git real. */
 export function createWorktreeManager({ db, root = null, now = store.now, runGit = git } = {}) {
   db.worktrees ??= [];
@@ -229,6 +326,15 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
       if (head.head === r.baseCommit && st.state === 'clean') { audit(r, 'reused'); saveSoft(); return { ok: true, record: r, created: false }; }
     }
     return create({ mission: m, workspace });
+  }
+
+  /** E1: plano de preparação (somente leitura; não altera o registro nem o worktree). Só para ambientes parados e íntegros no Git. */
+  async function planPrepareFor(id) {
+    const r = get(id); if (!r) return fail(404, 'Worktree não encontrado.');
+    if (r.op || !['ready', 'finished'].includes(r.state)) return refusal('worktree_not_preparable', `O worktree está em "${r.state}"${r.op ? ` (operação ${r.op.kind} em andamento)` : ''}; o plano só vale com ele parado.`);
+    const problems = await inspect(r);
+    if (problems.length) return refusal('worktree_invalid', `O worktree não passou na validação (${problems.map((p) => p.code).join(', ')}); nada foi planejado.`);
+    return planPrepare(r);
   }
 
   const link = (id, cycleId) => { const r = get(id); if (!r) return false; r.cycleId = cycleId; audit(r, cycleId ? 'linked' : 'unlinked', { cycleId }); return true; };
@@ -582,7 +688,7 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
     integratedCommit: r.integratedCommit ?? null, state: r.state, op: r.op ? { kind: r.op.kind, at: r.op.at } : null, current: r.current, baseDirty: !!r.baseDirty, diagnostic: r.diagnostic ?? null, rounds: (r.rounds ?? []).slice(-5), attempts: (r.attempts ?? []).slice(-5), history: (r.history ?? []).slice(-20), createdAt: r.createdAt, updatedAt: r.updatedAt });
   const list = ({ missionId = null } = {}) => all().filter((r) => !missionId || r.missionId === missionId).map(describe);
 
-  return { create, ensureFor, link, get, list, describe, workspaceFor, environmentFor, markInUse, noteRound, release, check, snapshot, integrate, cleanup, revalidate, recover, inspect };
+  return { create, ensureFor, planPrepare: planPrepareFor, link, get, list, describe, workspaceFor, environmentFor, markInUse, noteRound, release, check, snapshot, integrate, cleanup, revalidate, recover, inspect };
 }
 
 // ---------- API ----------
@@ -595,5 +701,11 @@ export function setupWorktrees(app, { db, manager }) {
   app.post('/api/worktrees/:id/snapshot', asyncRoute(async (req, res) => reply(res, 200)(await manager.snapshot(req.params.id, { message: body(req).message }))));
   app.post('/api/worktrees/:id/integrate', asyncRoute(async (req, res) => reply(res, 200, (r) => ({ attempt: r.attempt }))(await manager.integrate(req.params.id, { digest: body(req).digest, authorizedBy: 'user' }))));
   app.post('/api/worktrees/:id/cleanup', asyncRoute(async (req, res) => reply(res, 200, (r) => ({ branchDeleted: r.branchDeleted }))(await manager.cleanup(req.params.id))));
+  // E1: somente leitura (nada é gravado nem executado); devolve o plano e o digest, ou a recusa com o código e o motivo.
+  app.post('/api/worktrees/:id/prepare/plan', asyncRoute(async (req, res) => {
+    const r = await manager.planPrepare(req.params.id);
+    if (r.ok) return res.json({ plan: r.plan, digest: r.digest, notes: r.notes });
+    return res.status(r.status).json({ error: r.error, ...(r.code ? { code: r.code } : {}) });
+  }));
   app.post('/api/worktrees/:id/revalidate', asyncRoute(async (req, res) => reply(res, 200, (r) => ({ problems: r.problems, recovered: !!r.recovered, recoveredTo: r.recoveredTo ?? null, inconclusive: !!r.inconclusive, blocked: r.blocked ?? null }))(await manager.revalidate(req.params.id))));
 }
