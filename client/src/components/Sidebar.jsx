@@ -121,8 +121,11 @@ export default function Sidebar({ modal = false, collapsed = false, onToggle, on
       </nav>
 
       <div className="oc-side-foot">
-        <button type="button" className="oc-gear" onClick={onOpenSettings} aria-label="Configurações" title="Configurações"><Icon name="gear" size={18} /></button>
-        <span className="oc-me side-label"><span className="oc-avatar" aria-hidden="true">{initials}</span><span className="oc-me-t"><b>{prefs.name || 'Você'}</b>{state && <AgentsPopover className="dim small oc-sum" title="Agentes por provider (todos os ambientes)">{sum || 'nenhum terminal ativo'}</AgentsPopover>}</span></span>
+        {state && <AgentsPopover className="oc-sum" tone={totals.working ? 'work' : totals.running ? 'live' : 'none'} title="Agentes por provider (todos os ambientes)"><span className="oc-agents-t side-label">{sum || 'nenhum terminal ativo'}</span><span className="oc-agents-n">{totals.running}</span></AgentsPopover>}
+        <div className="oc-side-user">
+          <button type="button" className="oc-gear" onClick={onOpenSettings} aria-label="Configurações" title="Configurações"><Icon name="gear" size={18} /></button>
+          <span className="oc-me side-label"><span className="oc-avatar" aria-hidden="true">{initials}</span><span className="oc-me-t"><b>{prefs.name || 'Você'}</b></span></span>
+        </div>
       </div>
     </aside>
   );

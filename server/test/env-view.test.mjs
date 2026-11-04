@@ -14,7 +14,7 @@ test('friendlyNames: usa o nome do workspace ou a pasta; nomes repetidos ganham 
   assert.equal(m.get('c'), 'app (clientes)'); assert.equal(m.get('d'), 'App (interno)');
 });
 
-test('environments: só aparecem workspaces com sessão ou o ativo; contadores e atenção vêm dos dados reais', () => {
+test('environments: todos os workspaces cadastrados aparecem; contadores e atenção vêm dos dados reais', () => {
   const workspaces = [ws('a', 'A', '/a'), ws('b', 'B', '/b'), ws('c', 'C', '/c')];
   const sessions = [sess('t1', 'a'), sess('t2', 'a', { status: 'exited', exitCode: 1 }), sess('t3', 'a', { status: 'exited', exitCode: null }), sess('t4', 'b')];
   const out = environments({ workspaces, sessions, activeId: 'c', workingIds: new Set(['t1']), maestroTasks: [{ status: 'pending', to: 't4' }, { status: 'done', to: 't1' }, { status: 'pending', to: 'inexistente' }] });
@@ -23,7 +23,12 @@ test('environments: só aparecem workspaces com sessão ou o ativo; contadores e
   assert.deepEqual([a.total, a.running, a.working, a.exited, a.failed, a.pendingTasks, a.attention], [3, 1, 1, 2, 1, 0, true], 'saída com código 1 pede atenção; encerrado sem código (fechado por você) não');
   assert.deepEqual([b.running, b.pendingTasks, b.attention], [1, 1, true], 'tarefa do maestro aguardando aprovação num pane do ambiente');
   assert.deepEqual([c.total, c.active, c.attention], [0, true, false], 'o ativo aparece mesmo sem sessões');
-  assert.deepEqual(environments({ workspaces, sessions: [], activeId: null }), [], 'sem sessões e sem ativo: nada é inventado');
+  const semSessoes = environments({ workspaces, sessions: [], activeId: null });
+  assert.deepEqual(semSessoes.map((e) => e.id), ['a', 'b', 'c'], 'workspace sem sessão continua na lista (trocar de ambiente não o remove)');
+  assert.ok(semSessoes.every((e) => e.total === 0 && !e.active && !e.attention), 'sem sessões: contadores zerados, nada inventado');
+  const trocado = environments({ workspaces, sessions, activeId: 'b' });
+  assert.deepEqual(trocado.map((e) => [e.id, e.active]), [['a', false], ['b', true], ['c', false]], 'só muda qual está ativo; cada um mantém as suas sessões');
+  assert.equal(trocado[0].total, 3);
   assert.deepEqual(environments(), [], 'sem dados');
 });
 

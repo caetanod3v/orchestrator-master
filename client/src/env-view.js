@@ -1,5 +1,5 @@
 // Visão derivada dos terminais para a sidebar e para a grade do Cockpit. PURA (sem React, sem rede): só reorganiza dados REAIS do servidor
-// (workspaces, sessões de /api/terminals e tarefas do maestro). Nada é inventado: um ambiente só aparece se há sessão nele ou se é o workspace ativo.
+// (workspaces, sessões de /api/terminals e tarefas do maestro). Nada é inventado: cada workspace cadastrado é um ambiente, sempre visível; trocar de ambiente só muda qual está ativo.
 
 const base = (p) => String(p ?? '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(p ?? '');
 const parent = (p) => { const parts = String(p ?? '').replace(/[\\/]+$/, '').split(/[\\/]/); return parts.length > 1 ? parts.at(-2) : ''; };
@@ -15,7 +15,7 @@ export function friendlyNames(workspaces) {
 const failedExit = (s) => s.status !== 'running' && Number.isInteger(s.exitCode) && s.exitCode !== 0;
 
 /**
- * Ambientes da sidebar, na ordem de cadastro dos workspaces (estável: a lista não "pula" enquanto os agentes trabalham).
+ * Ambientes da sidebar: TODOS os workspaces cadastrados, na ordem de cadastro dos workspaces (estável: a lista não "pula" enquanto os agentes trabalham).
  * @returns {{id:string, name:string, path:string, active:boolean, total:number, running:number, working:number, exited:number, failed:number, pendingTasks:number, attention:boolean}[]}
  */
 export function environments({ workspaces = [], sessions = [], activeId = null, workingIds = new Set(), maestroTasks = [] } = {}) {
@@ -31,8 +31,7 @@ export function environments({ workspaces = [], sessions = [], activeId = null, 
         id: w.id, name: names.get(w.id), original: String(w.name ?? '').trim() || base(w.path), renamed: !!String(w.displayName ?? '').trim(), path: w.path, active: w.id === activeId, total: mine.length, running: running.length,
         working: running.filter((s) => workingIds.has(s.id)).length, exited: mine.length - running.length, failed, pendingTasks, attention: failed > 0 || pendingTasks > 0,
       };
-    })
-    .filter((e) => e.total > 0 || e.active);
+    });
 }
 
 /** Estado visual de um pane, só a partir do que o servidor informa: encerrado (com ou sem falha), trabalhando (a saída cresceu) ou ocioso. */

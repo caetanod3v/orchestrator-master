@@ -255,7 +255,7 @@ export default function TerminalGrid({ narrow = false, onMenu, menuRef, onOpenWo
           </label>
           <span className="oc-total" title={total.partialCost ? 'Há panes sem custo conhecido: o total em dólares não é exibido. Crie data/pricing.json com os preços por modelo (USD por milhão de tokens) para ver o custo.' : total.cost === '—' ? 'Custo indisponível: crie data/pricing.json com os preços por modelo (USD por milhão de tokens).' : 'Soma dos terminais deste ambiente'}>{total.tokens} tok · {total.cost}</span>
           {mine.length > 1 && <Btn kind="quiet" disabled={busy} onClick={closeAll} title="Encerra e remove todos os terminais deste ambiente">Encerrar todos</Btn>}
-          <AgentsPopover className="oc-count" title={`${live} de ${terminals?.maxSessions ?? '…'} terminais no total (todos os ambientes). Clique para ver os agentes por provider.`}>{liveMine} {liveMine === 1 ? 'ativo' : 'ativos'}</AgentsPopover>
+          <AgentsPopover className="oc-count" tone={mine.some((x) => x.status === 'running' && workingIds.has(x.id)) ? 'work' : liveMine ? 'live' : 'none'} title={`${live} de ${terminals?.maxSessions ?? '…'} terminais no total (todos os ambientes). Clique para ver os agentes por provider.`}><span className="oc-agents-t">{liveMine} {liveMine === 1 ? 'ativo' : 'ativos'}</span></AgentsPopover>
         </>}
         </div>
       </div>

@@ -73,15 +73,16 @@
 .oc-env-empty { padding: var(--sp-3) var(--sp-2); color: var(--dim); font-size: var(--fs-sm); } .oc-env-empty p { margin: 0 0 var(--sp-2); }
 .oc-link { background: none; border: 0; padding: 0; color: var(--brand); font: inherit; font-size: var(--fs-sm); cursor: pointer; text-decoration: none; } .oc-link:hover { text-decoration: underline; }
 
-.oc-side-foot { flex: none; display: flex; align-items: center; gap: var(--sp-2); padding-top: var(--sp-3); border-top: 1px solid var(--coal-line); }
-.oc-side.collapsed .oc-side-foot { justify-content: center; }
+.oc-side-foot { flex: none; display: flex; flex-direction: column; align-items: stretch; gap: var(--sp-2); padding-top: var(--sp-3); border-top: 1px solid var(--coal-line); }
+.oc-side-user { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.oc-side.collapsed .oc-side-foot { align-items: center; } .oc-side.collapsed .oc-side-user { justify-content: center; }
 .oc-gear { flex: none; display: inline-grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: var(--r-2); background: transparent; color: var(--dim); cursor: pointer; transition: color var(--dur-ui) ease, background-color var(--dur-ui) ease, transform var(--dur-ui) var(--ease); }
 .oc-gear svg { transition: transform .5s var(--ease); }
 .oc-gear:hover { color: var(--brand); background: var(--coal-2); } .oc-gear:hover svg { transform: rotate(75deg); }
 .oc-gear:active { transform: scale(.92); }
 .oc-me { flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-2); }
 .oc-avatar { flex: none; display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--coal-3); color: var(--strong); font-family: var(--mono); font-size: 11px; font-weight: 600; box-shadow: inset 0 0 0 1px var(--coal-line); }
-.oc-me-t { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; font-size: var(--fs-sm); } .oc-me-t b { font-weight: 500; color: var(--strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .oc-me-t .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oc-me-t { min-width: 0; display: flex; flex-direction: column; line-height: 1.3; font-size: var(--fs-sm); } .oc-me-t b { font-weight: 500; color: var(--strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- indicadores vivos ---------- */
 .oc-eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 11px; }
@@ -175,9 +176,21 @@ input:focus-visible + .oc-switch-track { outline: 2px solid var(--focus); outlin
 .oc-gutter:hover::after, .oc-gutter:focus-visible::after, .oc-grid.dragging .oc-gutter:active::after { background: var(--brand); box-shadow: var(--glow-sm); }
 
 /* ---------- agentes por provider (popover do indicador "N ativos") ---------- */
-.oc-agents-btn { display: inline-flex; align-items: center; max-width: 100%; padding: 2px 6px; margin: -2px -6px; border: 0; border-radius: var(--r-1); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background-color var(--dur-ui) ease, color var(--dur-ui) ease; }
-.oc-agents-btn:hover, .oc-agents-btn[aria-expanded="true"] { background: var(--coal-3); color: var(--strong); }
-.oc-agents-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.oc-agents-btn { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 30px; padding: 0 8px 0 11px; margin: 0; border: 0; border-radius: 999px; background: var(--coal-2); color: var(--strong); font: inherit; font-size: var(--fs-sm); line-height: 1.2; text-align: left; cursor: pointer; white-space: nowrap; box-shadow: inset 0 0 0 1px var(--line-strong); transition: background-color var(--dur-ui) ease, box-shadow var(--dur-ui) ease, transform var(--dur-ui) var(--ease); }
+.oc-agents-btn:hover { background: var(--coal-3); box-shadow: inset 0 0 0 1px var(--brand-line); }
+.oc-agents-btn:active { transform: scale(.98); }
+.oc-agents-btn[aria-expanded="true"] { background: var(--brand-bg); box-shadow: inset 0 0 0 1px var(--brand); }
+.oc-agents-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.oc-agents-t { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.oc-agents-n { display: none; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.oc-agents-chev { flex: none; display: inline-grid; place-items: center; color: var(--dim); transition: transform var(--dur-3) var(--ease), color var(--dur-ui) ease; }
+.oc-agents-btn:hover .oc-agents-chev, .oc-agents-btn[aria-expanded="true"] .oc-agents-chev { color: var(--brand); } .oc-agents-btn[aria-expanded="true"] .oc-agents-chev { transform: rotate(180deg); }
+.oc-sum { width: 100%; }
+.oc-side.collapsed .oc-sum { width: auto; padding: 0 10px; } .oc-side.collapsed .oc-agents-n { display: inline; } .oc-side.collapsed .oc-agents-chev { display: none; }
+.oc-ind { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--muted)); transition: background-color var(--dur-4, .35s) ease, filter var(--dur-4, .35s) ease; }
+.oc-ind::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--dot); opacity: 0; pointer-events: none; }
+.oc-ind.tone-live { --dot: var(--ok); --pulse: 3.4s; --ring: .45; } .oc-ind.tone-work { --dot: var(--run); --pulse: 1.3s; --ring: .65; filter: drop-shadow(0 0 3px var(--dot)); }
+.oc-ind.tone-live::after, .oc-ind.tone-work::after { animation: oc-ring var(--pulse, 2.4s) cubic-bezier(.2, .6, .3, 1) infinite; }
 .oc-pop { position: fixed; z-index: var(--z-toast, 60); overflow: auto; display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); background: var(--coal-1); border-radius: var(--r-3); box-shadow: 0 0 0 1px var(--coal-line), var(--shadow-pop); outline: none; animation: oc-pop var(--dur-2) var(--ease) both; }
 .oc-pop-h { margin: 0; display: flex; flex-direction: column; gap: 2px; } .oc-pop-h b { font-family: var(--mono); font-size: var(--caps-size); letter-spacing: var(--caps-track); text-transform: uppercase; color: var(--faint); font-weight: 500; } .oc-pop-h span { font-size: var(--fs-sm); color: var(--strong); }
 .oc-pop-empty { margin: 0; font-size: var(--fs-sm); color: var(--dim); }
@@ -221,6 +234,10 @@ input:focus-visible + .oc-switch-track { outline: 2px solid var(--focus); outlin
 .oc-pane.has-wait:not(.st-failed):not(:focus-within) { box-shadow: inset 0 0 0 1px rgba(252, 187, 0, .35); }
 .oc-pane .oc-ph { flex-wrap: nowrap; overflow: hidden; }
 @media (max-width: 640px) { .oc-ph .oc-ptag:not(.wt) { display: none; } .oc-pwait-t { max-width: 14ch; } }
+
+/* cursor do terminal: seta comum (o xterm usa o de texto em toda a área); a seleção de texto continua funcionando. Link clicável mantém a mão. */
+.oc-pbody, .oc-pbody .xterm, .oc-pbody .xterm-screen, .oc-pbody .xterm-viewport, .oc-pbody .xterm-rows { cursor: default; }
+.oc-pbody .xterm.xterm-cursor-pointer, .oc-pbody .xterm.xterm-cursor-pointer .xterm-screen { cursor: pointer; }
 
 /* ---------- estados vazios ---------- */
 .oc-empty { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-3); padding: var(--sp-6); text-align: center; animation: oc-fade var(--dur-3) ease both; }

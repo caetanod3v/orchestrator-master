@@ -31,7 +31,7 @@ function Body({ rows, sessions }) {
 
 /** Indicador "N ativos" que abre o painel de agentes por provider (sessões reais, todos os ambientes). Sem espaço fixo: o painel é um popover fixo na janela, que se
  *  encaixa na tela (abre para cima se o gatilho está na metade de baixo) e fecha com clique fora ou Esc. Esc é capturado antes da gaveta da sidebar. */
-export default function AgentsPopover({ className = '', title, children }) {
+export default function AgentsPopover({ className = '', title, tone = 'none', children }) {
   const { terminals, workingIds } = useStore();
   const sessions = terminals?.sessions ?? [];
   const rows = useMemo(() => providerSummary(sessions, workingIds), [sessions, workingIds]);
@@ -61,7 +61,7 @@ export default function AgentsPopover({ className = '', title, children }) {
 
   return (
     <>
-      <button type="button" ref={btn} className={`oc-agents-btn ${className}`} aria-haspopup="dialog" aria-expanded={open} title={title ?? 'Agentes por provider'} onClick={() => setOpen((o) => !o)}>{children}</button>
+      <button type="button" ref={btn} className={`oc-agents-btn ${className}`} aria-haspopup="dialog" aria-expanded={open} title={title ?? 'Agentes por provider'} onClick={() => setOpen((o) => !o)}><i className={`oc-ind tone-${tone}`} aria-hidden="true" />{children}<span className="oc-agents-chev" aria-hidden="true"><Icon name="chevronUp" size={13} /></span></button>
       {open && <div ref={pop} className="oc-pop" role="dialog" aria-label="Agentes por provider" tabIndex={-1} style={pos ?? { visibility: 'hidden' }}><Body rows={rows} sessions={sessions} /></div>}
     </>
   );
