@@ -307,6 +307,13 @@ app.put('/api/settings', (req, res) => {
 // ---------- Frontend buildado (opcional) ----------
 const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'client', 'dist');
 if (fs.existsSync(dist)) {
+  // CSP restritiva na interface (a UI renderiza saída de terminal e texto de agentes; um XSS alcançaria a API local sem autenticação). O bundle não usa eval, script inline nem hosts externos; 'unsafe-inline' só em estilos (atributos style do React).
+  const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+  app.use((req, res, next) => {
+    if (req.path === '/api' || req.path.startsWith('/api/') || req.path === '/mcp' || req.path.startsWith('/mcp/')) return next();
+    res.setHeader('Content-Security-Policy', CSP); res.setHeader('X-Content-Type-Options', 'nosniff'); res.setHeader('X-Frame-Options', 'DENY'); res.setHeader('Referrer-Policy', 'no-referrer');
+    next();
+  });
   app.use(express.static(dist));
   app.get(/^(?!\/api)(?!\/mcp(?:\/|$)).*/, (req, res) => res.sendFile(path.join(dist, 'index.html'))); // /mcp nunca cai no SPA: o cliente MCP espera 405/401, não HTML
 }

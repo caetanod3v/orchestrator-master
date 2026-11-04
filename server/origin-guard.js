@@ -19,15 +19,22 @@ export function isAllowedHost(host) {
 }
 
 /** `Origin` por parsing de URL: http/https, host localhost/127.0.0.1, sem credenciais, caminho, consulta ou forma não canônica (ex.: `127.1`, `localhost:80`). */
-export function isAllowedOrigin(origin) {
+export function isAllowedOrigin(origin, ports) {
   if (typeof origin !== 'string' || !origin) return false;
   let u;
   try { u = new URL(origin); } catch { return false; }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
   if (u.username || u.password) return false;
   if (!HOSTS.has(u.hostname)) return false;
+  // `ports` (opcional): só as portas do próprio servidor e do Vite; outra página local (outro dev server, preview) não é a interface (CSRF por página local)
+  if (ports && !ports.has(u.port || (u.protocol === 'https:' ? '443' : '80'))) return false;
   return u.origin === origin.toLowerCase(); // compara a forma canônica: rejeita caminho, barra final, porta padrão explícita e hosts normalizados
 }
+
+const VITE_PORT = '5173';
+/** Portas de Origin aceitas: a do próprio Host da requisição (mesma origem; o navegador não forja o Host, já validado) e a do Vite em desenvolvimento (5173).
+ *  Limite conhecido: uma página servida em localhost:5173 (outro projeto Vite) passa por este guard; no app desktop o token de sessão (session-token.js) cobre esse caso. */
+const originPorts = (host) => new Set([/:([0-9]{1,5})$/.exec(host ?? '')?.[1] ?? '80', VITE_PORT]);
 
 export function isMutatingMethod(method) {
   return MUTATING.has(String(method ?? '').toUpperCase());
@@ -38,7 +45,7 @@ export function apiGuard(req, res, next) {
   if (!isAllowedHost(req.get('host'))) return res.status(403).json({ error: 'Host não permitido.' });
   const origin = req.get('origin');
   if (origin !== undefined) {
-    if (!isAllowedOrigin(origin)) return res.status(403).json({ error: 'Origem não permitida.' });
+    if (!isAllowedOrigin(origin, originPorts(req.get('host')))) return res.status(403).json({ error: 'Origem não permitida.' });
   } else if (isMutatingMethod(req.method)) {
     return res.status(403).json({ error: 'Requisições que alteram estado só são aceitas com Origin válido (a partir da interface).' });
   }

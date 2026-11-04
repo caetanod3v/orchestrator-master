@@ -111,3 +111,31 @@ test('caminho de evidência: sem verificações reais no workspace, toda etapa p
   assert.match(evidencePathProblem(steps, { verifications: [] }), /"b".*não declaram "expectedFiles"/); assert.match(evidencePathProblem(steps, {}), /nada independente do Executor/);
   assert.equal(evidencePathProblem(steps, { verifications: [{ script: 'test' }] }), null); assert.equal(evidencePathProblem([{ id: 'a', expectedFiles: ['a.txt'] }], { verifications: [] }), null);
 });
+
+// ---------- o NOME sozinho não faz de um arquivo um mecanismo de validação ----------
+test('categoryOf: arquivo de texto/documento/dados de exibição com "test"/"spec" no nome é entregável; código de teste, diretório de testes e configuração continuam vigiados', () => {
+  for (const p of ['orchestrator-worktree-test.txt', 'notes_test.txt', 'meu.test.md', 'smoke-test.html', 'page.spec.css', 'resultado-test.csv', 'print.test.png', 'sub/dir/relatorio-test.log', 'LEIAME.spec.pdf']) assert.equal(categoryOf(p), null, `${p} é um arquivo comum`);
+  for (const p of ['a.test.js', 'a-test.mjs', 'x.spec.ts', 'a_test.py', 'test_a.py', 'pkg/conftest.py', 'a_test.go', 'cases.test.json', 'suite.spec.yml']) assert.equal(categoryOf(p), 'test', `${p} continua vigiado`);
+  for (const p of ['tests/notes.txt', 'test/dados.csv', 'src/__tests__/leia.md', 'e2e/screenshot.png', 'spec/fixtures/x-test.txt']) assert.equal(categoryOf(p), 'test', `${p}: diretório de testes continua vigiado`);
+  for (const p of ['package.json', 'tsconfig.json', 'jest.config.js', '.mocharc.yml', 'Makefile', '.github/workflows/ci.yml']) assert.equal(categoryOf(p), 'config', p);
+});
+
+test('snapshot: um entregável "orchestrator-worktree-test.txt" criado NÃO é adulteração; testes, scripts referenciados e configuração alterados continuam sendo detectados', () => {
+  const d = ws({ 'tests/old.test.js': 't1', 'package.json': '{"scripts":{"test":"node scripts/run-checks.js notes-test.txt"}}', 'scripts/run-checks.js': 'r1', 'notes-test.txt': 'n1', 'jest.config.js': 'c1' });
+  const cmds = ['node scripts/run-checks.js notes-test.txt'], a = snapshotWorkspace(d, { commands: cmds });
+  assert.deepEqual(Object.keys(a.files).sort(), ['jest.config.js', 'notes-test.txt', 'package.json', 'scripts/run-checks.js', 'tests/old.test.js'], 'o que o script aprovado referencia continua vigiado, mesmo com nome de texto');
+  assert.equal(a.files['notes-test.txt'].cat, 'referenced');
+  // 1) entregável pedido pelo usuário (nome com "test", extensão de texto): não entra no instantâneo => nenhuma diferença
+  put(d, 'orchestrator-worktree-test.txt', 'conteúdo pedido'); put(d, 'src/index.js', 'código comum'); put(d, 'resultado.txt', 'outro entregável');
+  const b = snapshotWorkspace(d, { commands: cmds }); assert.deepEqual(diffHashes(hashesOf(a), hashesOf(b)), [], 'criar entregáveis não é adulteração da validação'); assert.equal('orchestrator-worktree-test.txt' in b.files, false);
+  // 2) o que valida o trabalho continua acionando a detecção
+  const changes = (mut) => { const d2 = ws({ 'tests/old.test.js': 't1', 'package.json': '{"scripts":{"test":"node scripts/run-checks.js notes-test.txt"}}', 'scripts/run-checks.js': 'r1', 'notes-test.txt': 'n1', 'jest.config.js': 'c1' }); const x = snapshotWorkspace(d2, { commands: cmds }); mut(d2); return diffHashes(hashesOf(x), hashesOf(snapshotWorkspace(d2, { commands: cmds }))).map((c) => `${c.path}:${c.change}:${c.category}`); };
+  assert.deepEqual(changes((x) => put(x, 'tests/old.test.js', 't2')), ['tests/old.test.js:modified:test'], 'teste existente alterado');
+  assert.deepEqual(changes((x) => put(x, 'tests/novo.test.js', 'n')), ['tests/novo.test.js:created:test'], 'teste novo');
+  assert.deepEqual(changes((x) => put(x, 'src/a.test.js', 'n')), ['src/a.test.js:created:test'], 'teste por nome, em código');
+  assert.deepEqual(changes((x) => put(x, 'scripts/run-checks.js', 'r2')), ['scripts/run-checks.js:modified:referenced'], 'script de validação alterado');
+  assert.deepEqual(changes((x) => put(x, 'notes-test.txt', 'n2')), ['notes-test.txt:modified:referenced'], 'texto referenciado pelo script aprovado');
+  assert.deepEqual(changes((x) => put(x, 'jest.config.js', 'c2')), ['jest.config.js:modified:config'], 'configuração que influencia a comprovação');
+  assert.deepEqual(changes((x) => put(x, 'package.json', '{"scripts":{"test":"echo ok"}}')), ['package.json:modified:config'], 'package.json');
+  assert.deepEqual(changes((x) => put(x, 'tests/notes.txt', 'fixture')), ['tests/notes.txt:created:test'], 'qualquer arquivo em diretório de testes');
+});

@@ -31,9 +31,10 @@ import { MAX_PLAN_STEPS, validatePlanSteps } from './cycle-schema.js';
 import { snapshotWorkspace, hashesOf, diffHashes, checkExpected, inheritableChanges, buildEvidence, evidencePathProblem, CATEGORY_LABEL } from './evidence.js';
 import { gitChanges } from './git.js';
 import { syncPlan, nextStep, openSteps, planProblem, dependencyTaskIds, planProgress, newPlan, retryCandidate, retryClass, retriesUsed, MAX_STEP_ATTEMPTS, MAX_STEP_RETRIES } from './plan.js';
-import { evaluateTask, actionDigest, approvalProblem } from './policy.js';
+import { evaluateTask, actionDigest, approvalProblem, preAuthProblem } from './policy.js';
 import { superviseRound, autoResumeDecision, timeExceeded, stallExceeded, controlMemory, transitionApplied, CONTROL_SIGS_MAX, AUTO_RESUMABLE, SUPERVISION_LOG_MAX } from './supervisor.js';
 import { closingContext, acceptanceDigest } from './delivery.js';
+import { scopeSnapshot, scopeCheck } from './scope.js';
 
 // O que precisa acontecer para um ciclo parado por limite poder retomar. Os limites vêm do ambiente do servidor; a retomada nunca os altera.
 const LIMIT_HINT = {
@@ -582,7 +583,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const c = m.cycle, rep = round.report; if (!rep) return;
     const st = round.integrity?.status ?? 'unknown';
     rep.evidence = buildEvidence({ report: rep, verification: roundVerification(round), configured: (wsOf(m)?.verifications || []).length, expectedResults: rep.evidence?.system?.expectedFiles ?? null,
-      integrity: { status: st, reason: round.integrity?.reason, pending: st === 'flagged' ? (c.integrity?.pending ?? []) : [] } });
+      integrity: { status: st, reason: round.integrity?.reason, pending: st === 'flagged' ? (c.integrity?.pending ?? []) : [] }, scope: round.scope ?? null }); // o desvio de escopo gravado na rodada NUNCA some numa reavaliação
     rep.evidence.at = store.now();
   }
 
@@ -592,8 +593,19 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
    *  - integridade: testes/configuração comparados por CONTEÚDO com o estado de referência do ciclo (c.integrity.baseline); o que difere fica PENDENTE até revisão humana.
    * `before`: instantâneo de antes da execução (null na re-verificação, quando só se reavalia o estado atual).
    */
-  function assessRound(m, round, before) {
+  /** Escopo da rodada (scope.js): arquivos sensíveis/de segredo que MUDARAM de fato x o que a etapa autorizou (expectedFiles + o que uma aprovação humana desta ação cobriu). Gravado na rodada; só nomes. */
+  function scopeOf(m, round, scopeBefore) {
+    const ws = wsOf(m), expected = round.plan?.expectedFiles ?? [];
+    let approvedSubjects = [];
+    if (round.policy?.authorizedBy === 'user') { // só uma aprovação humana desta ação amplia o escopo; mencionar o arquivo no texto não
+      try { approvedSubjects = evaluateTask({ title: round.plan?.title, instructions: round.plan?.instructions ?? '', acceptance: round.plan?.acceptance ?? [], expectedFiles: expected }, { workspace: ws, protectedDirs: [store.dataDir] }).rules.filter((r) => r.id === 'sensitive_files' || r.id === 'secret_files').flatMap((r) => r.subjects ?? []); } catch { approvedSubjects = []; }
+    }
+    return { ...scopeCheck({ before: scopeBefore, after: ws ? scopeSnapshot(ws.path) : null, expected, approvedSubjects }), at: store.now() };
+  }
+
+  function assessRound(m, round, before, scopeBefore) {
     const c = m.cycle, expected = round.plan?.expectedFiles ?? [], after = snapOf(m, expected);
+    if (scopeBefore !== undefined) round.scope = scopeOf(m, round, scopeBefore); // só logo depois da execução; a re-verificação não recalcula (o desvio gravado vale)
     let integrity;
     if (!after) integrity = { status: 'unknown', reason: 'não foi possível ler o workspace', changes: [] };
     else if (!after.complete) integrity = { status: 'unknown', reason: 'o workspace tem arquivos demais (ou ilegíveis) para vigiar os testes com segurança', changes: [] };
@@ -620,7 +632,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     round.integrity = integrity;
     const prior = round.report?.evidence?.system?.expectedFiles ?? [];
     const results = expected.length && after ? checkExpected(expected, before, after, prior, inheritableChanges(c.rounds, round, after, integrity)) : expected.length ? expected.map((p) => ({ path: p, ok: false, exists: false, changed: false, reason: 'o estado do arquivo não pôde ser lido' })) : null;
-    round.report.evidence = { ...buildEvidence({ report: round.report, verification: roundVerification(round), configured: (wsOf(m)?.verifications || []).length, expectedResults: results, integrity: { ...integrity, pending: integrity.status === 'flagged' ? c.integrity.pending : [] } }), at: store.now() };
+    round.report.evidence = { ...buildEvidence({ report: round.report, verification: roundVerification(round), configured: (wsOf(m)?.verifications || []).length, expectedResults: results, integrity: { ...integrity, pending: integrity.status === 'flagged' ? c.integrity.pending : [] }, scope: round.scope ?? null }), at: store.now() };
   }
 
   /** Depois de um humano resolver o ambiente (ex.: restaurar/reaprovar o script), refaz as verificações da última rodada. */
@@ -671,11 +683,15 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     const digest = actionDigest(act, ws, scope, v), ids = v.rules.map((r) => r.id);
     const entry = { round: n, ...scope, decision: v.decision, rules: ids, digest };
     if (only && only.digest !== digest) { only.status = 'void'; only.voidReason = 'a ação ou a política mudou desde a aprovação'; }
+    for (const a of c.approvals || []) { // autorização dada ao aprovar o plano: só vale para ESTE plano, esta etapa e este digest; replanejamento ou ação alterada a invalida
+      if (a?.origin !== 'plan_approval' || a.status !== 'approved') continue;
+      if (a.planId !== c.plan?.id) { a.status = 'void'; a.voidReason = 'o plano foi substituído'; } else if (a.stepId === scope.stepId && a.digest !== digest) { a.status = 'void'; a.voidReason = 'a etapa ou a política mudou desde a autorização do plano'; }
+    }
     if (v.decision === 'allow') return { policy: { decision: 'allow', rules: ids, digest, authorizedBy: 'policy' }, entry: { ...entry, authorizedBy: 'policy', outcome: 'started' } };
     if (v.decision === 'deny') return refuseRound(m, d, step, 'denied', v.summary.why.join(' '), entry);
     const mine = (c.approvals || []).filter((a) => a.digest === digest);
     const approved = mine.find((a) => a.status === 'approved');
-    if (approved) return { approval: approved, policy: { decision: v.decision, rules: ids, digest, authorizedBy: 'user', approvalId: approved.id }, entry: { ...entry, authorizedBy: 'user', approvalId: approved.id, outcome: 'started' } };
+    if (approved) { const origin = approved.origin ?? 'approval'; return { approval: approved, policy: { decision: v.decision, rules: ids, digest, authorizedBy: 'user', approvalId: approved.id, ...(origin === 'plan_approval' ? { origin } : {}) }, entry: { ...entry, authorizedBy: 'user', approvalId: approved.id, ...(origin === 'plan_approval' ? { origin } : {}), outcome: 'started' } }; }
     const rejected = mine.find((a) => a.status === 'rejected');
     if (rejected) return refuseRound(m, d, step, 'rejected', `Você rejeitou esta ação (aprovação ${rejected.id}); ela não será executada.`, { ...entry, approvalId: rejected.id });
     let pending = mine.find((a) => a.status === 'pending');
@@ -791,6 +807,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     }
     // M8: instantâneo ANTES da execução (síncrono: nada pode mudar entre ele e a criação da rodada). O primeiro do ciclo vira o estado de referência dos testes.
     const before = snapOf(m, d.task.expectedFiles ?? []);
+    const scopeBefore = (() => { try { const w = wsOf(m); return w ? scopeSnapshot(w.path) : null; } catch { return null; } })(); // escopo: arquivos sensíveis/de segredo ANTES da execução
     if (!c.integrity?.baseline && before?.complete) c.integrity = { baseline: hashesOf(before), last: hashesOf(before), at: store.now(), pending: [] };
     const n = c.rounds.length + 1;
     const task = {
@@ -799,12 +816,16 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     };
     const round = { n, status: 'running', taskId: task.id, fingerprint: fingerprint(d.task), agent: task.agent, plan: { rationale: d.rationale, ...d.task }, ...(step ? { planId: c.plan.id, stepId: step.id } : {}), startedAt: store.now(), finishedAt: null, report: null, decision: null, policy: gate.policy, ...(gate.approval ? { approvalId: gate.approval.id, approvalDigest: gate.approval.digest } : {}) };
     // M9: a aprovação é CONSUMIDA (uso único) na mesma gravação confirmada que cria a rodada; se não gravar, nada é consumido nem executado.
-    if (gate.approval) { gate.approval.status = 'consumed'; gate.approval.consumedAt = store.now(); gate.approval.consumedRound = n; }
+    if (gate.approval) {
+      const a = gate.approval;
+      if (a.origin === 'plan_approval') { a.consumedRounds = [...(a.consumedRounds ?? []), n]; a.usesLeft = Math.max(0, (a.usesLeft ?? 1) - 1); if (a.usesLeft === 0) { a.status = 'consumed'; a.consumedAt = store.now(); a.consumedRound = n; } } // uso limitado: 1 + retentativas da etapa
+      else { a.status = 'consumed'; a.consumedAt = store.now(); a.consumedRound = n; }
+    }
     const prevLog = c.policyLog;
     m.tasks.push(task); c.rounds.push(round); c.status = 'running'; audit(m, gate.entry);
     note(m, 'cycle', `Rodada ${n} planejada: ${d.task.title}`, 'planner');
     try { emit(m, !!gate.approval); } catch (e) {
-      if (gate.approval) { m.tasks.pop(); c.rounds.pop(); gate.approval.status = 'approved'; delete gate.approval.consumedAt; delete gate.approval.consumedRound; if (prevLog === undefined) delete c.policyLog; else c.policyLog = prevLog; }
+      if (gate.approval) { m.tasks.pop(); c.rounds.pop(); const a = gate.approval; if (a.origin === 'plan_approval') { a.consumedRounds = (a.consumedRounds ?? []).filter((x) => x !== n); a.usesLeft = (a.usesLeft ?? 0) + 1; } a.status = 'approved'; delete a.consumedAt; delete a.consumedRound; if (prevLog === undefined) delete c.policyLog; else c.policyLog = prevLog; }
       throw e;
     }
 
@@ -836,7 +857,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     }
     round.verification = verificationOutcome(report, items.length);
     if (c.cancelRequested) return end(m, 'cancelled', 'Ciclo cancelado pelo usuário.');
-    assessRound(m, round, before); emit(m); await noteWorktreeRound(m, round); // M8: parecer do SISTEMA (evidência, arquivos esperados, integridade dos testes), gravado antes de qualquer decisão; sem gravação o portão de persistência impede o avanço
+    assessRound(m, round, before, scopeBefore); emit(m); await noteWorktreeRound(m, round); // M8: parecer do SISTEMA (evidência, arquivos esperados, integridade dos testes), gravado antes de qualquer decisão; sem gravação o portão de persistência impede o avanço
     if (ctx?.watchdog) return stopWatchdog(m, ctx); // o vigia (tempo total / sem saída) já decidiu: evidência e estado ficam gravados; nada é decidido nem repetido por cima
     let sup = null, entry = null; const cf = confOf(m);
     const halt = (code, reason) => { if (entry && entry.applied?.state === 'pending') applied(entry, { state: entry.action === 'block' ? 'stopped' : 'not_applied', by: code, reason }); return stop(m, code, reason); }; // o ciclo parou por outra proteção DEPOIS da recomendação: retry/replan NÃO foram iniciados
@@ -852,6 +873,10 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (report.status === 'interrupted') return halt('interrupted', 'A execução foi interrompida (não é sucesso). Retome para o Planner reavaliar ou cancele.');
     if (report.status === 'failed') { c.consecutiveFailures++; if (c.consecutiveFailures >= 2) return halt('executor_failures', `Duas execuções seguidas falharam: ${clip(task.error, 200)}`); } else c.consecutiveFailures = 0;
 
+    if (round.scope?.status === 'exceeded') { // arquivo sensível/de segredo alterado FORA do escopo autorizado: a rodada não conta (evidência "failed") e nada segue sem uma pessoa
+      const names = round.scope.files.slice(0, 8).map((f) => `${f.path} (${f.change === 'created' ? 'criado' : f.change === 'deleted' ? 'apagado' : 'modificado'}; ${f.category === 'secret' ? 'segredo' : 'sensível'})`).join('; ') + (round.scope.files.length > 8 ? `; … (+${round.scope.files.length - 8})` : '');
+      return halt('scope_exceeded', `A rodada alterou arquivos sensíveis ou de segredo FORA do escopo autorizado da etapa: ${names}. A etapa NÃO foi comprovada (o conteúdo não é mostrado). Revise e desfaça as alterações indevidas no espaço de trabalho antes de retomar; retomar não aceita o desvio.`);
+    }
     const envProblem = report.verifications.find((v) => ['blocked', 'error'].includes(v.status));
     if (envProblem) return halt('verification_blocked', `Não foi possível executar a verificação "${envProblem.script}": ${envProblem.reason} Um humano precisa resolver.`);
 
@@ -884,7 +909,11 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     if (!ctx?.sealed || ctx.sealed.n !== cand.last.n || !ctx.sealed.sig) return 'não há selo do Git desta rodada neste mesmo laço (ciclo retomado ou recuperado, workspace sem Git ou assinatura incompleta)';
     if (executor.isBusy()) return 'outra execução está em andamento';
     const verdict = evaluateTask(actionOf(stepDecision(cand.step)), { workspace: ws, protectedDirs: [store.dataDir] });
-    if (verdict.decision !== 'allow') return `a política não dá "allow" à etapa (${verdict.decision}); retentativas automáticas nunca pedem nem reutilizam aprovação`;
+    if (verdict.decision !== 'allow') { // só a autorização dada ao aprovar o plano (mesmo plano, etapa e digest, com usos restantes) cobre uma retentativa; aprovação comum nunca é reutilizada
+      const act = actionOf(stepDecision(cand.step)), dg = actionDigest(act, ws, { stepId: cand.step.id, planId: c.plan?.id ?? null }, verdict);
+      const cover = (c.approvals || []).find((a) => a?.origin === 'plan_approval' && a.status === 'approved' && a.planId === c.plan?.id && a.stepId === cand.step.id && a.digest === dg && (a.usesLeft ?? 0) > 0);
+      if (!cover) return `a política não dá "allow" à etapa (${verdict.decision}); retentativas automáticas nunca pedem nem reutilizam aprovação`;
+    }
     const now = await sealNow(m);
     if (c.cancelRequested) return 'cancelamento pedido';
     if (!now || now !== ctx.sealed.sig) return 'o estado do Git mudou (ou não pôde ser lido) desde o fim da rodada anterior';
@@ -1061,7 +1090,7 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
   }
 
   /** `plan` (M5, só em processo: a rota HTTP nunca o repassa): plano JÁ aprovado por um humano, semeado no ciclo novo e gravado junto com ele antes de qualquer execução. */
-  async function start(missionId, maxIterations, { plan = null } = {}) {
+  async function start(missionId, maxIterations, { plan = null, authorizedSteps = [] } = {}) {
     const m = mission(missionId);
     if (!m) return fail(404, 'Missão não encontrada.');
     if (m.demo) return fail(409, 'Missão demonstrativa: o ciclo real está desabilitado.');
@@ -1075,7 +1104,14 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       const noEvidence = baseWs(m) && evidencePathProblem(v.steps, baseWs(m)); // M8: etapa que nada poderia comprovar não é executada
       if (noEvidence) return fail(400, `Plano sem como ser comprovado: ${noEvidence}`);
       seed = { rationale: String(plan.rationale ?? '').slice(0, 1500) || 'Plano aprovado pelo usuário.', steps: v.steps };
-    }
+      if (!Array.isArray(authorizedSteps) || authorizedSteps.some((x) => typeof x !== 'string') || new Set(authorizedSteps).size !== authorizedSteps.length) return fail(400, 'authorizedSteps deve ser uma lista de ids de etapa, sem repetição.');
+      for (const id of authorizedSteps) { // nada é iniciado se alguma etapa pedida não pode receber autorização prévia
+        const st = v.steps.find((x) => x.id === id); if (!st) return fail(400, `A etapa "${clip(id, 40)}" não existe no plano.`);
+        const pa = preAuthProblem(evaluateTask(actionOf(stepDecision(st)), { workspace: baseWs(m), protectedDirs: [store.dataDir] }));
+        if (!pa.ok) return fail(409, `A etapa "${clip(id, 40)}" ${pa.reason}; ela não pode ser autorizada junto com o plano.`);
+      }
+      seed.authorizedSteps = [...authorizedSteps];
+    } else if (Array.isArray(authorizedSteps) && authorizedSteps.length) return fail(400, 'Só um plano aprovado pode autorizar etapas.');
     if (starting) return fail(409, 'Outra execução ou ciclo está em andamento.');
     const blocked = startBlocker(m);
     if (blocked) return blocked;
@@ -1096,6 +1132,21 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
     } finally { starting = null; } // begin() é síncrono: ao liberar, o ciclo já está registrado em loops (ou foi revertido)
   }
 
+  /** Aprovações `plan_approval`: uma por etapa escolhida, ligadas a ESTE plano (planId), à etapa e ao digest da ação, com usos limitados (1 + retentativas por etapa). Reavalia a política AGORA (defesa em profundidade). */
+  function preauthorize(m, stepIds) {
+    const c = m.cycle, ws = wsOf(m), uses = 1 + readConf().retries, at = store.now(), made = [];
+    for (const id of stepIds) {
+      const step = c.plan?.steps?.find((s) => s.id === id); if (!step) return { error: `A etapa "${clip(id, 40)}" não existe no plano.` };
+      const act = actionOf(stepDecision(step)), v = evaluateTask(act, { workspace: ws, protectedDirs: [store.dataDir] }), pa = preAuthProblem(v);
+      if (!pa.ok) return { error: `A etapa "${clip(id, 40)}" ${pa.reason}; ela não pode ser autorizada junto com o plano.` };
+      const scope = { stepId: step.id, planId: c.plan.id };
+      made.push({ id: store.uid('apr'), status: 'approved', digest: actionDigest(act, ws, scope, v), round: null, ...scope, createdAt: at, decidedAt: at, decidedBy: 'user', origin: 'plan_approval', uses, usesLeft: uses, consumedRounds: [],
+        action: { ...act, rationale: 'Etapa autorizada ao aprovar o plano.' }, rules: v.rules.filter((r) => r.decision !== 'allow').map(({ id: rid, decision, reason, impact, subjects }) => ({ id: rid, decision, reason, impact, ...(subjects ? { subjects } : {}) })), summary: v.summary });
+    }
+    c.approvals = [...(c.approvals || []), ...made];
+    return { ok: true, count: made.length };
+  }
+
   function begin(m, max, seed = null, worktreeId = null) {
     const prev = { cycle: m.cycle, pastCycles: m.pastCycles };
     if (m.cycle) { m.pastCycles = [m.cycle, ...(m.pastCycles || [])].slice(0, 5); }
@@ -1105,8 +1156,12 @@ export function createCycle({ db, executor, planner, startTaskRun, verifier = nu
       ...(worktreeId ? { worktreeId } : {}),
       ...(seed ? { plan: newPlan({ id: store.uid('plan'), at: store.now(), rationale: seed.rationale, steps: seed.steps }) } : {}),
     };
+    if (seed?.authorizedSteps?.length) { // autorização do plano: criada AQUI (nunca pelo Planner, pelo Executor nem pela recuperação), gravada junto com o ciclo; se não gravar, a missão não começa
+      const pa = preauthorize(m, seed.authorizedSteps);
+      if (pa.error) { m.cycle = prev.cycle; if (prev.pastCycles === undefined) delete m.pastCycles; else m.pastCycles = prev.pastCycles; return fail(409, pa.error); }
+    }
     if (worktreeId && worktrees) worktrees.link(worktreeId, m.cycle.id); // o ambiente passa a pertencer a ESTE ciclo (gravado junto com ele)
-    return launchOrRollback(m, `Ciclo autônomo iniciado por um humano (limite: ${max} rodadas${seed ? `; plano aprovado de ${seed.steps.length} etapa(s)` : ''})`, 'iniciar o ciclo', () => {
+    return launchOrRollback(m, `Ciclo autônomo iniciado por um humano (limite: ${max} rodadas${seed ? `; plano aprovado de ${seed.steps.length} etapa(s)${seed.authorizedSteps?.length ? `, ${seed.authorizedSteps.length} etapa(s) sensível(is) autorizada(s) junto com o plano` : ''}` : ''})`, 'iniciar o ciclo', () => {
       if (worktreeId && worktrees) worktrees.link(worktreeId, null);
       m.cycle = prev.cycle;
       if (prev.pastCycles === undefined) delete m.pastCycles; else m.pastCycles = prev.pastCycles;

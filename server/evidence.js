@@ -19,11 +19,17 @@ export const MAX_SENSITIVE = 500;    // arquivos vigiados no máximo
 export const MAX_HASH_BYTES = 5 * 1024 * 1024;
 const MAX_DEPTH = 12;
 export const MAX_EXPECTED = 8;
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.nuxt', '.cache', '.turbo', '__pycache__', '.venv', 'venv', 'target']);
+export const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next', '.nuxt', '.cache', '.turbo', '__pycache__', '.venv', 'venv', 'target']);
 
 const TEST_DIR = /(^|\/)(tests?|__tests__|specs?|e2e|__mocks__|cypress|playwright)\//i;
 const TEST_FILE = /[._-](test|spec)\.[a-z0-9]+$|(^|\/)test_[^/]+\.py$|(^|\/)conftest\.py$|_test\.go$/i;
 const CONFIG_FILE = /(^|\/)(package\.json|jest\.config\.[^/]+|vitest\.config\.[^/]+|\.mocharc[^/]*|karma\.conf\.[^/]+|playwright\.config\.[^/]+|cypress\.config\.[^/]+|tsconfig[^/]*\.json|\.eslintrc[^/]*|eslint\.config\.[^/]+|\.babelrc[^/]*|babel\.config\.[^/]+|pytest\.ini|tox\.ini|setup\.cfg|pyproject\.toml|noxfile\.py|Makefile|\.npmrc|\.nycrc[^/]*|\.c8rc[^/]*|\.gitlab-ci\.yml)$|(^|\/)\.github\/workflows\//i;
+// O NOME sozinho (`algo-test.txt`) não faz de um arquivo um mecanismo de validação: um teste é CÓDIGO que um executor de testes roda. Texto, documentação, imagem e dados "de exibição"
+// (txt, md, html, css, csv, imagens...) com "test"/"spec" no nome são arquivos comuns (entregáveis), a menos que estejam em diretório de testes (tests/, __tests__...), sejam
+// configuração de validação ou sejam REFERENCIADOS por um script aprovado (esses continuam vigiados, como `referenced`). Código e dados estruturados (js, ts, py, go, json, yml...) com nome de teste continuam vigiados.
+// Não se usa o contexto da tarefa (arquivo "esperado") de propósito: o estado de referência e as comparações atravessam etapas com listas esperadas diferentes, e uma classificação que
+// dependesse delas faria o MESMO arquivo mudar de categoria entre dois instantâneos e gerar adulteração falsa (ou esconder uma verdadeira).
+const PLAIN_ROLE = /\.(txt|md|markdown|rst|adoc|log|csv|tsv|html?|css|svg|png|jpe?g|gif|webp|ico|pdf)$/i;
 export const CATEGORY_LABEL = { test: 'arquivo de teste', config: 'configuração de validação', referenced: 'arquivo usado pelo script de verificação aprovado' };
 
 const norm = (p) => p.split(path.sep).join('/');
@@ -32,7 +38,8 @@ const sha = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 /** Categoria de um caminho relativo (só seleciona o que vigiar; quem detecta mudança é o hash). */
 export function categoryOf(rel) {
   if (CONFIG_FILE.test(rel)) return 'config';
-  if (TEST_DIR.test(rel) || TEST_FILE.test(rel)) return 'test';
+  if (TEST_DIR.test(rel)) return 'test';
+  if (TEST_FILE.test(rel)) return PLAIN_ROLE.test(rel) ? null : 'test';
   return null;
 }
 
@@ -164,11 +171,11 @@ export function inheritableChanges(rounds, round, after, integrity) {
  * recalculada depois (re-verificação, revisão humana) sem repetir nada.
  * @returns {{level:'verified'|'failed'|'inconclusive', basis:string, reasons:string[], executorClaim:object, system:object}}
  */
-export function buildEvidence({ report, verification, configured = 0, expectedResults = null, integrity = null }) {
+export function buildEvidence({ report, verification, configured = 0, expectedResults = null, integrity = null, scope = null }) {
   const checks = report?.checks ?? [];
   const claim = { status: report?.status ?? 'unknown', pass: checks.filter((c) => c.result === 'pass').length, fail: checks.filter((c) => c.result === 'fail').length, notRun: checks.filter((c) => c.result === 'not_run').length, note: 'relato do Executor: não é prova de conclusão' };
   const vs = (report?.verifications ?? []).map((v) => ({ script: v.script, status: v.status, required: !!v.required }));
-  const system = { verification, verifications: vs, expectedFiles: expectedResults, integrity: integrity?.status ?? 'unknown' };
+  const system = { verification, verifications: vs, expectedFiles: expectedResults, integrity: integrity?.status ?? 'unknown', ...(scope ? { scope: scope.status } : {}) };
   const failed = [], inconclusive = [];
   if (report?.status !== 'success') failed.push(`a execução não foi bem-sucedida (${report?.status ?? 'sem relatório'})`);
   if (claim.fail > 0) failed.push('o próprio Executor reportou verificação sua com falha');
@@ -178,6 +185,9 @@ export function buildEvidence({ report, verification, configured = 0, expectedRe
   if (expectedResults) for (const r of expectedResults) if (!r.ok) failed.push(`arquivo esperado "${r.path}": ${r.reason}`);
   if (integrity?.status === 'flagged') inconclusive.push(`testes ou configuração de validação foram alterados e ainda não foram revisados (${(integrity.pending ?? []).slice(0, 5).map((c) => `${c.path} ${c.change === 'created' ? 'criado' : c.change === 'deleted' ? 'apagado' : 'modificado'}`).join('; ')}${(integrity.pending ?? []).length > 5 ? '; …' : ''}): uma verificação que passa sobre testes alterados pelo Executor não prova a conclusão`);
   else if (integrity?.status === 'unknown') inconclusive.push(`integridade dos testes não verificável: ${integrity.reason ?? 'instantâneo do workspace indisponível'}`);
+  // Escopo (scope.js): arquivo sensível/de segredo alterado FORA do que a etapa autorizou invalida a rodada (nunca vira verificada, nem pela aceitação humana de inconclusiva); só nomes, nunca conteúdo.
+  if (scope?.status === 'exceeded') failed.push(`alteração fora do escopo autorizado em arquivo sensível ou de segredo (${(scope.files ?? []).slice(0, 5).map((f) => `${f.path} ${f.change === 'created' ? 'criado' : f.change === 'deleted' ? 'apagado' : 'modificado'}`).join('; ')}${(scope.files ?? []).length > 5 ? '; …' : ''})`);
+  else if (scope?.status === 'unknown') inconclusive.push(`escopo das alterações não verificável: ${scope.reason ?? 'instantâneo do workspace indisponível'}`);
   const hasReal = verification === 'passed', hasFiles = !!expectedResults?.length && expectedResults.every((r) => r.ok);
   const basis = hasReal && hasFiles ? 'real_verification+expected_files' : hasReal ? 'real_verification' : hasFiles ? 'expected_files' : 'executor_claim_only';
   if (!hasReal && !hasFiles && !failed.length && !inconclusive.length) inconclusive.push('sem verificação real configurada nem arquivos esperados: só há o relato do Executor, que não é prova');

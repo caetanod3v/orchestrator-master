@@ -5,7 +5,8 @@ import path from 'node:path';
 
 const run = (cwd, args) =>
   new Promise((resolve, reject) =>
-    execFile('git', args, { cwd, timeout: 8000, windowsHide: true, maxBuffer: 1 << 20 }, (e, out) => (e ? reject(e) : resolve(out))));
+    // `core.fsmonitor` de um repositório hostil seria um comando executado pelo `git status`; fica desligado (e sem travas opcionais, para não competir com o Git do usuário)
+    execFile('git', ['-c', 'core.fsmonitor=false', ...args], { cwd, timeout: 8000, windowsHide: true, maxBuffer: 1 << 20, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }, (e, out) => (e ? reject(e) : resolve(out))));
 
 export async function gitInfo(dir) {
   if (!fs.existsSync(path.join(dir, '.git'))) return { isRepo: false };
@@ -24,7 +25,7 @@ export async function gitInfo(dir) {
 export async function gitChanges(dir) {
   if (!fs.existsSync(path.join(dir, '.git'))) return { isRepo: false, files: [] };
   try {
-    const [st, ns] = await Promise.all([run(dir, ['status', '--porcelain=v1', '-uall']), run(dir, ['diff', '--numstat']).catch(() => '')]);
+    const [st, ns] = await Promise.all([run(dir, ['status', '--porcelain=v1', '-uall']), run(dir, ['diff', '--no-ext-diff', '--numstat']).catch(() => '')]);
     const stat = new Map(ns.split('\n').filter(Boolean).map((l) => { const [a, r, ...p] = l.split('\t'); return [p.join('\t'), { added: Number(a) || 0, removed: Number(r) || 0 }]; }));
     const files = st.split('\n').filter(Boolean).slice(0, 200).map((l) => {
       const p = l.slice(3).replace(/^"|"$/g, '');

@@ -27,7 +27,7 @@ import { listWorkspace } from './planner.js';
 import { asyncRoute } from './async-route.js';
 import { DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle.js';
 import { usageRecord } from './usage.js';
-import { evaluateTask } from './policy.js';
+import { evaluateTask, preAuthProblem } from './policy.js';
 
 export const MAX_TEXT = 2000;       // tamanho de uma mensagem do usuário (e da resposta do Planner)
 export const KEEP_MESSAGES = 40;    // mensagens mantidas no banco
@@ -198,7 +198,8 @@ export function createChat({ db, planner, cycle, multiStep = false, listFiles = 
   /** Prévia (só leitura, calculada agora no servidor) do que a política fará com cada etapa; quem decide de verdade é o ciclo, no momento de executar. */
   const policyPreview = (p, ws) => (p?.steps && ws ? p.steps.map((st) => {
     const v = evaluateTask({ title: st.title, instructions: st.instructions, acceptance: st.acceptance, expectedFiles: st.expectedFiles ?? [] }, { workspace: ws, protectedDirs: [store.dataDir] });
-    return { stepId: st.id, decision: v.decision, why: v.decision === 'allow' ? [] : v.summary.why, impact: v.decision === 'allow' ? [] : v.summary.impact };
+    const pa = preAuthProblem(v); // a interface só oferece a autorização prévia ao que o servidor aceitará
+    return { stepId: st.id, decision: v.decision, why: v.decision === 'allow' ? [] : v.summary.why, impact: v.decision === 'allow' ? [] : v.summary.impact, preAuthorizable: pa.ok, ...(!pa.ok ? { preAuthBlocked: pa.reason } : {}) };
   }) : null);
   function view() {
     const chat = cur(), w = workspaceOf(chat), b = chat?.brief ?? null;
@@ -278,7 +279,7 @@ export function createChat({ db, planner, cycle, multiStep = false, listFiles = 
     } finally { inflight = false; if (!committed && calls) accrue(recs, calls); }
   }
 
-  async function approve({ proposalId, maxIterations } = {}) {
+  async function approve({ proposalId, maxIterations, authorizedSteps } = {}) {
     const chat = cur(), p = chat?.proposal;
     if (!p) return fail(404, 'Não há plano preparado para aprovar.');
     if (typeof proposalId !== 'string' || proposalId !== p.id) return fail(409, 'O plano mostrado não é mais o atual (foi substituído ou descartado). Recarregue a conversa.');
@@ -288,6 +289,11 @@ export function createChat({ db, planner, cycle, multiStep = false, listFiles = 
     const max = maxIterations === undefined ? (db.settings.cycleMaxIterations || DEFAULT_MAX_ITERATIONS) : maxIterations;
     if (!Number.isInteger(max) || max < 1 || max > HARD_MAX_ITERATIONS) return fail(400, `maxIterations deve ser um inteiro de 1 a ${HARD_MAX_ITERATIONS}.`);
     if (p.steps && p.steps.length > max) return fail(409, `O plano tem ${p.steps.length} etapas e o limite de rodadas é ${max} (cada etapa usa uma rodada). Informe um limite de rodadas de pelo menos ${p.steps.length}${p.steps.length > HARD_MAX_ITERATIONS ? '' : ` (até ${HARD_MAX_ITERATIONS})`} para aprovar.`);
+    // Etapas sensíveis autorizadas JUNTO com o plano: escolha explícita e individual; sem ela, nada é autorizado. O ciclo reavalia a política e grava as autorizações com o ciclo.
+    if (authorizedSteps !== undefined && (!Array.isArray(authorizedSteps) || authorizedSteps.some((x) => typeof x !== 'string') || new Set(authorizedSteps).size !== authorizedSteps.length)) return fail(400, 'authorizedSteps deve ser uma lista de ids de etapa, sem repetição.');
+    const auth = authorizedSteps ?? [];
+    if (auth.length && !p.steps) return fail(400, 'Este plano não tem etapas: não há o que autorizar.');
+    if (auth.length) { const prev = policyPreview(p, w.ws) ?? []; for (const id of auth) { const e = prev.find((x) => x.stepId === id); if (!e) return fail(400, `A etapa "${clip(id, 40)}" não existe neste plano.`); if (!e.preAuthorizable) return fail(409, `A etapa "${clip(id, 40)}" ${e.preAuthBlocked ?? 'não precisa ou não aceita autorização prévia'}; ela não pode ser autorizada junto com o plano.`); } }
     const gate = storageGate(); if (gate) return gate;
     const now = store.now();
     const m = { id: store.uid('mis'), demo: false, title: clip(p.title, 120), objective: clip(p.objective, MAX_TEXT), workspaceId: w.ws.id, createdAt: now, tasks: [], origin: 'chat', conversation: JSON.parse(JSON.stringify(chat.messages)), ...(p.context ? { brief: JSON.parse(JSON.stringify(p.context)) } : {}), chatPlannerCalls: chat.plannerCalls || 0, chatUsage: JSON.parse(JSON.stringify(chat.plannerUsage ?? [])) };
@@ -295,7 +301,7 @@ export function createChat({ db, planner, cycle, multiStep = false, listFiles = 
     // sobra uma proposta ainda "proposed" cuja aprovação criaria uma SEGUNDA missão.
     p.status = 'approved'; p.missionId = m.id; db.missions.unshift(m);
     inflight = true; let r;
-    try { r = await cycle.start(m.id, max, p.steps ? { plan: { rationale: p.objective, steps: p.steps } } : undefined); } catch (e) { r = fail(500, `Falha ao iniciar o ciclo: ${e.message}`); } finally { inflight = false; }
+    try { r = await cycle.start(m.id, max, p.steps ? { plan: { rationale: p.objective, steps: p.steps }, ...(auth.length ? { authorizedSteps: auth } : {}) } : undefined); } catch (e) { r = fail(500, `Falha ao iniciar o ciclo: ${e.message}`); } finally { inflight = false; }
     if (r.status !== 202) { // nada foi iniciado: desfaz a missão e devolve a proposta ao estado de antes
       db.missions = db.missions.filter((x) => x !== m); p.status = 'proposed'; delete p.missionId;
       return fail(r.status, r.error);

@@ -28,6 +28,22 @@ test('isAllowedOrigin: parsing de URL, sem prefixos ou correspondências parciai
     'ftp://localhost', 'file://localhost', 'javascript:alert(1)', 'http://127.1', 'http://2130706433', 'http://localhost:80', 'http://localhost:99999', 'http://[::1]:4317', 'localhost:5173', 'http://localhost:5173, http://evil.com', ' http://localhost:5173']) assert.equal(isAllowedOrigin(o), false, String(o));
 });
 
+test('isAllowedOrigin com portas: só o servidor e o Vite; outra página local (outra porta) é barrada', () => {
+  const ports = new Set(['4317', '5173']);
+  for (const o of ['http://localhost:4317', 'http://127.0.0.1:5173']) assert.equal(isAllowedOrigin(o, ports), true, o);
+  for (const o of ['http://localhost:3000', 'http://127.0.0.1:8080', 'http://localhost', 'https://localhost', 'http://localhost:43170']) assert.equal(isAllowedOrigin(o, ports), false, o);
+});
+
+test('apiGuard: POST sem corpo vindo de outra porta local dá 403; a mesma origem (porta do Host) e a do Vite passam', () => {
+  const run = (host, origin) => {
+    const headers = { host, origin }; const out = { next: false };
+    const res = { status(c) { out.status = c; return this; }, json() { return this; } };
+    apiGuard({ method: 'POST', get: (k) => headers[k.toLowerCase()] }, res, () => { out.next = true; }); return out;
+  };
+  assert.equal(run('localhost:4999', 'http://localhost:3000').status, 403); assert.equal(run('localhost:4999', 'http://127.0.0.1:4317').status, 403, 'a porta padrão não vale se o Host é outro');
+  assert.equal(run('localhost:4999', 'http://127.0.0.1:4999').next, true, 'mesma origem'); assert.equal(run('localhost:4999', 'http://localhost:5173').next, true, 'Vite (5173)'); assert.equal(run('localhost:4999', 'http://localhost:5174').status, 403); assert.equal(run('localhost:5173', 'http://localhost:5173').next, true);
+});
+
 test('isMutatingMethod: só POST, PUT, PATCH e DELETE (sem diferenciar maiúsculas)', () => {
   for (const m of ['POST', 'PUT', 'PATCH', 'DELETE', 'post', 'Delete']) assert.equal(isMutatingMethod(m), true, m);
   for (const m of ['GET', 'HEAD', 'OPTIONS', 'get', '', undefined, null]) assert.equal(isMutatingMethod(m), false, String(m));
@@ -41,7 +57,7 @@ test('apiGuard (middleware): Host inválido, Origin externo e Origin ausente em 
     return out;
   };
   for (const method of ['GET', 'HEAD', 'OPTIONS']) assert.equal(run({ method }).next, true, `${method} sem Origin segue`);
-  assert.equal(run({ origin: 'http://localhost:5173' }).next, true);
+  assert.equal(run({ host: 'localhost:5173', origin: 'http://localhost:5173' }).next, true, 'página do Vite com o Host preservado pelo proxy');
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
     assert.equal(run({ method }).status, 403, `${method} sem Origin`);
     assert.equal(run({ method, origin: '' }).status, 403, `${method} com Origin vazio`);
@@ -99,7 +115,7 @@ test('index.js real: Origin obrigatório em POST/PUT/PATCH/DELETE (403 sem alter
     assert.equal(await state(), s0, 'o estado segue intacto');
     // com Origin válido (o próprio servidor ou o Vite) a requisição chega à rota e altera o estado (controle positivo)
     assert.equal((await call('/api/workspaces/validate', { body: { path: ws }, headers: { origin: legit } })).status, 200);
-    assert.equal((await call('/api/chat/approve', { body: {}, headers: { origin: 'http://localhost:5173' } })).status !== 403, true, 'Origin do Vite passa pelo guard');
+    assert.equal((await call('/api/chat/approve', { body: {}, headers: { host: 'localhost:5173', origin: 'http://localhost:5173' } })).status !== 403, true, 'Origin do Vite (Host preservado pelo proxy) passa pelo guard');
     assert.equal((await call('/api/workspaces', { body: { name: 'legitimo', path: ws }, headers: { origin: legit } })).status, 201);
     assert.notEqual(await state(), s0, 'com Origin válido o estado muda');
     // leituras sem Origin continuam funcionando (Host válido); HEAD e OPTIONS não são barrados; Origin externo em leitura continua barrado
@@ -108,6 +124,10 @@ test('index.js real: Origin obrigatório em POST/PUT/PATCH/DELETE (403 sem alter
     assert.notEqual((await call('/api/state', { method: 'OPTIONS' })).status, 403);
     assert.equal((await call('/api/chat', { method: 'GET', headers: { origin: legit } })).status, 200);
     assert.equal((await call('/api/chat', { method: 'GET', headers: { origin: 'http://evil.example' } })).status, 403);
+    // Origin de outra porta local (outra página no localhost) é barrado; cabeçalhos de segurança só na interface (se houver client/dist), nunca na API
+    assert.equal((await call('/api/workspaces/validate', { body: { path: ws }, headers: { origin: 'http://localhost:3000' } })).status, 403, 'outra porta local');
+    const page = await new Promise((res, rej) => http.get({ host: '127.0.0.1', port, path: '/', headers: { host: `127.0.0.1:${port}` } }, (r) => { r.resume(); r.on('end', () => res(r.headers)); }).on('error', rej));
+    if (!fs.existsSync(path.resolve(here, '..', '..', 'client', 'dist'))) console.warn('[aviso] sem client/dist: a CSP não foi verificada neste ambiente (rode npm run build para cobrir).'); else { assert.match(page['content-security-policy'] ?? '', /default-src 'self'.*frame-ancestors 'none'/); assert.equal(page['x-content-type-options'], 'nosniff'); }
     // Host: externo, com sufixo, porta inválida e ausente são barrados em qualquer rota /api; localhost com outra porta é aceito
     for (const host of ['evil.com', 'localhost.evil.com', '127.0.0.1.evil.com:4317', 'localhost:99999', 'localhost:0']) assert.equal((await call('/api/chat', { method: 'GET', headers: { host } })).status, 403, host);
     for (const host of ['localhost', `localhost:${port}`, '127.0.0.1:5173']) assert.equal((await call('/api/chat', { method: 'GET', headers: { host } })).status, 200, host);

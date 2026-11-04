@@ -192,3 +192,42 @@ test('8. falha ao gravar a decisão: 503, continua pendente e nada executa', asy
     assert.equal((await cy.resume(m.id, {})).status, 409, 'ainda pendente'); assert.equal(starts(), 0);
   } finally { fs.rmSync(BLOCK_TMP, { recursive: true, force: true }); }
 });
+
+// ---------- Fase 1: precisão do classificador (menos falsos positivos, mesma proteção) ----------
+const classify = (instructions, expectedFiles = [], extra = {}) => { const v = evaluateTask({ title: 'Etapa', instructions, acceptance: ['o resultado existe'], expectedFiles, ...extra }, { workspace: { id: 'ws', path: wsDir } }); return { d: v.decision, ids: v.rules.map((r) => r.id) }; };
+
+test('Fase 1: mencionar arquivo sensível sem pedir alteração (referência, leitura, execução, negação) NÃO exige aprovação', () => {
+  for (const t of ['Verifique que o package.json tem um script de teste', 'Execute o teste definido no package.json', 'Leia o package.json para descobrir o comando de build', 'Atualize o README conforme o package.json', 'Documente no README os scripts presentes no package.json',
+    'Não altere package.json', 'Nunca modifique o package-lock.json', 'Edite a.js sem tocar no package.json', 'Edite a.js, não altere o package-lock.json', 'Edite a.js, mas não mexa em Dockerfile', 'O projeto usa o yarn.lock atual; apenas crie a.js']) {
+    const r = classify(t); assert.deepEqual([r.d, r.ids], ['allow', ['workspace_file_edit']], t);
+  }
+});
+
+test('Fase 1: alteração efetiva de arquivo sensível, lockfile ou .env continua exigindo aprovação (inclusive em inglês, na voz passiva e declarada em expectedFiles)', () => {
+  for (const t of ['Atualize o package.json', 'Adicione a dependência lodash ao package.json', 'Defina o script start no package.json', 'Update package.json to add a dependency', 'O package.json deve ser atualizado com o novo script', 'Edite a.js e altere o package.json']) assert.deepEqual(classify(t).ids, ['sensitive_files'], t);
+  for (const t of ['Atualize o package-lock.json', 'Altere o yarn.lock', 'Modifique o pnpm-lock.yaml', 'Edite o Dockerfile e o .github/workflows/ci.yml']) assert.equal(classify(t).d, 'approval_required', t);
+  assert.deepEqual(classify('Crie a.js', ['package.json']).ids, ['sensitive_files'], 'o escopo de escrita declarado vale mesmo sem verbo no texto');
+  assert.deepEqual(classify('Não altere o package.json', ['package.json']).ids, ['sensitive_files'], 'declarar o arquivo em expectedFiles prevalece sobre o texto');
+  assert.deepEqual(classify('Edite a.js', ['a.js']).ids, ['workspace_file_edit']);
+  assert.deepEqual(classify('Adicione FOO ao .env').ids, ['secret_files']); assert.deepEqual(classify('Altere o package.json, não faça commit').ids, ['sensitive_files']);
+});
+
+test('Fase 1: segredos continuam estritos (ler também conta), só a negação ou o arquivo de exemplo os liberam', () => {
+  for (const t of ['Leia o .env', 'Use as variáveis do .env.local', 'Copie a chave de id_rsa', 'Mostre o conteúdo de credentials.json']) assert.equal(classify(t).d, 'approval_required', t);
+  for (const t of ['Não leia o .env', 'Documente as variáveis em .env.example', 'Edite a.js sem tocar no .env']) assert.equal(classify(t).d, 'allow', t);
+  assert.deepEqual(classify('Crie a.js', ['.env']).ids, ['secret_files']);
+});
+
+test('Fase 1: destructive_overwrite exige um ALVO destrutivo (conteúdo/arquivo inteiro); "substituir todo/tudo" em uso comum e verbos genéricos não bastam; negação respeitada', () => {
+  for (const t of ['Sobrescreva o index.html', 'Reescreva do zero o README', 'Substitua todo o conteúdo do README', 'Substitua o arquivo inteiro config.txt', 'Overwrite the file with the new template', 'Esvazie o conteúdo de a.txt', 'Limpe o conteúdo do arquivo log.txt', 'Rewrite from scratch the page']) assert.deepEqual(classify(t).ids, ['destructive_overwrite'], t);
+  for (const t of ['Substitua todo o texto "Lorem ipsum" por "Olá"', 'Substitua todos os placeholders pelos valores reais', 'Substitua tudo que for "foo" por "bar" no a.js', 'Esvazie a lista de itens pendentes', 'Limpe a lista antes de renderizar', 'Reescreva a função de soma', 'Não sobrescreva o README', 'Evite reescrever do zero o index.html', 'Edite a.js sem sobrescrever o conteúdo existente']) assert.equal(classify(t).d, 'allow', t);
+});
+
+test('Fase 1: NENHUMA regra deny foi enfraquecida (caminho fora, .git, estado, instalar, push, excluir, shell, rede) — nem combinada com texto negado ou sensível', () => {
+  const denies = [['Edite C:/Windows/system.ini', 'outside_workspace'], ['Altere ../x.js', 'outside_workspace'], ['Altere .git/config', 'git_internal'], ['Edite data/db.json', 'orchestrator_state'], ['Rode npm install express', 'unsupported_capability'], ['Faça git push para o remoto', 'unsupported_capability'],
+    ['Apague os arquivos temporários', 'unsupported_capability'], ['Execute o comando rm -rf build no terminal', 'unsupported_capability'], ['Baixe https://exemplo.com/a.zip', 'unsupported_capability'], ['Atualize o package.json e rode npm install', 'unsupported_capability'], ['Não altere o package.json, mas edite C:/x/y.txt', 'outside_workspace']];
+  for (const [t, id] of denies) { const r = classify(t); assert.equal(r.d, 'deny', t); assert.ok(r.ids.includes(id), `${t}: ${r.ids}`); }
+  assert.equal(classify('Faça git commit depois de editar a.js', ['a.js']).d, 'deny'); assert.equal(classify('Ok, não faça git commit nem git push', ['a.js']).d, 'allow', 'negar o pedido proibido continua não sendo um pedido');
+  assert.equal(classify('Estranho', [], { instructions: 7 }).d, 'deny', 'ação não classificável nunca é autorizada');
+  const mixed = classify('Atualize o package.json e apague os arquivos de cache'); assert.equal(mixed.d, 'deny'); assert.ok(mixed.ids.includes('sensitive_files') && mixed.ids.includes('unsupported_capability'));
+});
