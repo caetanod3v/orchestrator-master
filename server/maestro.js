@@ -57,6 +57,25 @@ export function restrictDir(dir, { platform = process.platform, run = execFileSy
   try { run('icacls', [dir, '/inheritance:r', '/grant:r', `${user}:(OI)(CI)F`], { stdio: 'ignore', windowsHide: true, timeout: 10_000 }); return true; } catch { return false; }
 }
 
+const SERVER_NAME_RE = /^orchestrator_[0-9a-f]{6}$/;
+/**
+ * Nome do servidor MCP, ESTÁVEL entre reinicializações: gerado uma vez por instalação (sufixo aleatório) e guardado em `db.mcpServerName` (não vai a nenhuma rota). O sufixo continua
+ * imprevisível para um projeto hostil (um `.mcp.json` homônimo não herda a pré-autorização `--allowedTools mcp__<nome>`), mas uma sessão retomada depois de reiniciar o servidor
+ * recebe o MESMO nome que o histórico dela cita. Sem conseguir gravar, vale só nesta execução. Nunca é uma credencial: o token é por terminal (issue).
+ *
+ * RISCO RESIDUAL (decisão registrada): o nome é visível ao próprio agente (nome das ferramentas e linha de comando), e agora dura entre boots. Um agente comprometido poderia gravar um
+ * `.mcp.json` com esse nome para herdar a pré-autorização `--allowedTools mcp__<nome>` numa sessão seguinte. Mitigação adotada: a configuração executável do diretório efetivo
+ * (`.mcp.json` e `.claude/settings*.json` incluídos) é inspecionada e exige confirmação explícita ao CRIAR (workspace comum) e ao RETOMAR (workspace comum E worktree): ver terminals.js.
+ * Rotação do nome não é feita (nem necessária enquanto essa inspeção valer); troque `db.mcpServerName` se for preciso invalidar o nome conhecido.
+ */
+export function stableServerName(db, { save = null, gen = () => randomBytes(3).toString('hex') } = {}) {
+  const cur = db?.mcpServerName;
+  if (typeof cur === 'string' && SERVER_NAME_RE.test(cur)) return cur;
+  let name = `orchestrator_${gen()}`; if (!SERVER_NAME_RE.test(name)) name = `orchestrator_${randomBytes(3).toString('hex')}`;
+  if (db && typeof db === 'object') { db.mcpServerName = name; try { save?.(); } catch { /* sem gravar: o nome vale só neste processo */ } }
+  return name;
+}
+
 export function createMaestro({ getTerminals, mcpDir, url, serverName = SERVER_NAME, lockDir = restrictDir, now = store.now, uid = store.uid, setTimer = setTimeout, autoPerMinute = AUTO_PER_MINUTE, submitDelayMs = 200 } = {}) {
   const byHash = new Map();   // sha256(token) -> { terminalId, role }
   const byTerminal = new Map(); // terminalId -> { hash, file }

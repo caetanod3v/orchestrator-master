@@ -91,5 +91,23 @@ export function createUsageReader({ configDir = claudeConfigDir(), pricesFile = 
     }
     return { ...t, total: t.input + t.output + t.cacheWrite + t.cacheRead, turns, model, costUsd: costKnown ? Math.round(cost * 1e6) / 1e6 : null };
   }
-  return { read, forget: (sessionId) => { misses.delete(sessionId); return files.delete(sessionId); } };
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i; // só UUID: nenhum separador de caminho chega ao sistema de arquivos
+  /** Quais destes ids têm transcrição? UM passe pelas pastas de projeto (em vez de uma varredura por id): é o que o histórico usa. Sem cache: reflete o disco agora. */
+  function present(ids) {
+    const want = new Set((Array.isArray(ids) ? ids : []).filter((x) => typeof x === 'string' && UUID.test(x))), out = new Set();
+    if (!want.size) return out;
+    const root = path.join(configDir, 'projects');
+    let dirs; try { dirs = fs.readdirSync(root, { withFileTypes: true }); } catch { return out; }
+    for (const d of dirs) {
+      if (!d.isDirectory()) continue;
+      const dir = path.join(root, d.name); let ents; try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const e of ents) {
+        if (!e.name.endsWith('.jsonl') || !want.has(e.name.slice(0, -6))) continue;
+        let isFile = e.isFile(); if (!isFile && e.isSymbolicLink()) { try { isFile = fs.statSync(path.join(dir, e.name)).isFile(); } catch { /* link quebrado */ } } // mesma regra de locate(): tem de ser ARQUIVO
+        if (isFile) out.add(e.name.slice(0, -6));
+      }
+    }
+    return out;
+  }
+  return { read, has: (sessionId) => typeof sessionId === 'string' && UUID.test(sessionId) && locate(sessionId) !== null, present, forget: (sessionId) => { misses.delete(sessionId); return files.delete(sessionId); } };
 }

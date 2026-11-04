@@ -63,6 +63,19 @@ const NPM_NAME_RE = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/; //
 
 export const WT_STATES = Object.freeze(['creating', 'ready', 'in_use', 'finished', 'integrated', 'failed', 'inconsistent', 'removed']);
 const USABLE = ['ready', 'in_use', 'finished'];
+/**
+ * Regra ÚNICA de "worktree utilizável por este workspace" (usada pelo ciclo e pela retomada de terminais): do mesmo workspace, em estado utilizável, sem operação em
+ * andamento e com a pasta existente. Devolve null (utilizável) ou o motivo: missing | workspace | state | op | path.
+ */
+export function worktreeProblem(r, workspaceId) {
+  if (!r) return 'missing';
+  if (r.workspaceId !== workspaceId) return 'workspace';
+  if (!USABLE.includes(r.state)) return 'state';
+  if (r.op) return 'op';
+  if (!fs.existsSync(r.path)) return 'path';
+  return null;
+}
+export const usableWorktree = (r, workspaceId) => worktreeProblem(r, workspaceId) === null;
 const MAX_HISTORY = 100, MAX_ATTEMPTS = 20, MAX_ROUNDS = 20;
 
 /** Repositório do workspace: precisa ser a RAIZ do worktree PRINCIPAL, com HEAD em uma branch e ao menos um commit. `unknown: true` = o Git não pôde responder. */
@@ -442,7 +455,7 @@ export function createWorktreeManager({ db, root = null, now = store.now, runGit
     const id = m.cycle?.worktreeId;
     if (!id || !ws) return ws;
     const r = get(id);
-    if (!r || r.workspaceId !== ws.id || !USABLE.includes(r.state) || r.op || !fs.existsSync(r.path)) return null;
+    if (!usableWorktree(r, ws.id)) return null;
     return { ...ws, path: r.path, worktreeId: r.id };
   }
 

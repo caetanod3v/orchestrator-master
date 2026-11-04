@@ -22,11 +22,11 @@ import { resolveSupervision, supervisionMs, MAX_MINUTES_LIMIT, STALL_MINUTES_LIM
 import { resolveWorktreeIsolation, createWorktreeManager, setupWorktrees } from './worktrees.js';
 import { createTerminalManager, setupTerminals } from './terminals.js';
 import { createUsageReader } from './terminal-usage.js';
-import { createMaestro, setupMaestro } from './maestro.js';
+import { createMaestro, setupMaestro, stableServerName } from './maestro.js';
 import { setupChat } from './chat.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
-import { acquireInstanceLock } from './instance-lock.js';
+import { acquireInstanceLock, pidAlive } from './instance-lock.js';
 import { createChildRegistry } from './child-registry.js';
 import { installShutdown } from './shutdown.js';
 import { apiGuard } from './origin-guard.js';
@@ -65,8 +65,8 @@ const worktreeIsolation = () => resolveWorktreeIsolation({ settings: db.settings
 const worktrees = createWorktreeManager({ db, track: childRegistry.track, children: childRegistry });
 // Credenciais MCP dos panes: com ORCH_DATA_DIR (testes, app desktop) ficam na pasta de dados; no modo dev, FORA do repositório (um agente com cwd no repositório leria data/ sem pedir permissão).
 const mcpDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'mcp') : path.join(process.env.LOCALAPPDATA || os.homedir(), 'ai-dev-orchestrator', 'mcp');
-const maestro = createMaestro({ getTerminals: () => terminals, mcpDir, url: `http://127.0.0.1:${PORT}/mcp`, serverName: `orchestrator_${randomBytes(3).toString('hex')}` }); // nome com sufixo aleatório: um .mcp.json homônimo não herda a pré-autorização // coordenação entre panes por MCP local (aprovação do usuário por padrão)
-const terminals = createTerminalManager({ db, track: childRegistry.track, worktrees, mcp: maestro, usage: createUsageReader({ pricesFile: path.join(store.dataDir, 'pricing.json') }) }); // terminais interativos (PTY) do Claude Code: um processo por pane, em paralelo
+const maestro = createMaestro({ getTerminals: () => terminals, mcpDir, url: `http://127.0.0.1:${PORT}/mcp`, serverName: stableServerName(db, { save: store.saveOrThrow }) }); // nome com sufixo aleatório POR INSTALAÇÃO (estável entre boots, ver maestro.js): um .mcp.json homônimo não herda a pré-autorização // coordenação entre panes por MCP local (aprovação do usuário por padrão)
+const terminals = createTerminalManager({ db, track: childRegistry.track, worktrees, mcp: maestro, persist: store.saveOrThrow, isChildAlive: (terminalId) => childRegistry.pending().some((r) => r && r.kind === 'terminal' && r.terminalId === terminalId && pidAlive(r.pid)), usage: createUsageReader({ pricesFile: path.join(store.dataDir, 'pricing.json') }) }); // terminais interativos (PTY) do Claude Code: um processo por pane, em paralelo
 let worktreeRecovery = { settled: [], inconsistent: [], unregistered: [], unverified: [] }; // E3: preenchido logo DEPOIS do reclaim dos processos filhos (abaixo)
 const app = express();
 // Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO em POST/PUT/PATCH/DELETE (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).

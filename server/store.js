@@ -64,6 +64,24 @@ function markOk() {
 
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 
+const TERMINAL_STATES = ['running', 'exited', 'interrupted'];
+/** Um registro do histórico de sessões de terminal (terminals.js) com o que a retomada exige. */
+export const validTerminalSession = (r) => isObj(r) && typeof r.id === 'string' && /^ses_[0-9a-f]{8}$/.test(r.id) && ['claudeSessionId', 'terminalId', 'workspaceId', 'cwd', 'role', 'title'].every((k) => typeof r[k] === 'string') && TERMINAL_STATES.includes(r.state);
+/**
+ * O histórico de terminais é informativo: um registro malformado NÃO invalida o banco. Descarta só os inválidos (e ids repetidos) e zera `forkedFrom` que aponte para
+ * registro inexistente. Banco antigo sem a lista fica como está. Devolve quantos registros foram descartados.
+ */
+export function sanitizeTerminalSessions(d) {
+  if (!isObj(d) || d.terminalSessions === undefined) return 0;
+  if (!Array.isArray(d.terminalSessions)) { d.terminalSessions = []; return 1; }
+  const seen = new Set(), keep = [];
+  for (const r of d.terminalSessions) { if (validTerminalSession(r) && !seen.has(r.id)) { seen.add(r.id); keep.push(r); } }
+  const dropped = d.terminalSessions.length - keep.length;
+  for (const r of keep) if (r.forkedFrom != null && (typeof r.forkedFrom !== 'string' || !seen.has(r.forkedFrom) || r.forkedFrom === r.id)) r.forkedFrom = null;
+  if (dropped) d.terminalSessions = keep;
+  return dropped;
+}
+
 /**
  * Estrutura MÍNIMA que o servidor usa logo no boot e nas rotas (initial(), setupExecution, recover, store.log): nada além disso é exigido,
  * para não rejeitar bancos antigos legítimos. Devolve o motivo da rejeição ou null.
@@ -96,7 +114,10 @@ function readCandidate(file) {
   let parsed;
   try { parsed = JSON.parse(raw); } catch (e) { return { reason: `JSON inválido (${e.message})` }; }
   const why = validateDb(parsed);
-  return why ? { reason: `estrutura inválida: ${why}` } : { db: parsed, raw };
+  if (why) return { reason: `estrutura inválida: ${why}` };
+  const dropped = sanitizeTerminalSessions(parsed);
+  if (dropped) console.error(`[store] ${dropped} registro(s) inválido(s) do histórico de terminais ignorado(s); o restante do banco foi mantido`);
+  return { db: parsed, raw };
 }
 
 /** Guarda uma cópia de diagnóstico de um arquivo inválido (nunca o apaga). Lança se não conseguir: melhor falhar alto do que perdê-lo. */
