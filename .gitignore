@@ -30,3 +30,6 @@ client/dist/
 /referencia2.jpg
 /videoframe_1591.png
 /referencia/
+
+# Credenciais MCP temporarias dos terminais (tokens)
+data/mcp/

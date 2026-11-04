@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
+import { createActivityTracker } from './activity.js';
 
 const Ctx = createContext(null);
 export const useStore = () => useContext(Ctx);
@@ -40,6 +41,32 @@ export function StoreProvider({ children }) {
     return () => clearInterval(t);
   }, [refresh]);
 
+  // Terminais e maestro: UMA fonte para a sidebar (ambientes e indicadores) e para o Cockpit (grade). Dados reais de /api/terminals e /api/maestro; a tela só é
+  // atualizada quando algo mudou. "Trabalhando" = saída SUSTENTADA do pane fora de qualquer interação da interface (activity.js); clique, foco e redimensionamento nunca contam (nada é simulado). Com a aba oculta o polling pausa.
+  const [terminals, setTerminals] = useState(null);   // { roles, maxSessions, sessions }
+  const [maestro, setMaestro] = useState(null);       // { autonomous, autoPerMinute, tasks }
+  const [workingIds, setWorkingIds] = useState(() => new Set());
+  const tracker = useRef(null), lastT = useRef(''), lastM = useRef('');
+  if (!tracker.current) tracker.current = createActivityTracker();
+  const noteInteraction = useCallback((id) => tracker.current.noteInteraction(id), []); // clique, foco, tecla, mouse ou redimensionamento no pane: silencia a classificação dele
+  const loadTerminals = useCallback(async () => {
+    try {
+      const d = await api.get('/api/terminals');
+      const act = tracker.current.update(d.sessions);
+      setWorkingIds((prev) => (prev.size === act.size && [...act].every((x) => prev.has(x)) ? prev : act));
+      const json = JSON.stringify(d); if (json !== lastT.current) { lastT.current = json; setTerminals(d); }
+      api.get('/api/maestro').then((m) => { const j = JSON.stringify(m); if (j !== lastM.current) { lastM.current = j; setMaestro(m); } }).catch(() => {});
+    } catch { /* servidor fora do ar: mantém o último estado */ }
+  }, []);
+  const updateMaestro = useCallback((m) => { lastM.current = JSON.stringify(m); setMaestro(m); }, []);
+  useEffect(() => {
+    loadTerminals();
+    const tick = () => { if (!document.hidden) loadTerminals(); };
+    const t = setInterval(tick, 1500);
+    document.addEventListener('visibilitychange', tick);
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', tick); };
+  }, [loadTerminals]);
+
   // Eventos em tempo real (SSE). O polling acima continua como rede de segurança.
   useEffect(() => {
     const es = new EventSource('/api/events');
@@ -75,6 +102,6 @@ export function StoreProvider({ children }) {
   };
 
   return (
-    <Ctx.Provider value={{ ...data, error, mission, selectMission, refresh, act, notify, toast }}>{children}</Ctx.Provider>
+    <Ctx.Provider value={{ ...data, error, mission, selectMission, refresh, act, notify, toast, terminals, maestro, setMaestro: updateMaestro, workingIds, loadTerminals, noteInteraction }}>{children}</Ctx.Provider>
   );
 }

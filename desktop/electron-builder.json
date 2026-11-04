@@ -1,0 +1,53 @@
+{
+  "appId": "dev.orchestrator.desktop",
+  "productName": "AI Dev Orchestrator",
+  "copyright": "AI Dev Orchestrator",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
+  "files": [
+    "main.cjs",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "stage/orchestrator",
+      "to": "orchestrator"
+    },
+    {
+      "from": "stage/node",
+      "to": "node"
+    }
+  ],
+  "asar": true,
+  "win": {
+    "icon": "build/icon.ico",
+    "target": [
+      {
+        "target": "portable",
+        "arch": [
+          "x64"
+        ]
+      },
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ]
+  },
+  "portable": {
+    "artifactName": "AI-Dev-Orchestrator-${version}-Portable.${ext}"
+  },
+  "nsis": {
+    "artifactName": "AI-Dev-Orchestrator-${version}-Setup.${ext}",
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "shortcutName": "AI Dev Orchestrator"
+  },
+  "afterPack": "scripts/after-pack.cjs"
+}

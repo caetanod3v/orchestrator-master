@@ -16,7 +16,8 @@
     "test:real-cycle": "node server/test/manual/real-cycle.mjs"
   },
   "dependencies": {
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

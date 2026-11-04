@@ -93,6 +93,14 @@ const attemptView = (a, i) => ({
   digest: typeof a.digest === 'string' && /^[0-9a-f]{32}$/.test(a.digest) ? a.digest : null, targetHead: short(a.targetHead), wtHead: short(a.wtHead), at: a.at ?? null,
 });
 
+/** Worktrees criados por terminais (o id do terminal é gravado como missionId): sem ciclo nem evidência, nunca são integráveis pelo gate estrito; só checar, registrar snapshot e limpar (se já integrados ou sem trabalho). */
+export const TERMINAL_MISSION_RE = /^term_[0-9a-f]{8}$/;
+export const terminalWorktrees = (items) => arr(items).filter((w) => isObj(w) && typeof w.missionId === 'string' && TERMINAL_MISSION_RE.test(w.missionId) && w.state !== 'removed');
+
+/** Worktrees cujo terminal ainda está rodando: o Windows trava a pasta em uso, então a limpeza só é oferecida depois de encerrar o terminal (o servidor também recusa, sem apagar nada). */
+export const IN_USE_NOTE = 'Em uso por um terminal ativo: encerre o terminal para poder limpar este worktree.';
+export const markInUse = (rows, inUseIds) => { const ids = inUseIds instanceof Set ? inUseIds : new Set(arr(inUseIds)); return arr(rows).map((r) => (ids.has(r.id) ? { ...r, canCleanup: false, note: IN_USE_NOTE } : r)); };
+
 /** Ambientes prontos para exibir (opcionalmente de uma missão), na ordem do servidor. Malformados são ignorados. */
 export function worktreeView(items, { missionId = null } = {}) {
   return arr(items).filter((w) => isObj(w) && typeof w.id === 'string' && STATE[w.state] && (!missionId || w.missionId === missionId)).map((w) => {

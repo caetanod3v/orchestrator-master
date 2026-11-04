@@ -27,3 +27,28 @@ export function agentTokens(usage, missionId, agent) {
   if (!known.length) return none;
   return { text: fmtTokens(known.reduce((a, b) => a + b, 0)), partial: isNum(t.provisional) && t.provisional > 0 };
 }
+
+// ---- Terminais interativos (panes do Cockpit) ----
+// `usage` de cada pane vem de /api/terminals (lido do transcript do Claude Code): { input, output, cacheWrite, cacheRead, total, turns, model, costUsd|null } ou null.
+// Custo ausente (sem tabela de preços) é "—", nunca US$ 0.
+
+const usd = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 });
+export const fmtUsd = (v) => (isNum(v) ? usd.format(v) : DASH);
+
+/** Texto do pane: { tokens, cost, title } (title = detalhamento para o tooltip). */
+export function paneUsage(usage) {
+  if (!usage || !isNum(usage.total)) return { tokens: DASH, cost: DASH, title: 'Sem consumo registrado ainda (o arquivo da sessão aparece depois da primeira resposta).' };
+  const title = `Entrada ${fmtTokens(usage.input)} · saída ${fmtTokens(usage.output)} · cache gravado ${fmtTokens(usage.cacheWrite)} · cache lido ${fmtTokens(usage.cacheRead)} · ${usage.turns} ${usage.turns === 1 ? 'resposta' : 'respostas'}${usage.model ? ` · ${usage.model}` : ''}`;
+  return { tokens: fmtTokens(usage.total), cost: fmtUsd(usage.costUsd), title };
+}
+
+/**
+ * Total do squad (todos os panes listados). Tokens: soma dos panes que já têm consumo. Custo: só quando TODOS os panes com consumo têm custo conhecido;
+ * senão é "—" (`partialCost` diz que há custo conhecido em parte dos panes, sem somar como se fosse o total).
+ */
+export function squadUsage(sessions) {
+  const withUsage = (Array.isArray(sessions) ? sessions : []).map((s) => s?.usage).filter((u) => u && isNum(u.total));
+  if (!withUsage.length) return { tokens: DASH, cost: DASH, panes: 0, partialCost: false };
+  const known = withUsage.filter((u) => isNum(u.costUsd));
+  return { tokens: fmtTokens(withUsage.reduce((a, u) => a + u.total, 0)), cost: known.length === withUsage.length ? fmtUsd(known.reduce((a, u) => a + u.costUsd, 0)) : DASH, panes: withUsage.length, partialCost: known.length > 0 && known.length < withUsage.length };
+}

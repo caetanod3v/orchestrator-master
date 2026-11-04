@@ -70,11 +70,11 @@ test('padrão: plano e retentativas desligados, origem "default"; as chaves anti
 test('PUT /api/settings: entradas inválidas são recusadas (400) e NADA é aplicado, nem os campos válidos enviados junto', async () => {
   const { data } = world(), b = await up(data);
   try {
-    for (const body of [{ planMode: 'on' }, { planMode: 1 }, { planMode: null }, { planMode: 'true' }, { stepRetries: 3 }, { stepRetries: -1 }, { stepRetries: 1.5 }, { stepRetries: '1' }, { stepRetries: null }, { stepRetries: true }, { stepRetries: [1] }, { planMode: true, stepRetries: 9 }, { showDemoData: false, planMode: 'x' }, { showDemoData: false, cycleMaxIterations: 99, planMode: true }]) {
+    for (const body of [{ planMode: 'on' }, { planMode: 1 }, { planMode: null }, { planMode: 'true' }, { stepRetries: 3 }, { stepRetries: -1 }, { stepRetries: 1.5 }, { stepRetries: '1' }, { stepRetries: null }, { stepRetries: true }, { stepRetries: [1] }, { planMode: true, stepRetries: 9 }, { showDemoData: true, planMode: 'x' }, { showDemoData: true, cycleMaxIterations: 99, planMode: true }]) {
       const r = await put(b, body); assert.equal(r.status, 400, JSON.stringify(body)); assert.match(r.json.error, /planMode|stepRetries|cycleMaxIterations/);
     }
     assert.deepEqual(await orch(b), DEFAULTS, 'nenhuma entrada inválida mudou a configuração');
-    assert.equal((await call(b, '/api/state')).json.settings.showDemoData, true, 'showDemoData enviado junto com um valor inválido também não foi aplicado');
+    assert.equal((await call(b, '/api/state')).json.settings.showDemoData, false, 'showDemoData enviado junto com um valor inválido também não foi aplicado');
     for (const [body, want] of [[{ planMode: true }, { planMode: true, stepRetries: 0 }], [{ stepRetries: 2 }, { planMode: true, stepRetries: 2 }], [{ planMode: false, stepRetries: 1 }, { planMode: false, stepRetries: 1 }], [{ stepRetries: 0 }, { planMode: false, stepRetries: 0 }]]) {
       const r = await put(b, body); assert.equal(r.status, 200, JSON.stringify(r.json)); const o = await orch(b); assert.deepEqual([o.planMode, o.stepRetries], [want.planMode, want.stepRetries]);
     }
@@ -163,10 +163,10 @@ test('persistência atômica: se o banco não pode ser gravado, o PUT responde 5
   try {
     assert.equal((await put(b, { stepRetries: 2 })).status, 200); // estado anterior conhecido: stepRetries 2 gravado
     fs.mkdirSync(blocker); // um DIRETÓRIO no lugar do arquivo temporário: a gravação falha com erro real (EISDIR)
-    const r = await put(b, { planMode: true, stepRetries: 1, showDemoData: false, cycleMaxIterations: 7 });
+    const r = await put(b, { planMode: true, stepRetries: 1, showDemoData: true, cycleMaxIterations: 7 });
     assert.equal(r.status, 500); assert.match(r.json.error, /NÃO foram salvas/);
     const o = await orch(b); assert.deepEqual([o.planMode, o.stepRetries, o.source.planMode, o.source.stepRetries], [false, 2, 'default', 'settings'], 'a memória voltou ao estado anterior');
-    const s = (await call(b, '/api/state')).json.settings; assert.equal(s.showDemoData, true); assert.equal(s.cycleMaxIterations, 5); assert.ok(!('planMode' in s), 'a chave que não existia antes foi removida, não deixada como undefined');
+    const s = (await call(b, '/api/state')).json.settings; assert.equal(s.showDemoData, false); assert.equal(s.cycleMaxIterations, 5); assert.ok(!('planMode' in s), 'a chave que não existia antes foi removida, não deixada como undefined');
     fs.rmSync(blocker, { recursive: true, force: true });
     assert.equal((await put(b, { planMode: true, stepRetries: 1 })).status, 200); assert.deepEqual([(await orch(b)).planMode, (await orch(b)).stepRetries], [true, 1]);
   } finally { fs.rmSync(blocker, { recursive: true, force: true }); await stop(b); }

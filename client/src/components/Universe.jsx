@@ -2,7 +2,7 @@ import React, { memo, useEffect, useRef, useState } from 'react';
 
 /**
  * Universo espacial 3D atrás do grafo (Three.js, carregado sob demanda). Ocupa só o canvas do Cockpit, fica na camada mais baixa e não recebe eventos.
- * Não conhece a câmera, os nós nem o ChatDock: só observa o PRÓPRIO tamanho e a visibilidade. Se o WebGL não existir ou falhar, mostra um fundo estático discreto.
+ * Não conhece a câmera, os nós nem outros painéis: só observa o PRÓPRIO tamanho e a visibilidade. Se o WebGL não existir ou falhar, mostra um fundo estático discreto.
  * A animação é ambiente e continua mesmo com prefers-reduced-motion (decisão de produto); só pausa com a aba oculta, fora da tela ou sem tamanho.
  * O <canvas> é criado a cada montagem (um contexto WebGL nunca é reaproveitado depois de liberado) e removido na limpeza.
  */

@@ -51,3 +51,24 @@ export function setupWorkspaceRemoval(app, { db }) {
     res.status(204).end();
   });
 }
+
+/** POST /api/workspaces/:id/rename { displayName }: nome amigável, só um rótulo visual. `name` (original), `path` e `id` nunca mudam; texto vazio (ou igual ao original) restaura o nome original. Falha ao gravar desfaz. */
+export function setupWorkspaceRename(app, { db }) {
+  app.post('/api/workspaces/:id/rename', (req, res) => {
+    const ws = db.workspaces.find((w) => w.id === req.params.id);
+    if (!ws) return res.status(404).json({ error: 'Workspace não encontrado.' });
+    const raw = req.body?.displayName;
+    if (raw !== undefined && raw !== null && typeof raw !== 'string') return res.status(400).json({ error: 'Nome inválido.' });
+    const clean = String(raw ?? '').replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim();
+    if (clean.length > 80) return res.status(400).json({ error: 'O nome pode ter no máximo 80 caracteres.' });
+    const before = ws.displayName;
+    if (clean && clean !== ws.name) ws.displayName = clean; else delete ws.displayName;
+    try { store.saveOrThrow(); } catch {
+      if (before === undefined) delete ws.displayName; else ws.displayName = before;
+      return res.status(500).json({ error: 'Não foi possível gravar o nome; nada foi alterado.' });
+    }
+    store.log('workspace', ws.displayName ? `Workspace renomeado (rótulo): ${ws.displayName}` : `Nome do workspace restaurado: ${ws.name}`, { workspaceId: ws.id });
+    store.save();
+    res.json(ws);
+  });
+}

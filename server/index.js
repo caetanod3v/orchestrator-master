@@ -1,15 +1,18 @@
 import express from 'express';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import * as store from './store.js';
 import { uid, now } from './store.js';
 import { claudeCodeExecutor as realExecutor } from './executor/index.js';
 import { gitInfo } from './git.js';
-import { validateDir, setupWorkspaceRemoval } from './workspaces.js';
+import { validateDir, setupWorkspaceRemoval, setupWorkspaceRename } from './workspaces.js';
 import { setupExecution, blockedReason } from './execution.js';
 import { missionStatus } from './mission-status.js';
 import { deliveryOf } from './delivery.js';
+import { threadOf } from './result-message.js';
 import { setupCycle, DEFAULT_MAX_ITERATIONS, HARD_MAX_ITERATIONS } from './cycle.js';
 import { createClaudePlanner, plannerConfigFromEnv } from './planner.js';
 import { routingFromEnv, createRouter } from './routing.js';
@@ -17,6 +20,9 @@ import { cycleLimitsFromEnv } from './limits.js';
 import { planModeFromEnv, stepRetriesFromEnv, resolveOrchestration, MAX_STEP_ATTEMPTS, MAX_STEP_RETRIES } from './plan.js';
 import { resolveSupervision, supervisionMs, MAX_MINUTES_LIMIT, STALL_MINUTES_LIMIT, MAX_AUTO_RESUMES } from './supervisor.js';
 import { resolveWorktreeIsolation, createWorktreeManager, setupWorktrees } from './worktrees.js';
+import { createTerminalManager, setupTerminals } from './terminals.js';
+import { createUsageReader } from './terminal-usage.js';
+import { createMaestro, setupMaestro } from './maestro.js';
 import { setupChat } from './chat.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
@@ -24,6 +30,9 @@ import { acquireInstanceLock } from './instance-lock.js';
 import { createChildRegistry } from './child-registry.js';
 import { installShutdown } from './shutdown.js';
 import { apiGuard } from './origin-guard.js';
+import { consumeApiTokenFromEnv, createTokenGuard } from './session-token.js';
+
+const apiToken = consumeApiTokenFromEnv(); // M2: lido e REMOVIDO de process.env antes de qualquer processo filho existir (ver session-token.js)
 
 // Costura de teste: só código em processo (nunca env, rede ou requisição) pode injetar executor/planner simulados.
 const testDeps = globalThis.__ORCH_TEST_DEPS__ ?? {};
@@ -45,7 +54,7 @@ const HOST = '127.0.0.1'; // somente local
 // Trava de instância ANTES de qualquer operação que possa tocar o banco (load, setupExecution, recover): uma 2ª instância sai sem alterar nada.
 const lock = acquireInstanceLock({ dir: store.dataDir, autoRelease: true });
 if (!lock.ok) { console.error(`[orchestrator] ${lock.message}`); process.exit(1); }
-installShutdown({ lock, executor: claudeCodeExecutor, children: [planner, verifier, { killActiveSync: () => worktrees.killActiveSync() }], store }); // ao sair: encerra os filhos (executor, Planner, verificador), grava o que está pendente e libera a trava
+installShutdown({ lock, executor: claudeCodeExecutor, children: [planner, verifier, { killActiveSync: () => worktrees.killActiveSync() }, { killActiveSync: () => terminals.killAllSync() }], store }); // ao sair: encerra os filhos (executor, Planner, verificador), grava o que está pendente e libera a trava
 const db = store.load();
 // Configuração efetiva de planejamento e retentativas (I4): ambiente > db.settings > padrão (desligados). Lida a cada mensagem do chat e a cada laço do ciclo.
 const orchestration = () => resolveOrchestration({ settings: db.settings });
@@ -54,11 +63,16 @@ const supervision = () => resolveSupervision({ settings: db.settings });
 // Worktrees isolados (Marco C): execução do ciclo fora do workspace principal. Padrão DESLIGADO (ambiente > configurações > padrão). A recuperação só concilia o registro com o Git: não relança missões nem remove nada.
 const worktreeIsolation = () => resolveWorktreeIsolation({ settings: db.settings });
 const worktrees = createWorktreeManager({ db, track: childRegistry.track, children: childRegistry });
+// Credenciais MCP dos panes: com ORCH_DATA_DIR (testes, app desktop) ficam na pasta de dados; no modo dev, FORA do repositório (um agente com cwd no repositório leria data/ sem pedir permissão).
+const mcpDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'mcp') : path.join(process.env.LOCALAPPDATA || os.homedir(), 'ai-dev-orchestrator', 'mcp');
+const maestro = createMaestro({ getTerminals: () => terminals, mcpDir, url: `http://127.0.0.1:${PORT}/mcp`, serverName: `orchestrator_${randomBytes(3).toString('hex')}` }); // nome com sufixo aleatório: um .mcp.json homônimo não herda a pré-autorização // coordenação entre panes por MCP local (aprovação do usuário por padrão)
+const terminals = createTerminalManager({ db, track: childRegistry.track, worktrees, mcp: maestro, usage: createUsageReader({ pricesFile: path.join(store.dataDir, 'pricing.json') }) }); // terminais interativos (PTY) do Claude Code: um processo por pane, em paralelo
 let worktreeRecovery = { settled: [], inconsistent: [], unregistered: [], unverified: [] }; // E3: preenchido logo DEPOIS do reclaim dos processos filhos (abaixo)
 const app = express();
 // Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO em POST/PUT/PATCH/DELETE (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).
 // ANTES do parser de JSON: uma requisição recusada nem chega a ter o corpo lido (e um corpo malformado vindo de origem externa dá 403, não 400).
 app.use('/api', apiGuard);
+if (apiToken) app.use('/api', createTokenGuard(apiToken)); // M2: com token (app desktop), ações mutáveis e fluxos de terminal só da interface
 app.use(express.json({ limit: '100kb' }));
 
 const str = (v, max = 300) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -150,12 +164,20 @@ app.get('/api/missions/:id', (req, res) => {
 });
 
 // Relatório de entrega: somente leitura, derivado dos registros gravados (delivery.js). Nunca grava nem altera o estado da missão.
+const deliveryFor = (m) => deliveryOf(m, find(db.workspaces, m.workspaceId) || null, { worktrees: db.worktrees, environments: Object.fromEntries((db.worktrees || []).filter((w) => w.missionId === m.id && w.prepare?.state === 'ready').map((w) => { const e = worktrees.environmentFor(w.id); return [w.id, { ok: e.ok, code: e.code }]; })) }); // E5: checagem ATUAL do ambiente só dos que dizem "ready"
 app.get('/api/missions/:id/delivery', (req, res) => {
   const m = find(db.missions, req.params.id);
   if (!m) return bad(res, 'Missão não encontrada.', 404);
-  const r = deliveryOf(m, find(db.workspaces, m.workspaceId) || null, { worktrees: db.worktrees, environments: Object.fromEntries((db.worktrees || []).filter((w) => w.missionId === m.id && w.prepare?.state === 'ready').map((w) => { const e = worktrees.environmentFor(w.id); return [w.id, { ok: e.ok, code: e.code }]; })) }); // E5: checagem ATUAL do ambiente só dos que dizem "ready"
+  const r = deliveryFor(m);
   if (!r.ok) return bad(res, r.error, 500);
   res.json(r.report);
+});
+// Conversa da missão + mensagem FINAL do orquestrador (derivada do relatório, nunca gravada: sem duplicatas ao reler). Somente leitura.
+app.get('/api/missions/:id/thread', (req, res) => {
+  const m = find(db.missions, req.params.id);
+  if (!m) return bad(res, 'Missão não encontrada.', 404);
+  const r = deliveryFor(m);
+  res.json(threadOf(m, r.ok ? r.report : null));
 });
 
 app.post('/api/missions', (req, res) => {
@@ -286,7 +308,7 @@ app.put('/api/settings', (req, res) => {
 const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'client', 'dist');
 if (fs.existsSync(dist)) {
   app.use(express.static(dist));
-  app.get(/^(?!\/api).*/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
+  app.get(/^(?!\/api)(?!\/mcp(?:\/|$)).*/, (req, res) => res.sendFile(path.join(dist, 'index.html'))); // /mcp nunca cai no SPA: o cliente MCP espera 405/401, não HTML
 }
 
 const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor, verifier, workspaceOf: (m) => worktrees.workspaceFor(m) });
@@ -294,8 +316,11 @@ childRegistry.reclaim({ executor: claudeCodeExecutor });
 worktreeRecovery = await worktrees.recover(); // E3: a conciliação dos worktrees (inclusive `prepare` interrompido) só roda DEPOIS do reclaim: ela depende de saber se o preparador ainda vive // órfãos do Planner/verificador: depois dos do Executor, antes de qualquer ciclo (setupCycle) e de ouvir a porta
 setupVerification(app, { db, verifier });
 setupWorkspaceRemoval(app, { db });
+setupWorkspaceRename(app, { db });
 const cycle = setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: () => orchestration().planMode, stepRetries: () => orchestration().stepRetries, supervision: () => supervisionMs(supervision()), worktrees, worktreeIsolation: () => worktreeIsolation().enabled });
 setupWorktrees(app, { db, manager: worktrees });
+setupTerminals(app, { manager: terminals });
+setupMaestro(app, { maestro });
 setupChat(app, { db, planner, cycle, multiStep: () => orchestration().planMode }); // M5: chat geral; só prepara propostas, executar exige /api/chat/approve
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));

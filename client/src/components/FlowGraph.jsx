@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Glyph, Icon, TASK_GLYPH } from './ui.jsx';
-import { usePrefersReduced } from './NeuralCore.jsx';
+import { usePrefersReduced } from '../hooks.js';
 import { taskTone, taskLabel } from '../op-state.js';
 import { approvalGates, buildGraph } from '../graph.js';
 import ApprovalGate from './ApprovalGate.jsx';

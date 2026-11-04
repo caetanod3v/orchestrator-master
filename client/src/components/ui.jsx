@@ -78,6 +78,10 @@ const ICONS = {
   planner: 'M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 17c7 0 2-10 8-10', executor: 'M4 6l6 6-6 6M12 18h8',
   gate: 'M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6zM9 12l2 2 4-4', queue: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01', target: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
   task: 'M5 5h14v14H5zM9 12l2 2 4-4', minus: 'M5 12h14', fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5', copy: 'M9 9h10v10H9zM5 15V5h10',
+  gear: 'M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2zM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z', terminal: 'M4 5h16v14H4zM8 10l3 2-3 2M13 15h3', user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
+  sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4', layers: 'M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5',
+  restore: 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5', folderPlus: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 11v5M9.5 13.5h5', sliders: 'M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4',
+  pencil: 'M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17zM14 7l3 3',
 };
 export const Icon = ({ name, size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false"><path d={ICONS[name]} /></svg>
@@ -85,3 +89,6 @@ export const Icon = ({ name, size = 18 }) => (
 
 /** Ciclo da missão parado numa ação que espera aprovação humana (M9): dado real do servidor, nunca inferido. */
 export { cycleApprovalPending } from '../op-state.js';
+
+/** Três barras que sobem e descem: há saída sendo produzida AGORA (dado real: a saída do pane cresceu na última consulta). Parada sob prefers-reduced-motion. */
+export const Equalizer = () => <span className="oc-eq" aria-hidden="true"><i /><i /><i /></span>;

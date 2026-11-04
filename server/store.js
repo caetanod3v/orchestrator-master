@@ -17,7 +17,7 @@ export const now = () => new Date().toISOString();
 function initial() {
   return {
     version: 1,
-    settings: { activeWorkspaceId: null, requireApproval: true, showDemoData: true },
+    settings: { activeWorkspaceId: null, requireApproval: true, showDemoData: false },
     workspaces: [],
     missions: buildDemoMissions(),
     activity: [],

@@ -1,36 +1,35 @@
 /* AI Dev Orchestrator — tokens do sistema visual.
    Fonte única de cor, tipografia, espaço, forma e movimento. Os demais .css só consomem estes valores.
-   Linguagem (derivada de /referencia): grafite quente em camadas tonais (chassi < folha < superfície), cantos generosos, quase nenhum contorno,
-   ação primária em bone (branco quente) e cor só para estado. Sem acento de marca, e sem gradiente, brilho ou vidro como enfeite dos componentes.
-   Exceção prevista: o PALCO do Cockpit (o canvas do grafo) é o único lugar que admite um fundo atmosférico em camadas (tons de profundidade e, em incremento futuro,
-   um campo de estrelas discreto). Esse fundo nunca compete com texto, cartões ou conexões: cartões são opacos e o movimento respeita prefers-reduced-motion. */
+   Linguagem (console de agentes, inspirada em ADEs como o Overclock): preto de terminal em degraus tonais finos, contornos de 1px (hairline) em vez de sombra, cantos pequenos (4 a 12px),
+   rótulos em mono caixa alta com espaçamento largo, e acentos em laranja e vermelho (verde só para saudável e concluído). Brilho (glow) só em foco, ação primária e estado ativo.
+   Cor continua sendo ESTADO com significado fixo (verde concluído, âmbar espera, vermelho falha, violeta interrompido) e sempre vem com glifo e texto, nunca só a cor.
+   Fontes: Geist e Geist Mono, empacotadas no build (o produto continua rodando offline). O PALCO do Cockpit (canvas do grafo) segue sendo o único fundo atmosférico. */
 
 :root {
   color-scheme: dark; /* controles nativos no tema escuro */
 
   /* camadas: --bg é o chassi (atrás da sidebar); --surface é a folha de conteúdo; --raise é qualquer coisa elevada dentro dela; --raise2 é hover/selecionado/pressionado. */
-  --bg: #121211; --surface: #1a1a19; --raise: #232321; --raise2: #2d2d2a; --raise3: #383835; --canvas: #0f0f0e; --term-bg: #0f0f0e;
-  /* --raise-quiet: fundo de linhas secundárias (inspetor), mais leve que --raise, para o grafo ter mais peso que os painéis. --edge: conexões do grafo (≥ 3:1 sobre o canvas). */
-  --raise-quiet: rgba(255, 250, 240, .03); --edge: rgba(255, 250, 240, .36);
+  --bg: #000000; --surface: #050506; --raise: #0b0c0f; --raise2: #12141a; --raise3: #1a1d25; --canvas: #000000; --term-bg: #000000;
+  /* --raise-quiet: rgba(255, 255, 255, .03); --edge: rgba(255, 255, 255, .4);
   /* separadores: raros. --line divide listas; --line-strong contorna o que precisa de limite; --line-control contorna campos (≥ 3:1). */
-  --line: rgba(255, 250, 240, .08); --line-strong: rgba(255, 250, 240, .26); --line-control: rgba(255, 250, 240, .4);
+  --line: rgba(255, 255, 255, .1); --line-strong: rgba(255, 255, 255, .22); --line-control: rgba(255, 255, 255, .42);
 
   /* texto: --strong títulos e valores; --text corpo; --dim apoio; --faint só placeholder e metadado (todos ≥ 4,5:1 sobre --raise2) */
-  --strong: #f4f3ef; --text: #dddbd5; --dim: #a8a6a0; --faint: #96948d;
+  --strong: #f4f4f5; --text: #d4d4d8; --dim: #a1a1aa; --faint: #8e8e98;
   /* ação primária e foco: bone. É a identidade: nenhuma cor de marca. */
-  --bone: #ecebe7; --bone-hover: #ffffff; --ink: #121211; --focus: #f4f3ef;
+  --bone: #ff6a2b; --bone-hover: #ff8450; --ink: #1a0b04; --focus: #ff8450;
 
   /* estados (cor + glifo + texto, nunca só a cor), com o MESMO significado em todo o produto, dessaturados para não competir com o conteúdo:
-     --muted cinza = ocioso, na fila, desconectado | --run azul discreto = executando | --ok verde = concluído | --warn âmbar = aguardando decisão humana | --interrupted cinza-azulado = interrompido | --err vermelho suave = erro */
-  --run: #7ea6d8; --ok: #62c48f; --warn: #e2b052; --err: #ee6f66; --muted: #a09e97; --interrupted: #94a3b8;
+     --muted cinza = ocioso, na fila, desconectado | --run laranja = executando (--run-text é o mesmo laranja mais claro, só para texto: ≥ 4,5:1 sobre o preto) | --ok verde = concluído | --warn âmbar = aguardando decisão humana | --interrupted cinza-azulado = interrompido | --err vermelho suave = erro */
+  --run: #ff6a2b; --run-text: #ff9a6b; --ok: #00d294; --warn: #fcbb00; --err: #ff4d4f; --muted: #9a9aa5; --interrupted: #a78bfa;
   /* agentes (Planner e Executor): inativo = cinza, executando = âmbar com pulsação suave, erro = vermelho. O verde é só de tarefas concluídas. */
   --ag-idle: var(--muted); --ag-run: var(--warn); --ag-err: var(--err);
-  --ok-bg: rgba(98, 196, 143, .1); --warn-bg: rgba(226, 176, 82, .1); --err-bg: rgba(238, 111, 102, .1);
-  --ok-text: #8bd8ae; --warn-text: #ecc77d; --danger-text: #f6aaa3;
+  --ok-bg: rgba(0, 210, 148, .1); --warn-bg: rgba(252, 187, 0, .1); --err-bg: rgba(255, 101, 104, .1);
+  --ok-text: #5ee9b5; --warn-text: #ffd236; --danger-text: #ffa3a3;
 
   /* tipografia: fontes do sistema (nada externo; o produto roda offline). Mono só para hora, caminho e comando. */
-  --sans: 'Inter Variable', Inter, 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  --sans: 'Geist Variable', 'Geist', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: 'Geist Mono Variable', 'Geist Mono', 'Cascadia Mono', 'JetBrains Mono', ui-monospace, Consolas, 'Courier New', monospace;
   /* escala (mínimo de 12px): xs metadado | sm apoio e controles | md corpo | lg subtítulo | xl título de página | 2xl título da conversa */
   --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-xl: 22px; --fs-2xl: 30px;
   --lh: 1.5; --lh-tight: 1.3; --lh-read: 1.65;
@@ -38,7 +37,7 @@
   /* espaço (base 4) */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
   /* forma */
-  --r-1: 8px; --r-2: 12px; --r-3: 16px; --r-4: 20px;
+  --r-1: 4px; --r-2: 6px; --r-3: 8px; --r-4: 12px;
   /* larguras */
   --w-side: 248px; --w-side-min: 64px; --w-inspector: 336px; --w-read: 720px; --w-page: 1080px;
 
@@ -50,5 +49,13 @@
 
   /* camadas z */
   --z-dock: 6; --z-pop: 50; --z-scrim: 40; --z-nav: 41; --z-toast: 60;
-  --shadow-pop: 0 12px 32px rgba(0, 0, 0, .5), 0 0 0 1px var(--line-strong);
+  --shadow-pop: 0 24px 60px -10px rgba(0, 0, 0, .75), 0 0 0 1px var(--line-strong);
+
+  /* marca e brilho (o laranja é a identidade e também a cor de "executando"; o vermelho é de falha e de alerta) */
+  --brand: var(--bone); --brand-bg: rgba(255, 106, 43, .1); --brand-line: rgba(255, 106, 43, .4);
+  --glow-sm: 0 0 12px rgba(255, 106, 43, .16); --glow-md: 0 0 20px rgba(255, 106, 43, .28);
+  /* rótulos de console: mono, caixa alta, espaçamento largo */
+  --caps-track: .09em; --caps-size: 11.5px;
+  /* cor por agente (identificação, nunca estado): construtor, piloto, revisor, batedor, torre */
+  --c-builder: #a3e635; --c-pilot: #f59e0b; --c-review: #8b5cf6; --c-scout: #2563eb; --c-tower: #ec4899;
 }

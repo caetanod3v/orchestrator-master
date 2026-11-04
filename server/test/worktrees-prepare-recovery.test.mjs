@@ -159,7 +159,7 @@ test('E3 — ordem do boot: o reclaim dos processos filhos vem ANTES da concilia
   const iReclaim = src.indexOf('childRegistry.reclaim('), iRecover = src.indexOf('worktrees.recover()'), iCycle = src.indexOf('setupCycle(app');
   assert.ok(iReclaim > 0 && iRecover > iReclaim, 'reclaim antes de recover'); assert.ok(iRecover < iCycle, 'recover antes do ciclo ser montado'); assert.equal(src.split('worktrees.recover()').length - 1, 1);
   assert.match(src, /createWorktreeManager\(\{ db, track: childRegistry\.track, children: childRegistry \}\)/); assert.match(src, /worktreeRecovery = await worktrees\.recover\(\)/);
-  assert.match(src, /installShutdown\(\{[^}]*children: \[planner, verifier, \{ killActiveSync: \(\) => worktrees\.killActiveSync\(\) \}\]/);
+  assert.match(src, /installShutdown\(\{[^}]*children: \[planner, verifier, \{ killActiveSync: \(\) => worktrees\.killActiveSync\(\) \}(, \{ killActiveSync: \(\) => terminals\.killAllSync\(\) \})?\]/); // os terminais interativos também são encerrados no desligamento
 });
 
 test('E3 — encerramento normal do servidor encerra o preparador (e libera o registro); sem preparação em curso nada acontece', async () => {

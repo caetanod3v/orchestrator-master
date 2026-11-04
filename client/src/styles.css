@@ -87,7 +87,7 @@ details > summary { cursor: pointer; }
 .s-queued i { background: transparent; border: 1.5px dashed currentColor; }                                                            /* ◌ na fila: não executada */
 .s-not_connected i, .s-cancelled i, .glyph.g-dash { border-radius: 1px; height: 2px; width: 10px; }                                     /* — desconectado, cancelado */
 .glyph.g-ok { background: transparent; box-shadow: none; border-radius: 0; clip-path: none; --g: 12px; }                              /* ✓ concluído: ver Glyph() */
-.s-running, .s-planning { color: var(--run); }
+.s-running, .s-planning { color: var(--run-text); }
 .s-completed, .s-succeeded, .s-verified { color: var(--ok); }
 .s-idle { color: var(--muted); }
 .s-failed { color: var(--err); }

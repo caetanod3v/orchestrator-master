@@ -1,8 +1,7 @@
 /* Cockpit: cabeçalho da missão, canvas do fluxo de trabalho (o grafo real das tarefas) e inspetor com abas.
    Leitura: 1) qual missão e o que precisa de você, 2) como o trabalho está organizado, 3) quem trabalha e onde, 4) o que aconteceu. */
 
-.ck { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--w-inspector); grid-template-rows: minmax(0, 1fr) auto; }
-.ck > .chat-dock { grid-column: 1 / -1; }
+.ck { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--w-inspector); grid-template-rows: minmax(0, 1fr); }
 
 /* ---------- missão e fluxo ---------- */
 .ck-main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -14,7 +13,7 @@
 /* título: nunca é espremido ao lado da meta (DEMO e progresso): se não couber junto, a meta desce para uma 2ª linha e o título usa a largura toda.
    Com altura de sobra o título MUITO longo também ocupa 2 linhas; em janelas baixas (ou com a conversa aberta numa janela média) fica numa linha só, com reticências, para o canvas não perder altura.
    O texto completo segue no DOM e no title. */
-@media (min-height: 700px) { .ck:not(:has(.chat-dock.open)) .ck-title { -webkit-line-clamp: 2; line-clamp: 2; } }
+@media (min-height: 700px) { .ck .ck-title { -webkit-line-clamp: 2; line-clamp: 2; } }
 @media (min-height: 860px) { .ck-title { -webkit-line-clamp: 2; line-clamp: 2; } }
 .ck-prog { display: inline-flex; align-items: center; gap: var(--sp-3); flex: none; font-size: var(--fs-sm); color: var(--dim); white-space: nowrap; } .ck-prog .segs { width: 72px; flex: none; }
 .ck-sub { display: flex; align-items: baseline; gap: 0 var(--sp-4); min-width: 0; margin-top: 2px; font-size: var(--fs-sm); color: var(--dim); }
@@ -173,8 +172,6 @@
   .flow { padding-inline: var(--sp-4); gap: 44px; }
   /* o grafo se ajusta a no mínimo 60%: botões de 44px de layout ficam com >= 26px na tela (WCAG 2.5.8) */
   .gate-actions .btn { min-height: 44px; padding-inline: var(--sp-5); }
-  .ck:has(.chat-dock.open) > :not(.chat-dock) { display: none; } /* telas estreitas: aberta, a conversa ocupa a folha toda */
-  .ck:has(.chat-dock.open) { display: flex; flex-direction: column; overflow: hidden; }
 }
 
 @media (max-width: 480px) { .cv-fit { flex-basis: 100%; justify-content: center; } .cv-sep { display: none; } } /* controles em duas linhas: o rótulo "Ajustar ao espaço" nunca é cortado */
@@ -182,3 +179,48 @@
   .fnode, .fnode.flash, .ck-panel { animation: none; }
   .edge, .edge.wait, .edge.next { animation: none; stroke-dashoffset: 0; }
 }
+
+/* Cockpit: alternância Terminais / Grafo */
+.ck-views { flex: none; display: flex; gap: var(--sp-5); margin: 0 var(--sp-5) var(--sp-2); border-bottom: 1px solid var(--line); }
+
+/* Grade de terminais (panes do Claude Code) */
+.tg { flex: 1; min-height: 0; display: flex; flex-direction: column; margin: 0 var(--sp-2) var(--sp-2); }
+.tg-bar { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); padding: var(--sp-2) var(--sp-3); }
+.tg-grp { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.tg-lbl { font-size: var(--caps-size); letter-spacing: var(--caps-track); text-transform: uppercase; color: var(--dim); }
+.tg-sel { background: var(--raise); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--r-2); padding: 6px 8px; font: inherit; font-size: var(--fs-sm); }
+.tg-chk { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--dim); cursor: pointer; }
+.tg-count { font-size: var(--fs-sm); color: var(--dim); }
+.tg-total { margin-left: auto; font-size: var(--fs-sm); color: var(--text); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.tg-empty { margin: var(--sp-5); max-width: 62ch; } .tg-empty p { line-height: var(--lh-read); }
+.tg-grid { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); grid-auto-rows: minmax(280px, 1fr); gap: var(--sp-2); padding: 0 var(--sp-1) var(--sp-1); }
+.tg-grid.has-max { grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(0, 1fr); }
+.tg-cell { min-width: 0; min-height: 0; display: flex; } .tg-cell[hidden] { display: none; }
+.tp { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--term-bg); border: 1px solid var(--line); border-top: 2px solid var(--role); border-radius: var(--r-3); overflow: hidden; }
+.tp:focus-within { border-color: var(--role); box-shadow: 0 0 0 1px var(--role); }
+.tp-head { flex: none; display: flex; align-items: center; gap: var(--sp-2); padding: 6px var(--sp-3); background: var(--raise); border-bottom: 1px solid var(--line); font-size: var(--fs-xs); }
+.tp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--role); flex: none; }
+.tp-role { color: var(--strong); font-weight: 600; flex: none; }
+.tp-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
+.tp-tag { flex: none; padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--dim); }
+.tp-usage { flex: none; color: var(--text); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.tp-state { flex: none; color: var(--dim); } .tp-working { color: var(--warn-text); } .tp-exited { color: var(--faint); }
+.tp-btn { flex: none; background: none; border: 0; color: var(--dim); cursor: pointer; padding: 2px 6px; border-radius: var(--r-1); font: inherit; } .tp-btn:hover { color: var(--strong); background: var(--raise3); }
+.tp-boot { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: var(--fs-sm); pointer-events: none; }
+.tp-body { position: relative; flex: 1; min-height: 0; padding: 6px 0 0 8px; } .tp-body .xterm { height: 100%; } .tp-body .xterm-viewport { background-color: transparent !important; }
+
+/* Painel do maestro */
+.mp { flex: none; margin: 0 var(--sp-1) var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); border-left: 3px solid #ec4899; border-radius: var(--r-3); background: var(--raise); max-height: 34vh; overflow: auto; }
+.mp-auto { border-color: var(--warn); border-left-color: var(--warn); }
+.mp-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); font-size: var(--fs-sm); }
+.mp-warn { color: var(--warn-text); font-size: var(--fs-xs); }
+.mp-note { margin: var(--sp-2) 0 0; }
+.tg-wt { flex: none; margin: 0 var(--sp-1) var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); border-radius: var(--r-3); background: var(--raise); max-height: 40vh; overflow: auto; font-size: var(--fs-sm); }
+.tg-wt > summary { cursor: pointer; color: var(--strong); }
+.mp-list, .mp-hist { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.mp-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-4); padding: var(--sp-2); background: var(--raise2); border-radius: var(--r-2); }
+.mp-txt { flex: 1 1 280px; min-width: 0; font-size: var(--fs-sm); } .mp-task { margin-top: 2px; color: var(--text); overflow-wrap: anywhere; }
+.mp-act { display: flex; gap: var(--sp-2); flex: none; }
+.mp-hist li { display: flex; gap: var(--sp-2); align-items: baseline; font-size: var(--fs-xs); min-width: 0; color: var(--dim); }
+.mp-clip { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-st { flex: none; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 999px; } .mp-st-done { color: var(--ok-text); } .mp-st-failed, .mp-st-rejected, .mp-st-expired { color: var(--faint); } .mp-st-delivered { color: var(--warn-text); }

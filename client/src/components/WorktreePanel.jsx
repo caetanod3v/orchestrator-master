@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { worktreeView, revalidateOutcome, needsEnvironment, canOfferPrepare, planView, prepareErrorView } from '../worktree-view.js';
+import { worktreeView, terminalWorktrees, markInUse, revalidateOutcome, needsEnvironment, canOfferPrepare, planView, prepareErrorView } from '../worktree-view.js';
 import { Btn, Status } from './ui.jsx';
 
 /** Apresentação pura (testável sem rede): cada ambiente, suas tentativas e as ações que o servidor aceitaria agora. */
@@ -93,13 +93,13 @@ export function WorktreeView({ rows, busy = false, onAction = () => {}, onRevali
 }
 
 /** Painel da missão: lê /api/state.worktrees e chama as rotas de worktrees; cada ação é revalidada pelo servidor. */
-export default function WorktreePanel({ mission }) {
+export default function WorktreePanel({ mission = null, terminals = false, inUse = null }) {
   const { state, act, notify, refresh } = useStore();
   const [busy, setBusy] = useState(false);
   const [prep, setPrep] = useState({}); // por worktree: { phase: planning | planned | approved | error, plan, error } (fases só da tela; o estado real vem do servidor)
   const setP = (id, v) => setPrep((p) => { const n = { ...p }; if (v) n[id] = v; else delete n[id]; return n; });
   const [results, setResults] = useState({});
-  const rows = worktreeView(state?.worktrees?.items, { missionId: mission.id });
+  const rows = terminals ? markInUse(worktreeView(terminalWorktrees(state?.worktrees?.items)), inUse) : worktreeView(state?.worktrees?.items, { missionId: mission?.id });
   const onAction = async (id, op, body, ok) => {
     setBusy(true);
     try { const r = await act(async () => { await api.post(`/api/worktrees/${id}/${op}`, body); return true; }); if (r) notify(ok); } finally { setBusy(false); }
@@ -128,5 +128,5 @@ export default function WorktreePanel({ mission }) {
     finally { setBusy(false); }
   };
   const onRefresh = async () => { try { await refresh(); } catch { /* a próxima atualização automática tenta de novo */ } };
-  return <WorktreeView rows={rows} busy={busy} onAction={onAction} onRevalidate={onRevalidate} results={results} prep={prep} needsPrepareId={needsEnvironment(mission)} onPlan={onPlan} onApprove={onApprove} onDiscard={(id) => setP(id, null)} onRefresh={onRefresh} />;
+  return <WorktreeView rows={rows} busy={busy} onAction={onAction} onRevalidate={onRevalidate} results={results} prep={prep} needsPrepareId={mission ? needsEnvironment(mission) : null} onPlan={onPlan} onApprove={onApprove} onDiscard={(id) => setP(id, null)} onRefresh={onRefresh} />;
 }

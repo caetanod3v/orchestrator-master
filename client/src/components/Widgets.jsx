@@ -3,7 +3,7 @@ import { taskLabel } from '../op-state.js';
 
 export function AgentCard({ agent, compact }) {
   return (
-    <div className="agent">
+    <div className="agent" data-agent={agent.id}>
       <div className="row wrap">
         <h3 className="agent-name">{agent.name}</h3>
         <Status value={agent.status} />

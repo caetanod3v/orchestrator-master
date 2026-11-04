@@ -69,10 +69,10 @@ test('API: padrão tudo desligado; entradas inválidas = 400 sem aplicar nada; O
   const realBefore = stat(), { data } = world(); let b = await up(data);
   try {
     assert.deepEqual(await sup(b), DEFAULTS);
-    for (const body of [{ supervisor: 'on' }, { supervisor: 1 }, { maxMinutes: 1441 }, { maxMinutes: -1 }, { maxMinutes: 1.5 }, { maxMinutes: '5' }, { stallMinutes: 241 }, { stallMinutes: null }, { autoResumes: 3 }, { autoResumes: true }, { autoResumes: 1, showDemoData: false, maxMinutes: 9999 }]) {
+    for (const body of [{ supervisor: 'on' }, { supervisor: 1 }, { maxMinutes: 1441 }, { maxMinutes: -1 }, { maxMinutes: 1.5 }, { maxMinutes: '5' }, { stallMinutes: 241 }, { stallMinutes: null }, { autoResumes: 3 }, { autoResumes: true }, { autoResumes: 1, showDemoData: true, maxMinutes: 9999 }]) {
       const r = await put(b, body); assert.equal(r.status, 400, JSON.stringify(body)); assert.match(r.json.error, /supervisor|maxMinutes|stallMinutes|autoResumes/);
     }
-    assert.deepEqual(await sup(b), DEFAULTS, 'nada foi aplicado'); assert.equal((await call(b, '/api/state')).json.settings.showDemoData, true);
+    assert.deepEqual(await sup(b), DEFAULTS, 'nada foi aplicado'); assert.equal((await call(b, '/api/state')).json.settings.showDemoData, false);
     assert.equal((await put(b, { supervisor: true }, { origin: 'http://evil.example' })).status, 403); assert.equal((await put(b, { supervisor: true }, { origin: null })).status, 403); assert.deepEqual(await sup(b), DEFAULTS);
     assert.equal((await put(b, { supervisor: true, maxMinutes: 30, stallMinutes: 5, autoResumes: 2 })).status, 200);
     assert.deepEqual(await sup(b), { supervisor: true, maxMinutes: 30, stallMinutes: 5, autoResumes: 2, source: { supervisor: 'settings', maxMinutes: 'settings', stallMinutes: 'settings', autoResumes: 'settings' } });
