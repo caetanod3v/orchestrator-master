@@ -9,6 +9,7 @@ const { spawn, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
+const { buildMacPath, macMenuTemplate } = require('./mac-env.cjs');
 
 app.setName('AI Dev Orchestrator');
 const SMOKE = process.env.ORCH_DESKTOP_SMOKE || null; // só para verificação do pacote: sobe, confere as rotas e sai com um código
@@ -36,10 +37,7 @@ function startServer() {
   fs.mkdirSync(DATA_DIR, { recursive: true }); fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
   if (!fs.existsSync(NODE_EXE)) throw new Error(`Node embutido não encontrado: ${NODE_EXE}`);
   const env = { ...process.env, PORT: String(port), ORCH_DATA_DIR: DATA_DIR, ORCH_API_TOKEN: API_TOKEN };
-  if (!IS_WIN) { // app aberto pelo Finder não herda o PATH do shell: inclui git instalado pelo usuário (~/.local/git, /opt/homebrew, /usr/local) antes do git antigo da Apple
-    const extra = [path.join(require('node:os').homedir(), '.local', 'git', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'].filter((d) => fs.existsSync(d));
-    env.PATH = [...extra, ...(env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin').split(':')].filter((d, i, a2) => d && a2.indexOf(d) === i).join(':');
-  }
+  if (!IS_WIN) env.PATH = buildMacPath({ home: require('node:os').homedir(), pathEnv: env.PATH }); // app aberto pelo Finder não herda o PATH do shell (git do usuário na frente; claude/node do usuário no fim)
   delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS; // o servidor roda no Node do pacote, nunca como Electron
   child = spawn(NODE_EXE, [path.join(APP_DIR, 'server', 'index.js')], { cwd: APP_DIR, env, windowsHide: true, detached: !IS_WIN, stdio: ['ignore', 'pipe', 'pipe'] }); // fora do Windows o servidor lidera o próprio grupo de processos (permite encerrar a árvore)
   log(`--- servidor iniciado (pid ${child.pid}) em 127.0.0.1:${port}; dados em ${DATA_DIR}`);
@@ -97,7 +95,7 @@ const lock = SMOKE ? true : app.requestSingleInstanceLock();
 if (!lock) { app.quit(); } else {
   app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
   app.whenReady().then(async () => {
-    Menu.setApplicationMenu(null);
+    Menu.setApplicationMenu(process.platform === 'darwin' ? Menu.buildFromTemplate(macMenuTemplate()) : null); // macOS sem menu = sem Cmd+C/V/Q; Windows continua sem menu
     try {
       port = await freePort(); startServer(); await waitReady();
       if (SMOKE) {

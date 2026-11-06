@@ -8,6 +8,7 @@
   },
   "files": [
     "main.cjs",
+    "mac-env.cjs",
     "package.json"
   ],
   "extraResources": [
