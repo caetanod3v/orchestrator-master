@@ -126,7 +126,7 @@ export default function Sidebar({ modal = false, collapsed = false, onToggle, on
   return (
     <aside id="nav-drawer" ref={box} className={cls} {...(modal ? { role: 'dialog', 'aria-modal': true, 'aria-label': 'Ambientes de trabalho' } : { 'aria-label': 'Ambientes de trabalho' })}>
       <div className="oc-side-head">
-        <span className="oc-brand" aria-label="AI Dev Orchestrator"><Logo /><span className="oc-brand-name side-label">Orchestrator</span></span>
+        <span className="oc-brand" aria-label="FORGE"><Logo /><span className="oc-brand-name side-label">FORGE</span></span>
         {modal
           ? <button type="button" className="oc-iconbtn" onClick={onClose} aria-label="Fechar a lista de ambientes"><Icon name="close" size={16} /></button>
           : <button type="button" className="oc-iconbtn oc-collapse" onClick={onToggle} aria-label={collapsed ? 'Expandir a barra lateral' : 'Recolher a barra lateral'} aria-expanded={!collapsed} title={collapsed ? 'Expandir' : 'Recolher'}><Icon name="panel" size={17} /></button>}

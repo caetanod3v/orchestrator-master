@@ -1,4 +1,4 @@
-/* Tema "console de agentes" (camada final): formas, tipografia de rótulos, contornos hairline, brilho e movimento do AI Dev Orchestrator.
+/* Tema "console de agentes" (camada final): formas, tipografia de rótulos, contornos hairline, brilho e movimento do FORGE.
    Os valores (cor, raio, fonte) vêm de tokens.css; aqui só se decide COMO são usados. Carregado por último: nada abaixo muda estrutura, comportamento ou acessibilidade,
    só a aparência. Brilho (glow) é reservado a foco, ação primária e estado ativo; todo movimento respeita prefers-reduced-motion. */
 

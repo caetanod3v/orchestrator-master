@@ -1,4 +1,4 @@
-/* AI Dev Orchestrator — tokens do sistema visual.
+/* FORGE — tokens do sistema visual.
    Fonte única de cor, tipografia, espaço, forma e movimento. Os demais .css só consomem estes valores.
    Linguagem (console de agentes, inspirada em ADEs como o Overclock): preto de terminal em degraus tonais finos, contornos de 1px (hairline) em vez de sombra, cantos pequenos (4 a 12px),
    rótulos em mono caixa alta com espaçamento largo, e acentos em laranja e vermelho (verde só para saudável e concluído). Brilho (glow) só em foco, ação primária e estado ativo.

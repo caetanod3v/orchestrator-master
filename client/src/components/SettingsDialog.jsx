@@ -48,7 +48,7 @@ export default function SettingsDialog({ onClose, initial = 'perfil' }) {
             <Row title="Nome exibido" hint="Aparece no rodapé da barra lateral.">
               <input value={prefs.name} onChange={(e) => setPref('name', e.target.value)} maxLength={40} placeholder="Seu nome" data-autofocus="" aria-label="Nome exibido" />
             </Row>
-            <Row title="Conta" hint="Ainda não existe login nem conta: o Orchestrator roda só neste computador (127.0.0.1) e o nome fica salvo apenas aqui. O login do Claude Code é independente e fica no próprio CLI." />
+            <Row title="Conta" hint="Ainda não existe login nem conta: o FORGE roda só neste computador (127.0.0.1) e o nome fica salvo apenas aqui. O login do Claude Code é independente e fica no próprio CLI." />
           </>}
 
           {tab === 'geral' && <>

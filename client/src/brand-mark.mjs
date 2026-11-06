@@ -1,4 +1,4 @@
-// Marca do Orchestrator: um maestro em pixel art (cabeça branca, olhos em fendas, bastão azul escuro). Fonte ÚNICA: a interface (Sidebar), o favicon e o ícone do app desktop saem desta grade.
+// Marca do FORGE: um maestro em pixel art (cabeça branca, olhos em fendas, bastão azul escuro). Fonte ÚNICA: a interface (Sidebar), o favicon e o ícone do app desktop saem desta grade.
 // X = branco, C = acento azul escuro (o bastão), . = vazio. O desenho é o mesmo de sempre (14x13 células), só recortado rente e centrado numa caixa de 16x16:
 // com 16 células por lado, 16, 32, 48, 64, 128 e 256 px dão sempre um número INTEIRO de pixels por célula (antes eram 20 células e 16 px davam 0,8 px: borrava).
 export const GRID = [
