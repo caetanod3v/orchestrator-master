@@ -123,6 +123,10 @@ main:focus { outline: none; }
 .wt-item.tone-live .wt-dot { background: var(--ok); box-shadow: none; } .wt-item.tone-work .wt-dot { background: var(--run); box-shadow: 0 0 6px var(--run); }
 .wt-item.tone-warn .wt-dot { background: var(--warn); box-shadow: 0 0 6px var(--warn); } .wt-item.tone-err .wt-dot { background: var(--err); box-shadow: 0 0 6px var(--err); }
 .wt-n { flex: none; min-width: 18px; padding: 0 5px; text-align: center; font-family: var(--mono); font-size: 11px; line-height: 16px; border-radius: 999px; }
+.wt-done { flex: none; width: 16px; height: 16px; display: inline-grid; place-items: center; border-radius: 50%; background: var(--err); color: #fff; font: 700 11px/1 var(--mono); animation: wt-pop .35s cubic-bezier(.2, 1.4, .4, 1) both, wt-pulse 2.4s ease-in-out .5s infinite; }
+@keyframes wt-pop { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes wt-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, .5); } 50% { box-shadow: 0 0 0 4px rgba(255, 77, 79, 0); } }
+@media (prefers-reduced-motion: reduce) { .wt-done { animation: none; } }
 .wt-n.warn { color: var(--warn-text); background: var(--warn-bg); } .wt-n.err { color: var(--danger-text); background: var(--err-bg); }
 .wt-x, .wt-add { flex: none; display: inline-grid; place-items: center; border: 0; background: transparent; color: var(--faint); cursor: pointer; border-radius: var(--r-1); transition: color var(--dur-ui) ease, background-color var(--dur-ui) ease; }
 .wt-x { width: 22px; height: 22px; margin: 0 6px 0 2px; opacity: .55; }

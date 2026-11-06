@@ -122,13 +122,12 @@ function Gutter({ axis, index, tracks, onTracks, gridRef, style, label }) {
   return <div className={`oc-gutter ${axis}`} style={style} role="separator" aria-orientation={axis === 'x' ? 'vertical' : 'horizontal'} aria-label={label} tabIndex={0} onPointerDown={onDown} onKeyDown={onKey} onDoubleClick={() => onTracks(evenTracks(tracks.length))} title="Arraste para redimensionar (duplo clique restaura)" />;
 }
 
-const TASK_LABEL = { pending: 'aguardando você', delivered: 'entregue', done: 'concluída', rejected: 'recusada', failed: 'falhou', expired: 'expirada' };
 
 /** Tarefas que o maestro repassa aos panes: por padrão cada uma espera a sua aprovação; o modo autônomo é opt-in e fica sempre visível. */
 function MaestroPanel({ data, onChange, notify }) {
   const [busy, setBusy] = useState(false);
   const run = async (fn) => { setBusy(true); try { onChange(await fn()); } catch (e) { notify(e.message, 'error'); } finally { setBusy(false); } };
-  const tasks = data.tasks, pending = tasks.filter((t) => t.status === 'pending'), rest = tasks.filter((t) => t.status !== 'pending').slice(0, 6);
+  const tasks = data.tasks, pending = tasks.filter((t) => t.status === 'pending');
   const toggle = (e) => {
     const on = e.target.checked;
     const aviso = ['Ligar o maestro autônomo?', '', `As tarefas que o maestro enviar serão digitadas nos outros terminais SEM pedir a sua aprovação (até ${data.autoPerMinute} por minuto). O Enter enviado junto também confirma qualquer pergunta que o terminal de destino esteja mostrando (ex.: um pedido de permissão). Cada agente age com as suas permissões. O modo volta a desligado quando o servidor reinicia.`].join(String.fromCharCode(10));
@@ -149,8 +148,6 @@ function MaestroPanel({ data, onChange, notify }) {
           <div className="mp-txt"><b>Para {t.toTitle}</b> <span className="dim small">({t.id})</span>{t.note && <span className="dim small"> · {t.note}</span>}<div className="mp-task">{t.text}</div></div>
           <div className="mp-act"><Btn kind="primary" disabled={busy} onClick={() => run(() => api.post(`/api/maestro/tasks/${t.id}/approve`))}>Aprovar e enviar</Btn><Btn disabled={busy} onClick={() => run(() => api.post(`/api/maestro/tasks/${t.id}/reject`))}>Recusar</Btn></div>
         </li>))}</ul>}
-      {rest.length > 0 && <ul className="mp-hist" aria-label="Tarefas recentes">{rest.map((t) => (
-        <li key={t.id} title={t.summary || t.note || t.text}><span className={`mp-st mp-st-${t.status}`}>{TASK_LABEL[t.status] || t.status}</span> <b>{t.toTitle}</b> <span className="mp-clip">{t.status === 'done' && t.summary ? t.summary : t.text}</span></li>))}</ul>}
     </section>
   );
 }
@@ -286,7 +283,7 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
         </div>
       </div>
 
-      {maestro && (mine.some((x) => x.role === 'maestro' && x.status === 'running') || maestro.tasks.length > 0 || maestro.autonomous) && <MaestroPanel data={maestro} onChange={setMaestro} notify={notify} />}
+      {maestro && (mine.some((x) => x.role === 'maestro' && x.status === 'running') || maestro.tasks.some((t) => t.status === 'pending') || maestro.autonomous) && <MaestroPanel data={maestro} onChange={setMaestro} notify={notify} />}
       {wtCount > 0 && (
         <details className="tg-wt">
           <summary>Worktrees dos terminais · {wtCount}</summary>

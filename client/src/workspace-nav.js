@@ -43,6 +43,26 @@ export function openTabs({ workspaces = [], openWorkspaceIds, activeId = null, s
   });
 }
 
+/**
+ * Último término por workspace: maior instante entre tarefas do maestro concluídas (doneAt, pelo workspace do pane de destino) e terminais encerrados (endedAt).
+ * Só dados reais do servidor. @returns {Map<string,string>} workspaceId -> ISO
+ */
+export function finishedStamps({ sessions = [], maestroTasks = [] } = {}) {
+  const wsOf = new Map(sessions.map((s) => [s.id, s.workspaceId]));
+  const out = new Map();
+  const bump = (ws, at) => { if (ws && typeof at === 'string' && at && (!out.has(ws) || at > out.get(ws))) out.set(ws, at); };
+  for (const t of maestroTasks) if (t && t.status === 'done') bump(wsOf.get(t.to), t.doneAt);
+  for (const s of sessions) if (s && s.status !== 'running') bump(s.workspaceId, s.endedAt);
+  return out;
+}
+
+/** Workspaces (que não são o ativo) com término posterior ao último visto. `seen`: workspaceId -> ISO; ausente = `baseline`. */
+export function unseenFinished({ stamps, seen = {}, baseline = '', activeId = null } = {}) {
+  const out = new Set();
+  for (const [ws, at] of stamps ?? []) if (ws !== activeId && at > (seen[ws] ?? baseline)) out.add(ws);
+  return out;
+}
+
 /** Fechar a aba nunca encerra terminais: se há agentes rodando, o usuário confirma antes (eles continuam em execução). */
 export function closePlan(tab) {
   if (!tab || !tab.running) return { confirm: false, message: '' };

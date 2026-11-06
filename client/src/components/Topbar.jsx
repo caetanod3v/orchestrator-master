@@ -1,10 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../store.jsx';
 import { nav } from '../api.js';
 import { Icon } from './ui.jsx';
 import AgentsPopover from './ProviderPanel.jsx';
 import WorkspaceTabs from './WorkspaceTabs.jsx';
-import { openTabs, closePlan, totals } from '../workspace-nav.js';
+import { openTabs, closePlan, totals, finishedStamps, unseenFinished } from '../workspace-nav.js';
 
 /**
  * Barra superior em 2 linhas. Linha 1: marca, estado, recursos (terminais e contadores reais) e configurações; em telas estreitas leva o botão da navegação.
@@ -15,6 +15,17 @@ export default function Topbar({ narrow, onMenu, menuRef, navOpen, onOpenSetting
   const sessions = terminals?.sessions ?? [], maestroTasks = maestro?.tasks ?? [];
   const activeId = state?.activeWorkspace?.id ?? null;
   const tabs = useMemo(() => openTabs({ workspaces, openWorkspaceIds, activeId, sessions, workingIds, maestroTasks }), [workspaces, openWorkspaceIds, activeId, sessions, workingIds, maestroTasks]);
+  // Aviso de término: "!" vermelho na aba do workspace cujo squad terminou algo desde a última vez que você o viu (visto = ativá-lo). Persistido só como conveniência.
+  const baseline = useRef(new Date().toISOString()).current;
+  const [seen, setSeen] = useState(() => { try { return JSON.parse(localStorage.getItem('forge.finishSeen') || '{}') || {}; } catch { return {}; } });
+  const stamps = useMemo(() => finishedStamps({ sessions, maestroTasks }), [sessions, maestroTasks]);
+  useEffect(() => {
+    const at = activeId && stamps.get(activeId);
+    if (!at || (seen[activeId] ?? baseline) >= at) return;
+    const next = { ...seen, [activeId]: at }; setSeen(next);
+    try { localStorage.setItem('forge.finishSeen', JSON.stringify(next)); } catch { /* sem armazenamento: vale só nesta sessão */ }
+  }, [activeId, stamps, seen, baseline]);
+  const unseen = useMemo(() => unseenFinished({ stamps, seen, baseline, activeId }), [stamps, seen, baseline, activeId]);
   const sum = useMemo(() => totals({ sessions, maestroTasks }), [sessions, maestroTasks]);
   const max = terminals?.maxSessions;
 
@@ -39,7 +50,7 @@ export default function Topbar({ narrow, onMenu, menuRef, navOpen, onOpenSetting
         <button type="button" className="oc-iconbtn" onClick={onOpenSettings} aria-label="Configurações" title="Configurações"><Icon name="gear" size={18} /></button>
       </div>
       <div className="tb-row tb-tabs">
-        <WorkspaceTabs tabs={tabs} onActivate={activate} onClose={close} onAdd={onOpenWorkspaces} />
+        <WorkspaceTabs tabs={tabs} unseen={unseen} onActivate={activate} onClose={close} onAdd={onOpenWorkspaces} />
       </div>
     </header>
   );
