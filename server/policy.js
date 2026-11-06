@@ -28,7 +28,7 @@ const SENSITIVE_FILE = /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.
 /** Para o controle de escopo (scope.js): o mesmo critério da política decide o que é segredo e o que é sensível. */
 export const isSecretPath = (rel) => SECRET_FILE.test(rel) && !SECRET_EXAMPLE.test(rel);
 export const isSensitivePath = (rel) => SENSITIVE_FILE.test(rel);
-const OUTSIDE_TEXT = /(^|[\s"'`(=])(?:[A-Za-z]:\/|\/\/|~\/|(?:\.\.\/)+|\/(?:etc|usr|var|home|root|bin|opt|tmp|Users|mnt|proc|sys)\b|%[A-Za-z_]+%|\$\{?(?:HOME|USERPROFILE)\b)/;
+const OUTSIDE_TEXT = /(^|[\s"'`(=])(?:[A-Za-z]:\/|\/\/|~\/|(?:\.\.\/)+|\/(?:etc|usr|var|home|root|bin|sbin|opt|tmp|Users|mnt|proc|sys|private|Library|Applications|System|Volumes)\b|%[A-Za-z_]+%|\$\{?(?:HOME|USERPROFILE)\b)/;
 const GIT_DIR_TEXT = /(^|[\s"'`(/])\.git(\/|\s|$)/;
 const STATE_TEXT = /(^|[\s"'`/])db\.json(\.(tmp|bak))?\b/i;
 // Sobrescrita destrutiva: o ALVO precisa ser o conteúdo/arquivo inteiro. Verbos genéricos sozinhos ("substituir todo o texto X por Y", "limpar a lista") não contam.

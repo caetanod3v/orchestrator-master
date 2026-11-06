@@ -44,13 +44,29 @@ export function processStartedAt(pid) {
   } catch { return null; }
 }
 
+/** POSIX: descendentes de `pid` (filhos, netos...) pela tabela de processos. Deve ser lido ANTES de matar o pai: sem o pai, os filhos passam a ser do init e a relação se perde. Falha = []. */
+export function descendantsOf(pid) {
+  try {
+    const kids = new Map();
+    for (const line of execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', timeout: 8_000, stdio: ['ignore', 'pipe', 'ignore'] }).split('\n')) {
+      const m = /^\s*(\d+)\s+(\d+)\s*$/.exec(line);
+      if (m) kids.set(Number(m[2]), [...(kids.get(Number(m[2])) ?? []), Number(m[1])]);
+    }
+    const out = [], seen = new Set([pid]), todo = [pid];
+    while (todo.length) for (const k of kids.get(todo.pop()) ?? []) if (!seen.has(k)) { seen.add(k); out.push(k); todo.push(k); }
+    return out;
+  } catch { return []; }
+}
+
 /** Encerra o processo e toda a árvore dele, de forma síncrona. Processo inexistente não é erro. */
 export function killTreeSync(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return;
-  try {
-    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 15_000 });
-    else process.kill(pid, 'SIGKILL');
-  } catch { /* já encerrado ou sem permissão: quem chama confere com pidAlive */ }
+  if (process.platform === 'win32') {
+    try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 15_000 }); } catch { /* já encerrado ou sem permissão: quem chama confere com pidAlive */ }
+    return;
+  }
+  // POSIX não tem `/T`: lista os descendentes primeiro e mata todos (o `taskkill /T` do Windows faz o mesmo por dentro).
+  for (const p of [...descendantsOf(pid), pid]) { try { process.kill(p, 'SIGKILL'); } catch { /* já encerrado ou sem permissão */ } }
 }
 
 /** Espera (no máximo `ms`) o processo sumir. */

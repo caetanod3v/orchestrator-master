@@ -16,7 +16,10 @@ import { execFileSync } from 'node:child_process';
 import { processStartedAt, killTreeSync, START_TOLERANCE_MS } from '../orphans.js';
 import { pidAlive } from '../instance-lock.js';
 
-export const BORN_AFTER_MS = 250;
+// Folga de resolução do relógio: o Windows lê a hora de criação em ms; no macOS/Linux ela sai de `ps etime` (segundos inteiros), então o início estimado pode vir até ~1 s
+// DEPOIS do real. Com 250 ms o processo original era dado como "reaproveitado" de forma intermitente (visto: 545 ms de diferença). 1,25 s ainda separa um PID reaproveitado
+// (nasce só depois que o original morre, normalmente segundos depois).
+export const BORN_AFTER_MS = process.platform === 'win32' ? 250 : 1250;
 export const BORN_BEFORE_MS = START_TOLERANCE_MS;
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 const toMs = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : (Number.isFinite(Date.parse(v)) ? Date.parse(v) : null));

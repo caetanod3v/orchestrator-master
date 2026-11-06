@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-verify-'));
+const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'orch-verify-')));
 process.env.ORCH_DATA_DIR = path.join(tmp, 'data');
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FAKEV = path.join(HERE, 'fake-verify.mjs');

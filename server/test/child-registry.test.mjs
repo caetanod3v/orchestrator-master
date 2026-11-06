@@ -184,10 +184,11 @@ test('boot: filho órfão (mesma identidade) do Planner e do verificador é ENCE
 });
 
 test('boot: a ÁRVORE inteira do filho órfão é encerrada (verificador: npm -> node)', async () => {
+  // o neto.pid existe antes de ter conteúdo: sem esperar o PID, Number('') dava 0 sob carga
   const code = `const g = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(SLEEP)}], { stdio: 'ignore' }); require('fs').writeFileSync(${JSON.stringify(path.join(tmp, 'neto.pid'))}, String(g.pid)); ${SLEEP}`;
   const child = spawn(process.execPath, ['-e', code], { stdio: 'ignore', windowsHide: true }); spawned.add(child.pid);
   const startedAt = new Date().toISOString(), exited = new Promise((r) => child.on('exit', r));
-  assert.ok(await until(() => fs.existsSync(path.join(tmp, 'neto.pid')))); const grandchild = Number(fs.readFileSync(path.join(tmp, 'neto.pid'), 'utf8')); spawned.add(grandchild);
+  assert.ok(await until(() => fs.existsSync(path.join(tmp, 'neto.pid')) && fs.readFileSync(path.join(tmp, 'neto.pid'), 'utf8').length > 0)); const grandchild = Number(fs.readFileSync(path.join(tmp, 'neto.pid'), 'utf8')); spawned.add(grandchild);
   plant('verifier', { pid: child.pid, startedAt });
   createChildRegistry().reclaim({ executor: newExecutor() });
   assert.equal(pidAlive(child.pid), false); assert.equal(pidAlive(grandchild), false, 'o neto também'); await settle(exited);

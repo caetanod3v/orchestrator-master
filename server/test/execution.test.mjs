@@ -7,7 +7,7 @@ import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-api-'));
+const tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'orch-api-')));
 process.env.ORCH_DATA_DIR = path.join(tmp, 'data');
 const wsDir = path.join(tmp, 'workspace');
 fs.mkdirSync(wsDir);

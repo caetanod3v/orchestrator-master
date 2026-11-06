@@ -33,7 +33,7 @@ function server(dir, port) {
     }, 25);
     exited.then(() => { clearInterval(iv); if (re.test(out)) resolve(out); else reject(new Error(`o processo encerrou antes de ${re}; saída: ${out}`)); });
   });
-  return { child, exited, out: () => out, waitFor, kill: () => child.kill() };
+  return { child, exited, out: () => out, waitFor, kill: () => child.kill('SIGKILL') };
 }
 const UP = /AI Dev Orchestrator API em/;
 const lockFile = (d) => path.join(d, 'server.lock');

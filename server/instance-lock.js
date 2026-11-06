@@ -8,6 +8,7 @@
 // ou é um arquivo ilegível antigo. A troca é feita por RENAME (só um processo consegue) e conferida pelo conteúdo: se o que foi movido não é
 // a trava obsoleta examinada, ela é devolvida e a nova instância desiste (nunca "rouba" a trava de uma instância ativa).
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -18,9 +19,17 @@ const BOOT_MARGIN_MS = 5_000;
 
 export const lockPathFor = (dir) => path.join(dir, LOCK_NAME);
 
-/** Vivo = existe (EPERM também conta como existente). */
+/** POSIX: processo já morto mas ainda não recolhido pelo pai (estado Z). `kill(pid, 0)` o enxerga como existente, e quem espera a morte de um filho nosso com a espera síncrona
+ *  (waitGone) bloqueia justamente o evento que o recolheria. No Windows não existe zumbi. Falha ao consultar = não é zumbi (mantém o comportamento anterior). */
+function isZombie(pid) {
+  if (process.platform === 'win32') return false;
+  try { return execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8', timeout: 3_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim().startsWith('Z'); } catch { return false; }
+}
+
+/** Vivo = existe e não é zumbi (EPERM também conta como existente). */
 export function pidAlive(pid) {
-  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+  try { process.kill(pid, 0); } catch (e) { return e.code === 'EPERM'; }
+  return !isZombie(pid);
 }
 
 function readLock(file) {
