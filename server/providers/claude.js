@@ -27,7 +27,7 @@ export const claudeProvider = Object.freeze({
    */
   paneArgs({ mode, prompt, label, sessionId, resumeSessionId, mcp = null, pluginDir = null }) {
     const pluginArgs = pluginDir ? ['--plugin-dir', pluginDir] : [];
-    const mcpArgs = mcp ? ['--mcp-config', mcp.configPath, '--allowedTools', `mcp__${mcp.serverName ?? 'orchestrator'}`] : [];
+    const mcpArgs = mcp ? ['--mcp-config', mcp.configPath, '--allowedTools', `mcp__${mcp.serverName ?? 'forge'}`] : [];
     if (mode === 'new') return ['--append-system-prompt', prompt, '--name', label, '--session-id', sessionId, ...pluginArgs, ...mcpArgs];
     return ['--resume', resumeSessionId, ...(mode === 'fork' ? ['--fork-session', '--session-id', sessionId] : []), ...pluginArgs, ...mcpArgs];
   },

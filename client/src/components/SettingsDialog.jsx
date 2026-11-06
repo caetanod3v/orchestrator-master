@@ -86,7 +86,7 @@ export default function SettingsDialog({ onClose, initial = 'perfil' }) {
             <Row title="Verificar de novo" hint="A detecção é guardada por alguns segundos.">
               <Btn onClick={recheck} disabled={checking}>{checking ? 'Verificando…' : 'Verificar'}</Btn>
             </Row>
-            <Row title="Permissões" hint="O terminal interativo pede permissões no próprio terminal. Quando o projeto tem configuração do Claude Code que executa comandos e não está revisada no Git, o Orchestrator pede a sua confirmação antes de abrir." />
+            <Row title="Permissões" hint="O terminal interativo pede permissões no próprio terminal. Quando o projeto tem configuração do Claude Code que executa comandos e não está revisada no Git, o FORGE pede a sua confirmação antes de abrir." />
           </>}
 
           {tab === 'providers' && <>

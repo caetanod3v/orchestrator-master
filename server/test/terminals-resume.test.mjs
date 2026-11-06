@@ -290,10 +290,10 @@ test('forkedFrom: várias gerações de fork e podas sucessivas nunca deixam ví
 test('MCP: o nome do servidor é estável entre reinicializações (gerado uma vez, guardado no banco, sem token) e a retomada usa o mesmo nome com credencial nova', async () => {
   const M = await import('../maestro.js');
   const db = {}; let saves = 0; const a = M.stableServerName(db, { save: () => { saves++; } });
-  assert.match(a, /^orchestrator_[0-9a-f]{6}$/); assert.equal(db.mcpServerName, a); assert.equal(saves, 1);
+  assert.match(a, /^forge_[0-9a-f]{6}$/); assert.equal(db.mcpServerName, a); assert.equal(saves, 1);
   assert.equal(M.stableServerName(db, { save: () => { saves++; } }), a, 'segundo boot: mesmo nome'); assert.equal(saves, 1, 'nada é gravado de novo');
-  db.mcpServerName = 'orchestrator'; assert.notEqual(M.stableServerName(db), 'orchestrator', 'nome previsível ou inválido é substituído por um com sufixo aleatório'); db.mcpServerName = 'x'; const n2 = M.stableServerName(db, { gen: () => 'ZZ' }); assert.match(n2, /^orchestrator_[0-9a-f]{6}$/, 'gerador inválido cai no aleatório');
-  assert.match(M.stableServerName({}, { save: () => { throw new Error('disco'); } }), /^orchestrator_[0-9a-f]{6}$/, 'sem gravar: vale nesta execução');
+  db.mcpServerName = 'orchestrator'; assert.notEqual(M.stableServerName(db), 'orchestrator', 'nome previsível ou inválido é substituído por um com sufixo aleatório'); db.mcpServerName = 'x'; const n2 = M.stableServerName(db, { gen: () => 'ZZ' }); assert.match(n2, /^forge_[0-9a-f]{6}$/, 'gerador inválido cai no aleatório');
+  assert.match(M.stableServerName({}, { save: () => { throw new Error('disco'); } }), /^forge_[0-9a-f]{6}$/, 'sem gravar: vale nesta execução');
   assert.notEqual(M.stableServerName({}), M.stableServerName({}), 'instalações diferentes: nomes diferentes (imprevisível para um .mcp.json hostil)');
   assert.ok(!JSON.stringify({ name: a }).match(/token|Bearer/i));
   // dois "boots": mesmo nome, terminais e tokens diferentes

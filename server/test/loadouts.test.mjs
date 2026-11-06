@@ -106,12 +106,12 @@ test('materialize: nunca escreve fora da pasta de destino (os caminhos vêm só 
 });
 
 // ---------- API ----------
-test('GET /api/loadouts: catálogo e o que cada papel recebe, com o MCP orchestrator', async () => {
+test('GET /api/loadouts: catálogo e o que cada papel recebe, com o MCP forge', async () => {
   const r = await call('/api/loadouts'); assert.equal(r.status, 200);
   const j = await r.json();
   assert.deepEqual(Object.keys(j.roles).sort(), [...L.LOADOUT_ROLES].sort());
-  assert.deepEqual(j.roles.maestro.skills, [...L.ROLE_DEFAULTS.maestro]); assert.equal(j.roles.maestro.customized, false); assert.deepEqual(j.roles.maestro.mcp, ['orchestrator']);
-  assert.deepEqual(j.catalog.skills.map((s) => s.id).sort(), Object.keys(L.SKILLS).sort()); assert.equal(j.catalog.mcp[0].id, 'orchestrator'); assert.equal(j.catalog.mcp[0].builtin, true);
+  assert.deepEqual(j.roles.maestro.skills, [...L.ROLE_DEFAULTS.maestro]); assert.equal(j.roles.maestro.customized, false); assert.deepEqual(j.roles.maestro.mcp, ['forge']);
+  assert.deepEqual(j.catalog.skills.map((s) => s.id).sort(), Object.keys(L.SKILLS).sort()); assert.equal(j.catalog.mcp[0].id, 'forge'); assert.equal(j.catalog.mcp[0].builtin, true);
   assert.equal(j.limits.maxSkillsPerRole, L.MAX_SKILLS_PER_ROLE);
 });
 

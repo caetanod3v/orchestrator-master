@@ -25,7 +25,7 @@ import * as store from './store.js';
 import { isAllowedHost } from './origin-guard.js';
 
 export const MAX_TASK_TEXT = 2000, MAX_SUMMARY = 2000, MAX_PENDING = 20, MAX_TASKS = 100, PENDING_TTL_MS = 10 * 60 * 1000, AUTO_PER_MINUTE = 12, READ_DEFAULT = 4000, READ_MAX = 8000;
-export const SERVER_NAME = 'orchestrator'; // aparece como mcp__orchestrator__<ferramenta> no Claude Code
+export const SERVER_NAME = 'forge'; // nome-base; na prática vale o de stableServerName (forge_<hex>), que aparece como mcp__forge_<hex>__<ferramenta> no Claude Code
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 const TASK_ID_RE = /^task_[0-9a-f]{8}$/, TERM_ID_RE = /^term_[0-9a-f]{8}$/;
 
@@ -57,7 +57,9 @@ export function restrictDir(dir, { platform = process.platform, run = execFileSy
   try { run('icacls', [dir, '/inheritance:r', '/grant:r', `${user}:(OI)(CI)F`], { stdio: 'ignore', windowsHide: true, timeout: 10_000 }); return true; } catch { return false; }
 }
 
-const SERVER_NAME_RE = /^orchestrator_[0-9a-f]{6}$/;
+// COMPATIBILIDADE de leitura (transição AI Dev Orchestrator -> FORGE): instalações que já têm `orchestrator_<hex>` no banco CONTINUAM com ele (o histórico das sessões retomadas e a
+// pré-autorização citam esse nome; girar quebraria a retomada). Só instalações novas, ou com nome inválido, recebem `forge_<hex>`. Um nome só é aceito se casar com um dos dois formatos.
+const SERVER_NAME_RE = /^(?:forge|orchestrator)_[0-9a-f]{6}$/;
 /**
  * Nome do servidor MCP, ESTÁVEL entre reinicializações: gerado uma vez por instalação (sufixo aleatório) e guardado em `db.mcpServerName` (não vai a nenhuma rota). O sufixo continua
  * imprevisível para um projeto hostil (um `.mcp.json` homônimo não herda a pré-autorização `--allowedTools mcp__<nome>`), mas uma sessão retomada depois de reiniciar o servidor
@@ -71,7 +73,7 @@ const SERVER_NAME_RE = /^orchestrator_[0-9a-f]{6}$/;
 export function stableServerName(db, { save = null, gen = () => randomBytes(3).toString('hex') } = {}) {
   const cur = db?.mcpServerName;
   if (typeof cur === 'string' && SERVER_NAME_RE.test(cur)) return cur;
-  let name = `orchestrator_${gen()}`; if (!SERVER_NAME_RE.test(name)) name = `orchestrator_${randomBytes(3).toString('hex')}`;
+  let name = `forge_${gen()}`; if (!SERVER_NAME_RE.test(name)) name = `forge_${randomBytes(3).toString('hex')}`;
   if (db && typeof db === 'object') { db.mcpServerName = name; try { save?.(); } catch { /* sem gravar: o nome vale só neste processo */ } }
   return name;
 }

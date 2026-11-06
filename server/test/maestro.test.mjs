@@ -44,10 +44,10 @@ test('credencial por pane: token aleatório só em memória, arquivo de configur
   M.createMaestro({ getTerminals: () => ({}), mcpDir: pre, url: 'http://127.0.0.1:1/mcp' });
   assert.deepEqual(fs.readdirSync(pre), ['outro.txt'], 'só term_*.json antigos são removidos');
   const w = world(); const r = w.m.issue({ terminalId: MA, role: 'maestro' });
-  const cfg = JSON.parse(fs.readFileSync(r.configPath, 'utf8')); const h = cfg.mcpServers.orchestrator;
+  const cfg = JSON.parse(fs.readFileSync(r.configPath, 'utf8')); const h = cfg.mcpServers.forge;
   assert.deepEqual([h.type, h.url], ['http', 'http://127.0.0.1:4999/mcp']); assert.match(h.headers.Authorization, /^Bearer [0-9a-f]{48}$/);
   assert.deepEqual(w.m.authenticate(h.headers.Authorization), { terminalId: MA, role: 'maestro' });
-  const r2 = w.m.issue({ terminalId: B1, role: 'builder' }); assert.notEqual(JSON.parse(fs.readFileSync(r2.configPath, 'utf8')).mcpServers.orchestrator.headers.Authorization, h.headers.Authorization);
+  const r2 = w.m.issue({ terminalId: B1, role: 'builder' }); assert.notEqual(JSON.parse(fs.readFileSync(r2.configPath, 'utf8')).mcpServers.forge.headers.Authorization, h.headers.Authorization);
   for (const bad of [undefined, '', 'Bearer', 'Bearer x', `Bearer ${'0'.repeat(48)}`, h.headers.Authorization.replace('Bearer', 'Basic'), `${h.headers.Authorization} `]) assert.equal(w.m.authenticate(bad), null, String(bad));
   assert.equal(w.m.issue({ terminalId: '../x', role: 'maestro' }), null, 'id inválido nunca vira nome de arquivo');
   w.m.revoke(MA); assert.equal(w.m.authenticate(h.headers.Authorization), null); assert.equal(fs.existsSync(r.configPath), false);
@@ -149,14 +149,14 @@ async function server(w) {
 test('HTTP: /mcp exige Host local, nenhum Origin e token válido; GET é 405; /api/maestro exige Origin nas mutações', async () => {
   const w = world(), { srv, port } = await server(w);
   try {
-    const cfg = JSON.parse(fs.readFileSync(w.m.issue({ terminalId: MA, role: 'maestro' }).configPath, 'utf8')), auth = cfg.mcpServers.orchestrator.headers.Authorization;
+    const cfg = JSON.parse(fs.readFileSync(w.m.issue({ terminalId: MA, role: 'maestro' }).configPath, 'utf8')), auth = cfg.mcpServers.forge.headers.Authorization;
     const init = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } };
     assert.equal((await rawReq(port, { body: init })).status, 401, 'sem token');
     assert.equal((await rawReq(port, { headers: { authorization: `Bearer ${'0'.repeat(48)}` }, body: init })).status, 401, 'token errado');
     assert.equal((await rawReq(port, { headers: { authorization: auth, origin: 'http://localhost:5173' }, body: init })).status, 403, 'navegador (Origin) é recusado mesmo com token');
     assert.equal((await rawReq(port, { headers: { authorization: auth, host: 'evil.example.com' }, body: init })).status, 403, 'Host estranho (DNS rebinding)');
     assert.equal((await rawReq(port, { method: 'GET', headers: { authorization: auth } })).status, 405);
-    const ok1 = await rawReq(port, { headers: { authorization: auth }, body: init }); assert.equal(ok1.status, 200); assert.equal(ok1.body.result.serverInfo.name, 'orchestrator');
+    const ok1 = await rawReq(port, { headers: { authorization: auth }, body: init }); assert.equal(ok1.status, 200); assert.equal(ok1.body.result.serverInfo.name, 'forge');
     assert.equal((await rawReq(port, { headers: { authorization: auth }, body: { jsonrpc: '2.0', method: 'notifications/initialized' } })).status, 202);
     const lp = await rawReq(port, { headers: { authorization: auth }, body: { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_panes', arguments: {} } } }); assert.equal(JSON.parse(lp.body.result.content[0].text).length, 4);
     // API do usuário: GET livre (Host local); POST sem Origin = 403; com Origin local funciona

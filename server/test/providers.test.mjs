@@ -30,7 +30,7 @@ test('claude.paneArgs: new, resume e fork geram os MESMOS argumentos de antes (c
   assert.deepEqual(claudeProvider.paneArgs({ mode: 'resume', sessionId: SID, resumeSessionId: OLD }), ['--resume', OLD]);
   assert.deepEqual(claudeProvider.paneArgs({ mode: 'resume', sessionId: SID, resumeSessionId: OLD, mcp }), ['--resume', OLD, '--mcp-config', '/tmp/x/mcp.json', '--allowedTools', 'mcp__orchestrator_abc123']);
   assert.deepEqual(claudeProvider.paneArgs({ mode: 'fork', sessionId: SID, resumeSessionId: OLD }), ['--resume', OLD, '--fork-session', '--session-id', SID]);
-  assert.deepEqual(claudeProvider.paneArgs({ mode: 'new', prompt: 'P', label: 'L', sessionId: SID, mcp: { configPath: '/c.json' } }).slice(-1), ['mcp__orchestrator'], 'sem serverName vale o nome padrão');
+  assert.deepEqual(claudeProvider.paneArgs({ mode: 'new', prompt: 'P', label: 'L', sessionId: SID, mcp: { configPath: '/c.json' } }).slice(-1), ['mcp__forge'], 'sem serverName vale o nome padrão');
 });
 
 test('claude.resolve: acha o `claude` no PATH, ignora diretórios sem ele e o terminals.js continua exportando resolveClaude', () => {
