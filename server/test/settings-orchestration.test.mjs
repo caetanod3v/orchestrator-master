@@ -35,7 +35,7 @@ function boot(data, env = {}) {
     return { child, out: () => out, exited: new Promise((r) => child.on('exit', (code) => r(code))), base: `http://127.0.0.1:${port}` };
   });
 }
-const waitUp = async (b) => { for (let i = 0; i < 100; i++) { if (/AI Dev Orchestrator API em/.test(b.out())) return true; await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); } return false; };
+const waitUp = async (b) => { for (let i = 0; i < 100; i++) { if (/FORGE API em/.test(b.out())) return true; await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); } return false; };
 const up = async (data, env) => { const b = await boot(data, env); assert.ok(await waitUp(b), `servidor não subiu:\n${b.out()}`); return b; };
 const stop = async (b) => { b.child.kill(); await b.exited; };
 const ORIGIN = 'http://localhost:5173';

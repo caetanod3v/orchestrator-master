@@ -26,7 +26,7 @@ function boot(env) {
   const exited = new Promise((r) => child.on('exit', (code) => r(code)));
   return { child, exited, out: () => out };
 }
-const waitUp = async (b, port) => { for (let i = 0; i < 80; i++) { if (/AI Dev Orchestrator API em/.test(b.out())) return true; await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); } return false; };
+const waitUp = async (b, port) => { for (let i = 0; i < 80; i++) { if (/FORGE API em/.test(b.out())) return true; await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); } return false; };
 
 test('valor inválido em ORCH_PLANNER_ROUTING impede o boot ANTES de tocar em qualquer dado', async () => {
   for (const v of ['maybe', '1', 'true']) {

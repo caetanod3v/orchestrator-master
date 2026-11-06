@@ -218,7 +218,7 @@ test('ponta a ponta: o servidor REAL (index.js, banco temporário) encerra no bo
   const srv = spawn(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'index.js')], { env: { ...process.env, ORCH_DATA_DIR: dir, PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   spawned.add(srv.pid); let out = ''; srv.stdout.on('data', (c) => { out += c; }); srv.stderr.on('data', (c) => { out += c; });
   try {
-    await settle(new Promise((resolve, reject) => { const iv = setInterval(() => { if (/AI Dev Orchestrator API em/.test(out)) { clearInterval(iv); resolve(); } }, 25); srv.on('exit', () => { clearInterval(iv); reject(new Error(`o servidor encerrou: ${out}`)); }); }), 25_000);
+    await settle(new Promise((resolve, reject) => { const iv = setInterval(() => { if (/FORGE API em/.test(out)) { clearInterval(iv); resolve(); } }, 25); srv.on('exit', () => { clearInterval(iv); reject(new Error(`o servidor encerrou: ${out}`)); }); }), 25_000);
     assert.equal(pidAlive(s.pid), false, 'a órfã foi encerrada pelo boot do servidor'); await settle(s.exited);
     const saved = JSON.parse(fs.readFileSync(path.join(dir, 'db.json'), 'utf8')).missions[0].tasks[0];
     assert.equal(saved.status, 'interrupted'); assert.equal('pid' in saved, false); assert.ok(saved.log.some((l) => /ENCERRADO/.test(l)));

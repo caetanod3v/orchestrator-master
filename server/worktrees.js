@@ -32,7 +32,7 @@ export function resolveWorktreeIsolation({ env = process.env, settings = {} } = 
 // ---------- Git: argumentos fixos, sem shell, sem hooks, sem prompts ----------
 const NO_HOOKS = path.join(os.tmpdir(), 'orch-no-hooks-dir'); // diretório que não existe: hooks do repositório nunca rodam por causa do orquestrador
 const BASE_ARGS = ['-c', `core.hooksPath=${NO_HOOKS}`, '-c', 'gc.auto=0', '-c', 'core.fsmonitor=false', '-c', 'core.quotepath=false'];
-const IDENT = { GIT_AUTHOR_NAME: 'AI Dev Orchestrator', GIT_AUTHOR_EMAIL: 'orchestrator@localhost', GIT_COMMITTER_NAME: 'AI Dev Orchestrator', GIT_COMMITTER_EMAIL: 'orchestrator@localhost' };
+const IDENT = { GIT_AUTHOR_NAME: 'FORGE', GIT_AUTHOR_EMAIL: 'forge@localhost', GIT_COMMITTER_NAME: 'FORGE', GIT_COMMITTER_EMAIL: 'forge@localhost' }; // só grava commits novos; os antigos mantêm o autor anterior
 const GIT_ENV_SCRUB = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_NAMESPACE', 'GIT_CEILING_DIRECTORIES'];
 /** Nunca rejeita: devolve { code, out, err, failed, timedOut }. `failed` = o Git NÃO pôde responder (não encontrado no PATH, tempo esgotado, saída além do limite): o resultado é DESCONHECIDO (code -1),
  *  diferente de um código de saída ≠ 0, que é uma resposta válida do Git ("não é um repositório", "não é ancestral"...). */

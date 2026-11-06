@@ -230,8 +230,8 @@ test('servidor real: /api/state expõe abas/tópicos/ativos; cadastrar e ativar 
   let out = ''; child.stdout.on('data', (c) => { out += c; }); child.stderr.on('data', (c) => { out += c; });
   const exited = new Promise((r) => child.on('exit', r));
   try {
-    for (let i = 0; i < 100 && !/AI Dev Orchestrator API em/.test(out); i++) await Promise.race([new Promise((r) => setTimeout(r, 100)), exited]);
-    assert.match(out, /AI Dev Orchestrator API em/, out);
+    for (let i = 0; i < 100 && !/FORGE API em/.test(out); i++) await Promise.race([new Promise((r) => setTimeout(r, 100)), exited]);
+    assert.match(out, /FORGE API em/, out);
     const api = (u, m = 'GET', b) => fetch(`${origin}${u}`, { method: m, headers: { 'content-type': 'application/json', origin }, body: b === undefined ? undefined : JSON.stringify(b) });
     let s = await (await api('/api/state')).json();
     assert.deepEqual([s.openWorkspaceIds, s.topics, s.activeTopicIds], [['ws_legacy01'], [], {}]);

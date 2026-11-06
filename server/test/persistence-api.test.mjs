@@ -22,7 +22,7 @@ function boot(port, dir) {
   let out = ''; child.stdout.on('data', (c) => { out += c; }); child.stderr.on('data', (c) => { out += c; });
   return { child, out: () => out, exited: new Promise((r) => child.on('exit', (code) => r(code))) };
 }
-const waitUp = async (b) => { for (let i = 0; i < 80; i++) { if (/AI Dev Orchestrator API em/.test(b.out())) return true; await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); } return false; };
+const waitUp = async (b) => { for (let i = 0; i < 80; i++) { if (/FORGE API em/.test(b.out())) return true; await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); } return false; };
 
 test('/api/state: saudável => persistence.ok e incidente null; falha real de gravação => ok=false e incidente aberto; reconciliada => ok=true e o rastro permanece', async () => {
   const dir = path.join(root, 'd1'); fs.mkdirSync(dir);

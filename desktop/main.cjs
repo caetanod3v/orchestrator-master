@@ -1,6 +1,6 @@
-// AI Dev Orchestrator — casca desktop (Electron). NÃO reimplementa nada: sobe o MESMO servidor (server/index.js) com o Node embutido no pacote, numa porta livre de 127.0.0.1,
+// FORGE — casca desktop (Electron). NÃO reimplementa nada: sobe o MESMO servidor (server/index.js) com o Node embutido no pacote, numa porta livre de 127.0.0.1,
 // com o banco na pasta de dados do usuário, e mostra a interface numa janela própria. Fechar a janela encerra o servidor (e o que ele iniciou).
-//   - o banco fica em %APPDATA%\AI Dev Orchestrator\data (ORCH_DATA_DIR); nunca em uma pasta de código e nunca no `data\` do repositório;
+//   - o banco fica em %APPDATA%\FORGE\data (ORCH_DATA_DIR; na primeira execução os dados de %APPDATA%\AI Dev Orchestrator\data são COPIADOS para cá, ver migrate-userdata.cjs); nunca em uma pasta de código e nunca no `data\` do repositório;
 //   - o Node é o do pacote (resources\node\node.exe, com o npm ao lado: as verificações reais procuram o npm junto do node.exe);
 //   - o Claude Code continua sendo exigido no PATH da máquina (o orquestrador o executa, não o inclui).
 const { app, BrowserWindow, Menu, dialog, shell, session } = require('electron');
@@ -10,8 +10,10 @@ const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 const { buildMacPath, macMenuTemplate } = require('./mac-env.cjs');
+const { migrateUserData } = require('./migrate-userdata.cjs');
 
-app.setName('AI Dev Orchestrator');
+app.setName('FORGE');
+app.setPath('userData', path.join(app.getPath('appData'), 'FORGE')); // explícito: a pasta de dados não depende de como o Electron deriva o nome
 const SMOKE = process.env.ORCH_DESKTOP_SMOKE || null; // só para verificação do pacote: sobe, confere as rotas e sai com um código
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, 'stage');
 const IS_WIN = process.platform === 'win32';
@@ -45,10 +47,23 @@ function startServer() {
   child.once('exit', (code, sig) => { log(`--- servidor encerrou (código ${code}, sinal ${sig})`); child = null; if (!quitting) fail('O servidor do orquestrador parou.'); });
 }
 
+/** Primeira execução depois da troca de nome: copia os dados de "AI Dev Orchestrator" para "FORGE". Com dados explícitos (verificação do pacote) não mexe em nada. */
+function runMigration() {
+  if (SMOKE || process.env.ORCH_DESKTOP_DATA) return; // verificação do pacote: nunca toca os dados reais
+  const r = migrateUserData({ appData: app.getPath('appData') });
+  if (r.status === 'migrated') {
+    fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+    log(`--- dados migrados de ${r.from} para ${r.to} (a pasta original foi mantida)`);
+    if (r.skippedLinks && r.skippedLinks.length) log(`--- links não copiados (a cópia é sempre real): ${r.skippedLinks.join(', ')}`);
+  }
+  else if (r.status === 'blocked') throw new Error(`A versão anterior (AI Dev Orchestrator, pid ${r.pid}) parece estar aberta. Feche-a e abra o FORGE de novo. Se ela NÃO estiver aberta, o arquivo de trava ficou para trás depois de uma queda: apague ${r.lock} e tente de novo. Nenhum dado foi copiado.`);
+  else if (r.status === 'error') throw new Error(`Não foi possível copiar os dados da versão anterior: ${r.error}. A pasta original não foi alterada.`);
+}
+
 function fail(message) {
   if (quitting) return; quitting = true;
   if (SMOKE) { fs.writeFileSync(SMOKE, JSON.stringify({ ok: false, error: message, tail })); app.exit(1); return; }
-  dialog.showErrorBox('AI Dev Orchestrator', `${message}\n\nÚltimas linhas do servidor:\n${tail.slice(-8).join('\n')}\n\nLog completo: ${LOG_FILE}`);
+  dialog.showErrorBox('FORGE',`${message}\n\nÚltimas linhas do servidor:\n${tail.slice(-8).join('\n')}\n\nLog completo: ${LOG_FILE}`);
   stopServer(); app.exit(1);
 }
 
@@ -78,7 +93,7 @@ async function waitReady() {
 
 function createWindow() {
   const origin = `http://127.0.0.1:${port}`;
-  win = new BrowserWindow({ width: 1440, height: 900, minWidth: 900, minHeight: 600, backgroundColor: '#000000', title: 'AI Dev Orchestrator', autoHideMenuBar: true, show: false,
+  win = new BrowserWindow({ width: 1440, height: 900, minWidth: 900, minHeight: 600, backgroundColor: '#000000', title: 'FORGE', autoHideMenuBar: true, show: false,
     webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, devTools: !app.isPackaged } });
   session.defaultSession.webRequest.onBeforeSendHeaders({ urls: [`${origin}/*`] }, (details, cb) => { details.requestHeaders['x-orch-token'] = API_TOKEN; cb({ requestHeaders: details.requestHeaders }); });
   win.once('ready-to-show', () => win.show());
@@ -97,6 +112,7 @@ if (!lock) { app.quit(); } else {
   app.whenReady().then(async () => {
     Menu.setApplicationMenu(process.platform === 'darwin' ? Menu.buildFromTemplate(macMenuTemplate()) : null); // macOS sem menu = sem Cmd+C/V/Q; Windows continua sem menu
     try {
+      runMigration(); // antes de subir o servidor: ele abre o banco assim que inicia
       port = await freePort(); startServer(); await waitReady();
       if (SMOKE) {
         const index = await get('/'), state = await get('/api/state'), ws = await get('/api/workspaces'), terms = await get('/api/terminals'), mcp = await get('/mcp'); // terminais (PTY) e /mcp: o /mcp tem de responder 405, nunca o HTML do cliente

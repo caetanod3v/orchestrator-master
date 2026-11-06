@@ -33,8 +33,8 @@ async function boot() {
   proc = spawn(process.execPath, [INDEX], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   proc.stdout.on('data', (c) => { out += c; }); proc.stderr.on('data', (c) => { out += c; });
   const p = proc; exited = new Promise((r) => p.on('exit', r));
-  for (let i = 0; i < 150 && !/AI Dev Orchestrator API em/.test(out); i++) await Promise.race([sleep(100), exited]);
-  assert.match(out, /AI Dev Orchestrator API em/, out);
+  for (let i = 0; i < 150 && !/FORGE API em/.test(out); i++) await Promise.race([sleep(100), exited]);
+  assert.match(out, /FORGE API em/, out);
 }
 // Encerra o filho: fecha antes os terminais (processos do claude falso) para não deixar nada vivo.
 async function stop() {

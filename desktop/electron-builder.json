@@ -9,6 +9,7 @@
   "files": [
     "main.cjs",
     "mac-env.cjs",
+    "migrate-userdata.cjs",
     "package.json"
   ],
   "extraResources": [

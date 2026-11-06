@@ -82,7 +82,7 @@ function boot(port, dir) {
   let out = ''; child.stdout.on('data', (c) => { out += c; }); child.stderr.on('data', (c) => { out += c; });
   return { child, out: () => out, exited: new Promise((r) => child.on('exit', (code) => r(code))) };
 }
-const waitUp = async (b) => { for (let i = 0; i < 100; i++) { if (/AI Dev Orchestrator API em/.test(b.out())) return true; await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); } return false; };
+const waitUp = async (b) => { for (let i = 0; i < 100; i++) { if (/FORGE API em/.test(b.out())) return true; await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); } return false; };
 // http cru: permite controlar Host, Origin e a forma do alvo da requisição (o fetch não deixa)
 const raw = (port, { method = 'POST', target, headers = {}, body, raw: rawBody }) => new Promise((resolve, reject) => {
   const data = rawBody !== undefined ? rawBody : body === undefined ? undefined : JSON.stringify(body); // `raw`: corpo enviado como está (ex.: JSON malformado)

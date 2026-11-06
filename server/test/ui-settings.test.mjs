@@ -115,8 +115,8 @@ async function bootReal(dir) {
   const child = spawn(process.execPath, [INDEX], { env: { ...process.env, PORT: String(port), ORCH_DATA_DIR: dir }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   let out = ''; child.stdout.on('data', (c) => { out += c; }); child.stderr.on('data', (c) => { out += c; });
   const exited = new Promise((r) => child.on('exit', r));
-  for (let i = 0; i < 100 && !/AI Dev Orchestrator API em/.test(out); i++) await Promise.race([sleep(100), exited]);
-  assert.match(out, /AI Dev Orchestrator API em/, out);
+  for (let i = 0; i < 100 && !/FORGE API em/.test(out); i++) await Promise.race([sleep(100), exited]);
+  assert.match(out, /FORGE API em/, out);
   const api = (u, m = 'GET', b) => fetch(`${origin}${u}`, { method: m, headers: { 'content-type': 'application/json', origin }, body: b === undefined ? undefined : JSON.stringify(b) });
   return { api, stop: async () => { child.kill(); await exited; await sleep(300); } };
 }

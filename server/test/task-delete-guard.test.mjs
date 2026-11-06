@@ -38,8 +38,8 @@ test('tarefa referenciada por rodada não é removida; sem referência continua 
   let out = ''; child.stdout.on('data', (c) => { out += c; }); child.stderr.on('data', (c) => { out += c; });
   const exited = new Promise((r) => child.on('exit', r));
   try {
-    for (let i = 0; i < 100 && !/AI Dev Orchestrator API em/.test(out); i++) await Promise.race([new Promise((r) => setTimeout(r, 100)), exited]);
-    assert.match(out, /AI Dev Orchestrator API em/, `servidor não subiu:\n${out}`);
+    for (let i = 0; i < 100 && !/FORGE API em/.test(out); i++) await Promise.race([new Promise((r) => setTimeout(r, 100)), exited]);
+    assert.match(out, /FORGE API em/, `servidor não subiu:\n${out}`);
     const del = async (tid) => { const r = await fetch(`${base}/api/missions/mis/tasks/${tid}`, { method: 'DELETE', headers: { origin: 'http://localhost:5173' } }); return { status: r.status, body: await r.json().catch(() => null) }; };
     const tasks = async () => (await (await fetch(`${base}/api/missions`)).json()).find((m) => m.id === 'mis').tasks.map((t) => t.id);
 

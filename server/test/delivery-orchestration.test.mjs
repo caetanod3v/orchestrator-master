@@ -86,8 +86,8 @@ async function stateWith(extra) {
   let out = ''; child.stdout.on('data', (c) => { out += c; }); child.stderr.on('data', (c) => { out += c; });
   const exited = new Promise((r) => child.on('exit', r));
   try {
-    for (let i = 0; i < 80 && !/AI Dev Orchestrator API em/.test(out); i++) await Promise.race([new Promise((r) => setTimeout(r, 100)), exited]);
-    assert.match(out, /AI Dev Orchestrator API em/, `não subiu: ${out}`);
+    for (let i = 0; i < 80 && !/FORGE API em/.test(out); i++) await Promise.race([new Promise((r) => setTimeout(r, 100)), exited]);
+    assert.match(out, /FORGE API em/, `não subiu: ${out}`);
     const res = await fetch(`http://127.0.0.1:${port}/api/state`); assert.equal(res.status, 200); return await res.json();
   } finally { child.kill(); await exited; }
 }

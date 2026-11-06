@@ -164,7 +164,7 @@ export function skillsFor(role, settings) {
 /** Arquivos do plugin de sessão: { caminho relativo -> conteúdo }. Só ids do catálogo; nada vem do cliente. */
 export function pluginFiles(role, skillIds) {
   const files = {
-    '.claude-plugin/plugin.json': `${JSON.stringify({ name: PLUGIN_NAME, version: '1.0.0', author: { name: 'AI Dev Orchestrator' }, description: `Skills do papel "${role}" no squad do AI Dev Orchestrator (gerado automaticamente).` }, null, 2)}\n`,
+    '.claude-plugin/plugin.json': `${JSON.stringify({ name: PLUGIN_NAME, version: '1.0.0', author: { name: 'FORGE' }, description: `Skills do papel "${role}" no squad do FORGE (gerado automaticamente).` }, null, 2)}\n`,
   };
   for (const id of skillIds) {
     const s = SKILLS[id];

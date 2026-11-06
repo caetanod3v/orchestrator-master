@@ -35,7 +35,7 @@ function server(dir, port) {
   });
   return { child, exited, out: () => out, waitFor, kill: () => child.kill('SIGKILL') };
 }
-const UP = /AI Dev Orchestrator API em/;
+const UP = /FORGE API em/;
 const lockFile = (d) => path.join(d, 'server.lock');
 /** Estado "no meio de uma execução": uma tarefa running. O boot de uma instância marca isso como interrupted (e grava). */
 const runningDb = () => ({ version: 1, settings: { activeWorkspaceId: null, requireApproval: true, showDemoData: false }, workspaces: [], activity: [], missions: [{ id: 'm1', demo: false, title: 'em execução', workspaceId: null, tasks: [{ id: 't1', title: 'x', status: 'running', dependsOn: [], log: [], files: [] }] }] });

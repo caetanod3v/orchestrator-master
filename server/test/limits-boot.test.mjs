@@ -25,7 +25,7 @@ function boot(port, dir, extra) {
   let out = ''; child.stdout.on('data', (c) => { out += c; }); child.stderr.on('data', (c) => { out += c; });
   return { child, out: () => out, exited: new Promise((r) => child.on('exit', (code) => r(code))) };
 }
-const waitUp = async (b) => { for (let i = 0; i < 80; i++) { if (/AI Dev Orchestrator API em/.test(b.out())) return true; await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); } return false; };
+const waitUp = async (b) => { for (let i = 0; i < 80; i++) { if (/FORGE API em/.test(b.out())) return true; await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); } return false; };
 
 test('valor inválido em ORCH_CYCLE_MAX_PLANNER_CALLS / ORCH_CYCLE_MAX_ESTIMATED_COST_USD impede o boot ANTES de tocar em qualquer dado', async () => {
   for (const extra of [{ ORCH_CYCLE_MAX_PLANNER_CALLS: '0' }, { ORCH_CYCLE_MAX_PLANNER_CALLS: 'muitas' }, { ORCH_CYCLE_MAX_ESTIMATED_COST_USD: '-1' }, { ORCH_CYCLE_MAX_ESTIMATED_COST_USD: 'barato' }]) {

@@ -26,7 +26,7 @@ async function boot(data, env = {}) {
   children.add(child); let out = ''; child.stdout.on('data', (c) => { out += c; }); child.stderr.on('data', (c) => { out += c; });
   return { child, out: () => out, exited: new Promise((r) => child.on('exit', (code) => r(code))), base: `http://127.0.0.1:${port}` };
 }
-const up = async (data, env) => { const b = await boot(data, env); for (let i = 0; i < 100 && !/AI Dev Orchestrator API em/.test(b.out()); i++) await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); assert.match(b.out(), /AI Dev Orchestrator API em/, b.out()); return b; };
+const up = async (data, env) => { const b = await boot(data, env); for (let i = 0; i < 100 && !/FORGE API em/.test(b.out()); i++) await Promise.race([new Promise((r) => setTimeout(r, 100)), b.exited]); assert.match(b.out(), /FORGE API em/, b.out()); return b; };
 const stop = async (b) => { b.child.kill(); await b.exited; };
 async function call(b, p, { method = 'GET', body, origin = method === 'GET' ? undefined : ORIGIN } = {}) {
   const res = await fetch(b.base + p, { method, headers: { ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...(origin ? { origin } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined });

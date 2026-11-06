@@ -28,6 +28,7 @@ import { resolveWorktreeIsolation, createWorktreeManager, setupWorktrees } from 
 import { createTerminalManager, setupTerminals } from './terminals.js';
 import { createUsageReader } from './terminal-usage.js';
 import { createMaestro, setupMaestro, stableServerName } from './maestro.js';
+import { migrateLegacyDir } from './legacy-dirs.js';
 import { setupChat } from './chat.js';
 import { summarizeUsage } from './usage.js';
 import { createVerifier, setupVerification } from './verify.js';
@@ -69,12 +70,15 @@ const supervision = () => resolveSupervision({ settings: db.settings });
 const worktreeIsolation = () => resolveWorktreeIsolation({ settings: db.settings });
 const worktrees = createWorktreeManager({ db, track: childRegistry.track, children: childRegistry });
 // Credenciais MCP dos panes: com ORCH_DATA_DIR (testes, app desktop) ficam na pasta de dados; no modo dev, FORA do repositório (um agente com cwd no repositório leria data/ sem pedir permissão).
-const mcpDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'mcp') : path.join(process.env.LOCALAPPDATA || os.homedir(), 'ai-dev-orchestrator', 'mcp');
+const devHome = path.join(process.env.LOCALAPPDATA || os.homedir(), 'forge'); // modo dev; antes era 'ai-dev-orchestrator' (o histórico e os loadouts são copiados no boot, ver legacy-dirs.js)
+const legacyDevHome = path.join(process.env.LOCALAPPDATA || os.homedir(), 'ai-dev-orchestrator');
+const mcpDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'mcp') : path.join(devHome, 'mcp'); // mcp tem tokens por sessão, regenerados a cada terminal: não se migra
 const maestro = createMaestro({ getTerminals: () => terminals, mcpDir, url: `http://127.0.0.1:${PORT}/mcp`, serverName: stableServerName(db, { save: store.saveOrThrow }) }); // nome com sufixo aleatório POR INSTALAÇÃO (estável entre boots, ver maestro.js): um .mcp.json homônimo não herda a pré-autorização // coordenação entre panes por MCP local (aprovação do usuário por padrão)
 // Conversas copiadas: com ORCH_DATA_DIR (testes, app desktop) na pasta de dados; no modo dev, FORA do repositório (mesmo motivo do mcpDir).
-const historyDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'history') : path.join(process.env.LOCALAPPDATA || os.homedir(), 'ai-dev-orchestrator', 'history');
+const historyDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'history') : path.join(devHome, 'history');
+if (!process.env.ORCH_DATA_DIR) for (const name of ['history', 'loadouts']) { const r = migrateLegacyDir(path.join(legacyDevHome, name), path.join(devHome, name)); if (r.status === 'migrated') console.log(`[forge] ${name} copiado de ${legacyDevHome} (a pasta original foi mantida)`); else if (r.status === 'error') console.error(`[forge] não foi possível copiar ${name} da pasta anterior: ${r.error}`); }
 // Skills por papel (loadouts.js): plugins de sessão gerados numa pasta própria, FORA do workspace do usuário (mesmo critério do mcpDir/historyDir).
-const loadoutsDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'loadouts') : path.join(process.env.LOCALAPPDATA || os.homedir(), 'ai-dev-orchestrator', 'loadouts');
+const loadoutsDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'loadouts') : path.join(devHome, 'loadouts');
 const loadouts = createLoadouts({ db, dir: loadoutsDir });
 const conversations = createConversationStore({ dir: historyDir }); // histórico de conversas próprio, por workspace (texto das trocas; ver conversations.js)
 const terminals = createTerminalManager({ db, loadouts, onEnd: (rec) => { if (db.workspaces.some((w) => w.id === rec.workspaceId)) conversations.sync(rec); }, track: childRegistry.track, worktrees, mcp: maestro, persist: store.saveOrThrow, isChildAlive: (terminalId) => childRegistry.pending().some((r) => r && r.kind === 'terminal' && r.terminalId === terminalId && pidAlive(r.pid)), usage: createUsageReader({ pricesFile: path.join(store.dataDir, 'pricing.json') }) }); // terminais interativos (PTY) do Claude Code: um processo por pane, em paralelo
@@ -362,4 +366,4 @@ setupChat(app, { db, planner, cycle, multiStep: () => orchestration().planMode }
 
 app.use('/api', (req, res) => bad(res, 'Rota não encontrada.', 404));
 app.use((err, req, res, next) => bad(res, err.type === 'entity.parse.failed' ? 'JSON inválido.' : 'Erro interno.', err.status || 500));
-app.listen(PORT, HOST, () => console.log(`AI Dev Orchestrator API em http://${HOST}:${PORT}`));
+app.listen(PORT, HOST, () => console.log(`FORGE API em http://${HOST}:${PORT}`));
