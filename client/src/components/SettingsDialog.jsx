@@ -64,7 +64,7 @@ export default function SettingsDialog({ onClose, initial = 'perfil' }) {
 
           {tab === 'aparencia' && <>
             <Row title="Tema" hint="Escuro (grafite e preto). Ainda não há outro tema." />
-            <Row title="Animações" hint="Automático segue a preferência do sistema por menos movimento; Reduzidas desliga as animações da interface.">
+            <Row title="Animações" hint="Automático segue a preferência do sistema por menos movimento, exceto os ícones de estado dos workspaces, que sempre animam; Reduzidas desliga todas as animações da interface, inclusive esses ícones.">
               <div className="oc-seg" role="radiogroup" aria-label="Animações">
                 {[['auto', 'Automático'], ['reduced', 'Reduzidas']].map(([v, l]) => (
                   <button key={v} type="button" role="radio" aria-checked={prefs.motion === v} className={prefs.motion === v ? 'on' : ''} onClick={() => setPref('motion', v)}>{l}</button>

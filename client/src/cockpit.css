@@ -196,18 +196,6 @@
 .tg-grid { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); grid-auto-rows: minmax(280px, 1fr); gap: var(--sp-2); padding: 0 var(--sp-1) var(--sp-1); }
 .tg-grid.has-max { grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(0, 1fr); }
 .tg-cell { min-width: 0; min-height: 0; display: flex; } .tg-cell[hidden] { display: none; }
-.tp { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--term-bg); border: 1px solid var(--line); border-top: 2px solid var(--role); border-radius: var(--r-3); overflow: hidden; }
-.tp:focus-within { border-color: var(--role); box-shadow: 0 0 0 1px var(--role); }
-.tp-head { flex: none; display: flex; align-items: center; gap: var(--sp-2); padding: 6px var(--sp-3); background: var(--raise); border-bottom: 1px solid var(--line); font-size: var(--fs-xs); }
-.tp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--role); flex: none; }
-.tp-role { color: var(--strong); font-weight: 600; flex: none; }
-.tp-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); }
-.tp-tag { flex: none; padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--dim); }
-.tp-usage { flex: none; color: var(--text); font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.tp-state { flex: none; color: var(--dim); } .tp-working { color: var(--warn-text); } .tp-exited { color: var(--faint); }
-.tp-btn { flex: none; background: none; border: 0; color: var(--dim); cursor: pointer; padding: 2px 6px; border-radius: var(--r-1); font: inherit; } .tp-btn:hover { color: var(--strong); background: var(--raise3); }
-.tp-boot { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: var(--fs-sm); pointer-events: none; }
-.tp-body { position: relative; flex: 1; min-height: 0; padding: 6px 0 0 8px; } .tp-body .xterm { height: 100%; } .tp-body .xterm-viewport { background-color: transparent !important; }
 
 /* Painel do maestro */
 .mp { flex: none; margin: 0 var(--sp-1) var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); border-left: 3px solid #ec4899; border-radius: var(--r-3); background: var(--raise); max-height: 34vh; overflow: auto; }
@@ -224,3 +212,34 @@
 .mp-hist li { display: flex; gap: var(--sp-2); align-items: baseline; font-size: var(--fs-xs); min-width: 0; color: var(--dim); }
 .mp-clip { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mp-st { flex: none; padding: 0 6px; border: 1px solid var(--line-strong); border-radius: 999px; } .mp-st-done { color: var(--ok-text); } .mp-st-failed, .mp-st-rejected, .mp-st-expired { color: var(--faint); } .mp-st-delivered { color: var(--warn-text); }
+
+/* ---------- tópicos do workspace ativo (Sidebar.jsx) ---------- */
+/* cada workspace é uma pasta; ao expandir, só os tópicos dele (dentro de .oc-envgroup) */
+.oc-envrow-head { position: relative; }
+.oc-caret { flex: none; display: inline-grid; place-items: center; color: var(--faint); transition: transform var(--dur-ui) var(--ease), opacity var(--dur-ui) ease; } .oc-caret.open { transform: rotate(90deg); }
+.oc-envrow-head:hover .oc-caret, .oc-envrow-head:focus-within .oc-caret { opacity: 0; }
+.oc-envs ul.tp-in { margin: 2px 0 4px 18px; padding: 0 0 0 var(--sp-2); border-left: 1px solid var(--coal-line); }
+.tp-add { color: var(--faint); } .tp-add:hover { color: var(--brand); }
+.tp-row:has(.tp-edit) { flex-wrap: wrap; } .tp-hint { flex-basis: 100%; margin: 4px 2px 0; font-size: 11px; line-height: 1.35; color: var(--faint); }
+@media (hover: none) { .oc-envrow.oc-envgroup { display: block; } .oc-envrow-head { display: flex; align-items: center; } }
+.tp-list { list-style: none; margin: 0; padding: 0; min-height: 0; overflow: hidden auto; display: flex; flex-direction: column; gap: 2px; }
+.tp-row { position: relative; display: flex; align-items: center; }
+.tp { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--sp-3); min-height: 32px; padding: 0 var(--sp-2); border: 0; border-radius: var(--r-2); background: transparent; color: var(--dim); font: inherit; font-size: var(--fs-sm); text-align: left; cursor: pointer; transition: background-color var(--dur-ui) ease, color var(--dur-ui) ease; }
+.tp::before { content: ''; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; border-radius: 2px; background: var(--brand); transform: scaleY(0); transition: transform var(--dur-3) var(--ease); }
+.tp:hover { background: var(--coal-2); color: var(--strong); }
+.tp.on { background: var(--brand-bg); color: var(--strong); } .tp.on::before { transform: scaleY(1); }
+.tp-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--coal-line); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
+.tp.tone-live .tp-dot { background: var(--ok); box-shadow: none; } .tp.tone-work .tp-dot { background: var(--run); box-shadow: 0 0 6px var(--run); }
+.tp.tone-warn .tp-dot { background: var(--warn); box-shadow: 0 0 6px var(--warn); } .tp.tone-err .tp-dot { background: var(--err); box-shadow: 0 0 6px var(--err); }
+.tp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.tp-badges { flex: none; display: inline-flex; align-items: center; gap: 4px; transition: opacity var(--dur-ui) ease; }
+.tp-tools { position: absolute; right: 4px; top: 50%; display: inline-flex; gap: 2px; margin-top: -12px; opacity: 0; pointer-events: none; transition: opacity var(--dur-ui) ease; }
+.tp-tools .oc-iconbtn { width: 24px; height: 24px; background: var(--coal-3); }
+.tp-tools .oc-iconbtn:hover { color: var(--brand); }
+.tp-row:hover .tp-tools, .tp-row:focus-within .tp-tools { opacity: 1; pointer-events: auto; }
+.tp-row:hover .tp-badges, .tp-row:focus-within .tp-badges { opacity: 0; }
+.tp-edit { cursor: text; padding: 0; }
+.tp-edit .oc-env-input { width: 100%; }
+@media (hover: none) { .tp-tools { position: static; margin: 0; opacity: .8; pointer-events: auto; } .tp-row .tp-badges { opacity: 1 !important; } }
+.tp:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { .tp, .tp::before, .tp-badges, .tp-tools { transition-duration: .01ms !important; } }

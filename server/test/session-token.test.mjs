@@ -44,6 +44,12 @@ test('createTokenGuard: métodos mutáveis e fluxos de terminal exigem o token; 
     assert.equal(run({ p }).status, 403, `GET ${p} sem token`); assert.equal(run({ p, token: TOKEN }).next, true, `GET ${p} com token`);
   }
   assert.equal(run({ p: '/terminals/x/y/stream' }).next, true, 'caminho que não é o fluxo não é tratado como fluxo');
+  // conversas copiadas têm a mesma natureza da saída dos terminais: leitura também exige o token
+  for (const p of ['/workspaces/ws_aaaaaaaa/conversations', '/workspaces/ws_aaaaaaaa/conversations/ses_00000001', '/WORKSPACES/ws_a/conversations/']) {
+    assert.equal(run({ p }).status, 403, `GET ${p} sem token`); assert.equal(run({ p, token: 'errado' }).status, 403); assert.equal(run({ p, token: TOKEN }).next, true, `GET ${p} com token`);
+  }
+  assert.equal(run({ p: '/workspaces/ws_aaaaaaaa/conversations/a/b' }).next, true, 'caminho mais fundo não é o das conversas');
+  assert.equal(run({ p: '/workspaces' }).next, true); assert.equal(run({ p: '/layouts' }).next, true, 'as demais leituras seguem abertas');
 });
 
 // ---- integração com o index.js REAL ----

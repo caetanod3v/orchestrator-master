@@ -4,7 +4,9 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { usePrefs } from '../hooks.js';
+import { usePrefs, useLayouts } from '../hooks.js';
+import { orderSessions, mergeOrder, sameList, EMPTY as EMPTY_LAYOUT } from '../layout-state.js';
+import { historyRows } from '../session-history.js';
 import { Btn, Icon, Equalizer } from './ui.jsx';
 import { paneUsage, squadUsage } from '../usage-view.js';
 import { terminalWorktrees } from '../worktree-view.js';
@@ -12,6 +14,7 @@ import { createTerminalStream } from '../terminal-stream.js';
 import { paneState, pendingByPane, paneName, gridShape, evenTracks, dragTracks, dividerAt } from '../env-view.js';
 import WorktreePanel from './WorktreePanel.jsx';
 import AgentsPopover from './ProviderPanel.jsx';
+import SessionHistory from './SessionHistory.jsx';
 
 // Squads prontos: o mesmo fluxo abre 2, 4 ou 6 terminais do Claude Code em paralelo, cada um com o seu papel.
 export const SQUADS = [
@@ -152,11 +155,13 @@ function MaestroPanel({ data, onChange, notify }) {
   );
 }
 
-export default function TerminalGrid({ narrow = false, onMenu, menuRef, onOpenWorkspaces }) {
+export default function TerminalGrid({ onOpenWorkspaces }) {
   const { state, notify, terminals, maestro, setMaestro, workingIds, loadTerminals } = useStore();
   const [prefs, setPref] = usePrefs();
   const [busy, setBusy] = useState(false);
-  const [max, setMax] = useState(null);
+  const [layouts, layoutActions, layoutsReady] = useLayouts(); // layout por workspace (ordem, ampliado, trilhas), no servidor
+  const [restorable, setRestorable] = useState(0); // sessões deste workspace que estavam abertas e podem voltar
+  const [histOpen, setHistOpen] = useState(false); // diálogo do histórico de sessões (retomar/fork)
   const ws = state?.activeWorkspace;
   const stream = useMemo(() => createTerminalStream(), []); // uma conexão SSE para todos os terminais
   useEffect(() => () => stream.close(), [stream]);
@@ -167,21 +172,40 @@ export default function TerminalGrid({ narrow = false, onMenu, menuRef, onOpenWo
   const role = byRole[prefs.role] ? prefs.role : roles[0]?.id ?? 'builder';
   const isolate = prefs.isolate;
   const sessions = terminals?.sessions ?? [];
-  const mine = sessions.filter((s) => s.workspaceId === ws?.id);         // o ambiente aberto
-  const others = sessions.filter((s) => s.workspaceId !== ws?.id);       // seguem rodando (e montados) em segundo plano
+  // Sessões do workspace + tópico ativos. As demais seguem rodando e MONTADAS (ocultas): trocar de aba ou de tópico nunca encerra nem remonta terminal.
+  const topicId = null; // a interface não usa mais tópicos: o workspace mostra todos os terminais dele e os novos nascem sem tópico
+  const where = ws?.displayName || ws?.name || '';
+  const L = (ws && layouts[ws.id]) || EMPTY_LAYOUT;
+  const mine = ws ? orderSessions(sessions.filter((s) => s.workspaceId === ws.id), L.order) : []; // ordem salva (id da sessão); o DOM não muda de ordem: a posição visual vem do CSS `order`
+  const mineIdx = new Map(mine.map((s, i) => [s.id, i]));
   const live = sessions.filter((s) => s.status === 'running').length;
   const liveMine = mine.filter((s) => s.status === 'running').length;
   const room = (terminals?.maxSessions ?? 8) - live;
   const total = squadUsage(mine);
-  const maxId = mine.some((s) => s.id === max) ? max : null;
+  const maxId = L.maximized ? (mine.find((s) => s.recordId === L.maximized)?.id ?? null) : null;
 
   // layout da grade: trilhas por formato (1x1, 2x1, 2x2, 3x2…); ao mudar o número de terminais volta a divisões iguais
   const shape = maxId ? gridShape(1) : gridShape(mine.length);
   const key = `${shape.cols}x${shape.rows}`;
-  const baseLayout = useMemo(() => ({ key, cols: evenTracks(shape.cols), rows: evenTracks(shape.rows) }), [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  const [layout, setLayout] = useState(baseLayout);
-  const cur = layout.key === key ? layout : baseLayout;
-  const setAxis = (axis, tracks) => setLayout({ ...cur, [axis]: tracks });
+  const baseLayout = useMemo(() => ({ cols: evenTracks(shape.cols), rows: evenTracks(shape.rows) }), [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const saved = L.grids[key]; // trilhas salvas POR WORKSPACE e por formato; só valem se baterem com o formato atual
+  const cur = saved && saved.cols.length === shape.cols && saved.rows.length === shape.rows ? saved : baseLayout;
+  const setAxis = (axis, tracks) => { if (ws) layoutActions.setGrid(ws.id, key, { ...cur, [axis]: tracks }); };
+
+  // ordem dos terminais abertos deste workspace: salva só depois de ler a do servidor; mantém quem não está vivo agora (restauração) e acrescenta os novos
+  const liveIds = mine.map((s) => s.recordId).filter(Boolean);
+  useEffect(() => {
+    if (!ws || !layoutsReady || !liveIds.length) return;
+    const next = mergeOrder(L.order, liveIds);
+    if (!sameList(next, L.order)) layoutActions.setOrder(ws.id, next);
+  }, [ws?.id, layoutsReady, liveIds.join(','), L.order.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  // aviso no workspace vazio: há sessões que estavam abertas e podem voltar (usa o histórico que o servidor já mantém)
+  useEffect(() => {
+    if (!ws || mine.length > 0) { setRestorable(0); return undefined; }
+    let alive = true;
+    api.get('/api/terminals/history').then((d) => { if (alive) setRestorable(historyRows({ history: d?.sessions, workspaceId: ws.id }).restore.length); }).catch(() => {});
+    return () => { alive = false; };
+  }, [ws?.id, mine.length, histOpen]); // eslint-disable-line react-hooks/exhaustive-deps
   const gridRef = useRef(null);
 
   const opening = useRef(false); // trava síncrona: dois cliques seguidos nunca abrem duas vezes (o estado `busy` só vale depois da renderização)
@@ -189,13 +213,13 @@ export default function TerminalGrid({ narrow = false, onMenu, menuRef, onOpenWo
   const open = async (list, { squad = false } = {}) => {
     if (opening.current) return;
     if (!ws) { onOpenWorkspaces?.(); return; }
-    if (squad && liveMine > 0 && !window.confirm(`Já há ${liveMine} ${liveMine === 1 ? 'terminal ativo' : 'terminais ativos'} neste ambiente. Abrir MAIS ${list.length} terminais de um novo squad?`)) return;
+    if (squad && liveMine > 0 && !window.confirm(`Já há ${liveMine} ${liveMine === 1 ? 'terminal ativo' : 'terminais ativos'} em ${where}. Abrir MAIS ${list.length} terminais de um novo squad?`)) return;
     opening.current = true; setBusy(true);
     const n = squad ? nextSquad() : null;
     if (list.length > 1) notify(`Abrindo ${list.length} terminais; o Claude Code leva alguns segundos para iniciar em cada um.`);
     try {
       // em paralelo: cada terminal é um processo próprio; as falhas são individuais. Os do squad levam o número dele no título (ex.: Construtor S1)
-      const spawn = (r, i, ack) => api.post('/api/terminals', { role: r, isolate, ...(ack ? { acknowledgeProjectConfig: true } : {}), ...(n ? { title: `${byRole[r]?.label ?? r} S${n}.${i + 1}` } : {}) });
+      const spawn = (r, i, ack) => api.post('/api/terminals', { role: r, isolate, workspaceId: ws.id, topicId, ...(ack ? { acknowledgeProjectConfig: true } : {}), ...(n ? { title: `${byRole[r]?.label ?? r} S${n}.${i + 1}` } : {}) });
       const rs = await Promise.allSettled(list.map((r, i) => spawn(r, i, false)));
       // M3: configuração executável do projeto não revisada no Git: o servidor recusa e só abre com a confirmação explícita (uma pergunta para o lote inteiro)
       const held = rs.map((x, i) => (x.status === 'rejected' && x.reason?.code === 'project_config_unreviewed' ? i : -1)).filter((i) => i >= 0);
@@ -208,23 +232,25 @@ export default function TerminalGrid({ narrow = false, onMenu, menuRef, onOpenWo
     } finally { opening.current = false; setBusy(false); loadTerminals(); }
   };
   const closeAll = async () => {
-    if (!mine.length || !window.confirm(`Encerrar os ${mine.length} terminais deste ambiente? Os agentes em andamento serão interrompidos (worktrees são mantidos).`)) return;
+    if (!mine.length || !window.confirm(`Encerrar os ${mine.length} terminais de ${where}? Os agentes em andamento serão interrompidos (worktrees são mantidos).`)) return;
     setBusy(true);
-    try { for (const s of mine) { try { await api.post(`/api/terminals/${s.id}/close`); } catch { /* segue com os demais */ } } setMax(null); }
-    finally { setBusy(false); loadTerminals(); }
+    const closed = [];
+    try { for (const s of mine) { try { await api.post(`/api/terminals/${s.id}/close`); closed.push(s.recordId); } catch { /* segue com os demais */ } } }
+    finally { setBusy(false); await loadTerminals(); for (const rid of closed) layoutActions.forget(ws.id, rid); } // esquece DEPOIS de a lista sair da tela: senão o efeito da ordem reacrescenta o id
   };
   const close = async (s) => {
+    let closedRid = null;
     try {
-      const r = await api.post(`/api/terminals/${s.id}/close`); if (max === s.id) setMax(null);
+      const r = await api.post(`/api/terminals/${s.id}/close`); closedRid = s.recordId;
       if (r?.worktreeId) notify('Terminal encerrado. O worktree dele foi mantido (pode ter trabalho): gerencie em "Worktrees dos terminais".');
-    } catch (e) { notify(e.message, 'error'); } finally { loadTerminals(); }
+    } catch (e) { notify(e.message, 'error'); } finally { await loadTerminals(); if (closedRid) layoutActions.forget(ws.id, closedRid); }
   };
 
   const cell = (s, i, visible) => {
     const span = visible && !maxId && shape.spanLast && i === mine.length - 1;
     return (
-      <div key={s.id} className={`oc-cell${maxId === s.id ? ' is-max' : ''}`} hidden={!visible || (!!maxId && maxId !== s.id)} style={span ? { gridColumn: '1 / -1' } : undefined}>
-        <TerminalPane session={s} stream={stream} role={byRole[s.role]} state={paneState(s, workingIds)} waiting={waitingBy.get(s.id)} fontSize={prefs.fontSize} maximized={maxId === s.id} onClose={() => close(s)} onMaximize={() => setMax((m) => (m === s.id ? null : s.id))} />
+      <div key={s.id} className={`oc-cell${maxId === s.id ? ' is-max' : ''}`} hidden={!visible || (!!maxId && maxId !== s.id)} style={{ ...(span ? { gridColumn: '1 / -1' } : {}), order: i }}>
+        <TerminalPane session={s} stream={stream} role={byRole[s.role]} state={paneState(s, workingIds)} waiting={waitingBy.get(s.id)} fontSize={prefs.fontSize} maximized={maxId === s.id} onClose={() => close(s)} onMaximize={() => layoutActions.setMaximized(ws.id, maxId === s.id ? null : (s.recordId ?? null))} />
       </div>
     );
   };
@@ -233,10 +259,9 @@ export default function TerminalGrid({ narrow = false, onMenu, menuRef, onOpenWo
 
   return (
     <div className={`tg${maxId ? ' tg-full' : ''}`}>
-      <div className="oc-bar" role="toolbar" aria-label="Terminais do ambiente">
-        {narrow && <button type="button" ref={menuRef} className="oc-iconbtn" onClick={onMenu} aria-label="Abrir a lista de ambientes" aria-haspopup="dialog"><Icon name="menu" size={18} /></button>}
+      <div className="oc-bar" role="toolbar" aria-label={`Terminais de ${where}`}>
         <button type="button" className="oc-wschip" onClick={onOpenWorkspaces} title={ws ? `${ws.path}\nTrocar ou adicionar workspace` : 'Escolher um workspace'}>
-          <Icon name="workspace" size={15} /><b>{ws?.name ?? 'Nenhum workspace'}</b><Icon name="chevronsUpDown" size={14} />
+          <Icon name="workspace" size={15} /><b>{ws ? where : 'Nenhum workspace'}</b><Icon name="chevronsUpDown" size={14} />
         </button>
         {ws && <>
           <div className="oc-grp" role="group" aria-label="Squads">
@@ -250,11 +275,12 @@ export default function TerminalGrid({ narrow = false, onMenu, menuRef, onOpenWo
         </>}
         <div className="oc-right">
         {ws && <>
+          <Btn kind="quiet" onClick={() => setHistOpen(true)} title="Sessões anteriores deste workspace: retomar ou fazer fork"><Icon name="clock" size={14} /> Histórico</Btn>
           <label className="oc-iso" title="Cada terminal trabalha num git worktree próprio, sem pisar nos arquivos dos outros (exige repositório Git).">
             <input type="checkbox" role="switch" checked={isolate} onChange={(e) => setPref('isolate', e.target.checked)} /><span className="oc-switch-track" aria-hidden="true"><i /></span>Worktree
           </label>
-          <span className="oc-total" title={total.partialCost ? 'Há panes sem custo conhecido: o total em dólares não é exibido. Crie data/pricing.json com os preços por modelo (USD por milhão de tokens) para ver o custo.' : total.cost === '—' ? 'Custo indisponível: crie data/pricing.json com os preços por modelo (USD por milhão de tokens).' : 'Soma dos terminais deste ambiente'}>{total.tokens} tok · {total.cost}</span>
-          {mine.length > 1 && <Btn kind="quiet" disabled={busy} onClick={closeAll} title="Encerra e remove todos os terminais deste ambiente">Encerrar todos</Btn>}
+          <span className="oc-total" title={total.partialCost ? 'Há panes sem custo conhecido: o total em dólares não é exibido. Crie data/pricing.json com os preços por modelo (USD por milhão de tokens) para ver o custo.' : total.cost === '—' ? 'Custo indisponível: crie data/pricing.json com os preços por modelo (USD por milhão de tokens).' : 'Soma dos terminais deste tópico'}>{total.tokens} tok · {total.cost}</span>
+          {mine.length > 1 && <Btn kind="quiet" disabled={busy} onClick={closeAll} title="Encerra e remove todos os terminais deste tópico">Encerrar todos</Btn>}
           <AgentsPopover className="oc-count" tone={mine.some((x) => x.status === 'running' && workingIds.has(x.id)) ? 'work' : liveMine ? 'live' : 'none'} title={`${live} de ${terminals?.maxSessions ?? '…'} terminais no total (todos os ambientes). Clique para ver os agentes por provider.`}><span className="oc-agents-t">{liveMine} {liveMine === 1 ? 'ativo' : 'ativos'}</span></AgentsPopover>
         </>}
         </div>
@@ -279,8 +305,9 @@ export default function TerminalGrid({ narrow = false, onMenu, menuRef, onOpenWo
       ) : mine.length === 0 ? (
         <div className="oc-empty">
           <span className="oc-empty-ico"><Icon name="terminal" size={26} /></span>
-          <h3>{ws.name}</h3>
-          <p className="dim">Nenhum terminal aberto neste ambiente. Comece por um squad pronto ou um terminal avulso.</p>
+          <h3>{where}</h3>
+          <p className="dim">Nenhum terminal aberto neste workspace. Comece por um squad pronto ou um terminal avulso.</p>
+          {restorable > 0 && <p className="oc-restore"><Btn kind="primary" onClick={() => setHistOpen(true)} title="Abre o histórico de sessões para retomá-las, na ordem em que estavam">Restaurar {restorable} {restorable === 1 ? 'sessão que estava aberta' : 'sessões que estavam abertas'}</Btn></p>}
           <div className="oc-squads">
             {SQUADS.map((q) => (
               <button key={q.id} type="button" className="oc-squad" disabled={busy || q.roles.length > room} onClick={() => open(q.roles, { squad: true })}>
@@ -296,12 +323,12 @@ export default function TerminalGrid({ narrow = false, onMenu, menuRef, onOpenWo
 
       <div className="oc-gridwrap" hidden={mine.length === 0}>
         <div ref={gridRef} className={`oc-grid${maxId ? ' has-max' : ''}`} style={{ gridTemplateColumns: cur.cols.map((f) => `minmax(0, ${f}fr)`).join(' '), gridTemplateRows: cur.rows.map((f) => `minmax(0, ${f}fr)`).join(' ') }}>
-          {mine.map((s, i) => cell(s, i, true))}
-          {others.map((s, i) => cell(s, i, false))}
+          {sessions.map((s) => cell(s, mineIdx.get(s.id) ?? -1, mineIdx.has(s.id)))} {/* ordem estável: o React não move (nem remonta) os terminais ao trocar de aba ou tópico */}
           {showGutters && cur.cols.slice(0, -1).map((_, i) => <Gutter key={`x${i}`} axis="x" index={i} tracks={cur.cols} onTracks={(t) => setAxis('cols', t)} gridRef={gridRef} label={`Redimensionar colunas ${i + 1} e ${i + 2}`} style={{ left: `calc(${dividerAt(cur.cols, i)}% - 5px)`, top: 0, bottom: vBottom }} />)}
           {showGutters && cur.rows.slice(0, -1).map((_, i) => <Gutter key={`y${i}`} axis="y" index={i} tracks={cur.rows} onTracks={(t) => setAxis('rows', t)} gridRef={gridRef} label={`Redimensionar linhas ${i + 1} e ${i + 2}`} style={{ top: `calc(${dividerAt(cur.rows, i)}% - 5px)`, left: 0, right: 0 }} />)}
         </div>
       </div>
+      {histOpen && ws && <SessionHistory ws={ws} topicId={topicId} where={where} order={L.order} onClose={() => setHistOpen(false)} />}
     </div>
   );
 }

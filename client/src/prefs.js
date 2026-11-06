@@ -1,5 +1,5 @@
-// Preferências LOCAIS da interface (nome exibido, isolamento padrão, papel padrão, fonte dos terminais, movimento). Ficam só neste navegador/app (localStorage):
-// não existe conta nem servidor de perfil. Núcleo puro (sem React): o hook usePrefs está em hooks.js. Valores inválidos voltam ao padrão, nunca quebram a tela.
+// Preferências da interface (nome exibido, isolamento padrão, papel padrão, fonte dos terminais, movimento). A fonte principal é o servidor (db.settings.ui, ver ui-state.js); aqui fica o cache no localStorage:
+// (localStorage; vale por origem, e o Electron muda de porta a cada abertura). Núcleo puro (sem React): o hook usePrefs está em hooks.js. Valores inválidos voltam ao padrão, nunca quebram a tela.
 const KEY = 'orch.prefs.v1';
 export const DEFAULT_PREFS = Object.freeze({ name: '', isolate: false, role: 'builder', fontSize: 13, motion: 'auto' });
 export const FONT_RANGE = Object.freeze({ min: 11, max: 18 });
@@ -24,10 +24,23 @@ const subs = new Set();
 export const getPrefs = () => current;
 export const subscribePrefs = (fn) => { subs.add(fn); return () => subs.delete(fn); };
 /** Muda uma preferência (valida, grava se possível e avisa quem escuta). A tela continua funcionando mesmo sem armazenamento. */
+let sink = null; // ui-state.js: recebe cada mudança feita pelo usuário para gravá-la no servidor (a fonte principal; o localStorage é só cache)
+export const setPrefsSink = (fn) => { sink = typeof fn === 'function' ? fn : null; };
+const cache = () => { try { store()?.setItem(KEY, JSON.stringify(current)); } catch { /* sem armazenamento: vale só nesta sessão */ } };
+/** Aplica preferências vindas do servidor (já validadas lá, e revalidadas aqui): atualiza o cache e avisa a tela, sem devolver nada ao servidor. */
+export function replacePrefs(raw) {
+  const next = sanitizePrefs(raw);
+  if (JSON.stringify(next) === JSON.stringify(current)) return current;
+  current = next; cache();
+  for (const fn of subs) fn();
+  return current;
+}
 export function setPref(key, value) {
   if (!Object.hasOwn(DEFAULT_PREFS, key)) return current;
+  const before = current[key];
   current = sanitizePrefs({ ...current, [key]: value });
-  try { store()?.setItem(KEY, JSON.stringify(current)); } catch { /* sem armazenamento: vale só nesta sessão */ }
+  cache();
   for (const fn of subs) fn();
+  if (sink && current[key] !== before) sink({ [key]: current[key] });
   return current;
 }

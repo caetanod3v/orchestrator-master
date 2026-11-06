@@ -94,3 +94,45 @@ main:focus { outline: none; }
   .toast { animation-name: fade-in; }
   .side { transition: none; }
 }
+
+/* ---------- barra superior em 2 linhas (Topbar.jsx + WorkspaceTabs.jsx) ----------
+   Linha 1: marca, estado, contadores reais, recursos e configurações. Linha 2: abas dos workspaces abertos.
+   Cores: grafite de fundo, laranja = ação/ativo, verde = ok, âmbar = espera por você, vermelho = falha. */
+.tb { flex: none; display: flex; flex-direction: column; background: var(--coal-1); border-bottom: 1px solid var(--coal-line); }
+.tb-row { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; padding: 0 var(--sp-3); }
+.tb-row:first-child { min-height: 42px; }
+.tb-brand { display: inline-flex; align-items: center; gap: var(--sp-2); min-width: 0; color: var(--strong); font-size: var(--fs-sm); letter-spacing: -.01em; white-space: nowrap; }
+.tb-brand b { font-weight: 600; }
+.tb-counts { list-style: none; margin: 0; padding: 0; display: inline-flex; align-items: center; gap: var(--sp-2); }
+.tb-c { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--faint); box-shadow: inset 0 0 0 1px var(--coal-line); transition: color var(--dur-ui) ease, background-color var(--dur-ui) ease, box-shadow var(--dur-ui) ease; }
+.tb-c i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted, #6b7280); }
+.tb-c b { font-family: var(--mono); font-weight: 500; }
+.tb-c.live.has { color: var(--ok-text); box-shadow: inset 0 0 0 1px rgba(0, 210, 148, .35); } .tb-c.live.has i { background: var(--ok); }
+.tb-c.warn.has { color: var(--warn-text); background: var(--warn-bg); box-shadow: inset 0 0 0 1px rgba(252, 187, 0, .45); } .tb-c.warn.has i { background: var(--warn); }
+.tb-c.err.has { color: var(--danger-text); background: var(--err-bg); box-shadow: inset 0 0 0 1px rgba(255, 77, 79, .5); } .tb-c.err.has i { background: var(--err); }
+.tb-tabs { padding-top: 2px; align-items: flex-end; gap: var(--sp-1); }
+
+.wt { flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: var(--sp-1); }
+.wt-list { min-width: 0; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; scrollbar-width: thin; }
+.wt-item { position: relative; flex: none; display: inline-flex; align-items: center; max-width: 240px; border-radius: var(--r-2) var(--r-2) 0 0; background: transparent; box-shadow: inset 0 -2px 0 transparent; transition: background-color var(--dur-ui) ease, box-shadow var(--dur-ui) ease; }
+.wt-item.on { background: var(--surface); box-shadow: inset 0 -2px 0 var(--brand); }
+.wt-tab { min-width: 0; display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 4px 0 12px; border: 0; background: none; color: var(--dim); font: inherit; font-size: var(--fs-sm); font-weight: 500; cursor: pointer; border-radius: inherit; transition: color var(--dur-ui) ease; }
+.wt-item.on .wt-tab { color: var(--strong); }
+.wt-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-dot { position: relative; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--coal-line); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
+.wt-item.tone-live .wt-dot { background: var(--ok); box-shadow: none; } .wt-item.tone-work .wt-dot { background: var(--run); box-shadow: 0 0 6px var(--run); }
+.wt-item.tone-warn .wt-dot { background: var(--warn); box-shadow: 0 0 6px var(--warn); } .wt-item.tone-err .wt-dot { background: var(--err); box-shadow: 0 0 6px var(--err); }
+.wt-n { flex: none; min-width: 18px; padding: 0 5px; text-align: center; font-family: var(--mono); font-size: 11px; line-height: 16px; border-radius: 999px; }
+.wt-n.warn { color: var(--warn-text); background: var(--warn-bg); } .wt-n.err { color: var(--danger-text); background: var(--err-bg); }
+.wt-x, .wt-add { flex: none; display: inline-grid; place-items: center; border: 0; background: transparent; color: var(--faint); cursor: pointer; border-radius: var(--r-1); transition: color var(--dur-ui) ease, background-color var(--dur-ui) ease; }
+.wt-x { width: 22px; height: 22px; margin: 0 6px 0 2px; opacity: .55; }
+.wt-item.on .wt-x, .wt-item:hover .wt-x, .wt-item:focus-within .wt-x { opacity: 1; }
+.wt-add { width: 28px; height: 28px; margin-bottom: 3px; box-shadow: inset 0 0 0 1px var(--coal-line); }
+.wt-x:hover { color: var(--danger-text); background: var(--err-bg); }
+.wt-add:hover { color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand-line); }
+.wt-item:not(.on):hover { background: var(--coal-2); } .wt-item:not(.on):hover .wt-tab { color: var(--strong); }
+.wt-tab:focus-visible, .wt-x:focus-visible, .wt-add:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+@media (hover: none) { .wt-x { opacity: 1; } }
+@media (max-width: 900px) { .tb-row { padding-inline: var(--sp-2); } }
+@media (max-width: 700px) { .tb-cl, .tb-brand b { display: none; } .tb-c { padding-inline: 7px; } .wt-item { max-width: 170px; } }
+@media (prefers-reduced-motion: reduce) { .tb *, .tb *::before { transition-duration: .01ms !important; animation: none !important; } }

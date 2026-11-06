@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api } from './api.js';
+import { api, nav } from './api.js';
 import { createActivityTracker } from './activity.js';
 
 const Ctx = createContext(null);
@@ -101,7 +101,14 @@ export function StoreProvider({ children }) {
     try { const r = await fn(); await refresh(); return r; } catch (e) { notify(e.message, 'error'); }
   };
 
+  // Navegação por abas e tópicos: vem de /api/state (o servidor é a fonte); sem o campo, só o workspace ativo conta como aberto.
+  const openWorkspaceIds = data.state?.openWorkspaceIds ?? (data.state?.activeWorkspace ? [data.state.activeWorkspace.id] : []);
+  const topics = data.state?.topics ?? [];
+  const activeTopicIds = data.state?.activeTopicIds ?? {}; // só o servidor decide (Geral = sem entrada)
+  /** Ativa um tópico (id) ou Geral (null) no workspace, sempre pelo servidor. */
+  const selectTopic = (workspaceId, topicId) => act(() => (topicId ? nav.activateTopic(topicId) : nav.activateGeneral(workspaceId)));
+
   return (
-    <Ctx.Provider value={{ ...data, error, mission, selectMission, refresh, act, notify, toast, terminals, maestro, setMaestro: updateMaestro, workingIds, loadTerminals, noteInteraction }}>{children}</Ctx.Provider>
+    <Ctx.Provider value={{ ...data, openWorkspaceIds, topics, activeTopicIds, selectTopic, error, mission, selectMission, refresh, act, notify, toast, terminals, maestro, setMaestro: updateMaestro, workingIds, loadTerminals, noteInteraction }}>{children}</Ctx.Provider>
   );
 }

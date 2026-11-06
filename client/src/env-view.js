@@ -12,7 +12,7 @@ export function friendlyNames(workspaces) {
   return new Map(workspaces.map((w) => [w.id, count.get(label(w).toLowerCase()) > 1 && parent(w.path) ? `${label(w)} (${parent(w.path)})` : label(w)]));
 }
 
-const failedExit = (s) => s.status !== 'running' && Number.isInteger(s.exitCode) && s.exitCode !== 0;
+export const failedExit = (s) => s.status !== 'running' && Number.isInteger(s.exitCode) && s.exitCode !== 0;
 
 /**
  * Ambientes da sidebar: TODOS os workspaces cadastrados, na ordem de cadastro dos workspaces (estável: a lista não "pula" enquanto os agentes trabalham).
@@ -33,6 +33,9 @@ export function environments({ workspaces = [], sessions = [], activeId = null, 
       };
     });
 }
+
+/** Estado do ÍCONE do workspace, só a partir de `environments()`: precisa de atenção (falha ou aprovação pendente) > trabalhando > ocioso. */
+export const wsTone = (e) => (e?.attention ? 'attn' : e?.working > 0 ? 'work' : 'idle');
 
 /** Estado visual de um pane, só a partir do que o servidor informa: encerrado (com ou sem falha), trabalhando (a saída cresceu) ou ocioso. */
 export function paneState(session, workingIds = new Set()) {

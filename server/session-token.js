@@ -9,7 +9,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 export const TOKEN_HEADER = 'x-orch-token';
 const TOKEN_RE = /^[A-Za-z0-9_-]{32,128}$/;
 // Leituras que entregam a saída dos terminais em tempo real também exigem o token (as demais leituras seguem abertas, como antes).
-const PROTECTED_READ = /^\/terminals\/(?:stream|[^/]+\/stream)\/?$/i;
+const PROTECTED_READ = /^\/(?:terminals\/(?:stream|[^/]+\/stream)|workspaces\/[^/]+\/conversations(?:\/[^/]+)?)\/?$/i; // saída dos terminais e conversas copiadas
 
 /** Lê ORCH_API_TOKEN, apaga do ambiente e devolve o token (ou null). Formato inválido impede o boot: nunca "protege" com um token fraco em silêncio. */
 export function consumeApiTokenFromEnv(env = process.env) {

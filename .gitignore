@@ -33,3 +33,4 @@ client/dist/
 
 # Credenciais MCP temporarias dos terminais (tokens)
 data/mcp/
+data/history/

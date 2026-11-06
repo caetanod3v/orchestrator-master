@@ -17,8 +17,9 @@ export const now = () => new Date().toISOString();
 function initial() {
   return {
     version: 1,
-    settings: { activeWorkspaceId: null, requireApproval: true, showDemoData: false },
+    settings: { activeWorkspaceId: null, openWorkspaceIds: [], activeTopicIds: {}, requireApproval: true, showDemoData: false },
     workspaces: [],
+    topics: [],
     missions: buildDemoMissions(),
     activity: [],
   };
@@ -66,7 +67,8 @@ const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
 
 const TERMINAL_STATES = ['running', 'exited', 'interrupted'];
 /** Um registro do histórico de sessões de terminal (terminals.js) com o que a retomada exige. */
-export const validTerminalSession = (r) => isObj(r) && typeof r.id === 'string' && /^ses_[0-9a-f]{8}$/.test(r.id) && ['claudeSessionId', 'terminalId', 'workspaceId', 'cwd', 'role', 'title'].every((k) => typeof r[k] === 'string') && TERMINAL_STATES.includes(r.state);
+export const validTerminalSession = (r) => isObj(r) && typeof r.id === 'string' && /^ses_[0-9a-f]{8}$/.test(r.id) && ['claudeSessionId', 'terminalId', 'workspaceId', 'cwd', 'role', 'title'].every((k) => typeof r[k] === 'string') && TERMINAL_STATES.includes(r.state)
+  && (r.topicId === undefined || r.topicId === null || (typeof r.topicId === 'string' && /^top_[0-9a-f]{8}$/.test(r.topicId))); // topicId opcional: sessão antiga (sem o campo) continua válida
 /**
  * O histórico de terminais é informativo: um registro malformado NÃO invalida o banco. Descarta só os inválidos (e ids repetidos) e zera `forkedFrom` que aponte para
  * registro inexistente. Banco antigo sem a lista fica como está. Devolve quantos registros foram descartados.
@@ -75,9 +77,14 @@ export function sanitizeTerminalSessions(d) {
   if (!isObj(d) || d.terminalSessions === undefined) return 0;
   if (!Array.isArray(d.terminalSessions)) { d.terminalSessions = []; return 1; }
   const seen = new Set(), keep = [];
-  for (const r of d.terminalSessions) { if (validTerminalSession(r) && !seen.has(r.id)) { seen.add(r.id); keep.push(r); } }
+  for (const r of d.terminalSessions) {
+    if (isObj(r) && r.topicId != null && !(typeof r.topicId === 'string' && /^top_[0-9a-f]{8}$/.test(r.topicId))) r.topicId = null; // vínculo de tópico inválido não pode custar a sessão (e o histórico dela)
+    if (validTerminalSession(r) && !seen.has(r.id)) { seen.add(r.id); keep.push(r); }
+  }
   const dropped = d.terminalSessions.length - keep.length;
-  for (const r of keep) if (r.forkedFrom != null && (typeof r.forkedFrom !== 'string' || !seen.has(r.forkedFrom) || r.forkedFrom === r.id)) r.forkedFrom = null;
+  const byId = new Map(keep.map((r) => [r.id, r]));
+  // fork nasce no workspace da origem: vínculo com registro inexistente, consigo mesmo ou de OUTRO workspace é descartado
+  for (const r of keep) if (r.forkedFrom != null && (typeof r.forkedFrom !== 'string' || !seen.has(r.forkedFrom) || r.forkedFrom === r.id || byId.get(r.forkedFrom).workspaceId !== r.workspaceId)) r.forkedFrom = null;
   if (dropped) d.terminalSessions = keep;
   return dropped;
 }
