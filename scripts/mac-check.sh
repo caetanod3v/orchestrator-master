@@ -73,17 +73,29 @@ try {
 for (const p of [grand, parent.pid]) { try { process.kill(p, 'SIGKILL'); } catch {} }
 " 2>&1 | tee -a "$REPORT"
 
+# Resume um arquivo de saida do `node --test --test-reporter=spec` (o reporter e FORCADO: o padrao muda conforme a versao do Node e se a saida e um terminal).
+summarize_tests() { # $1 = rotulo; $2 = arquivo de saida
+  local label="$1" out="$2"
+  local sum; sum="$(grep -E '^ℹ (tests|pass|fail|cancelled|skipped) ' "$out" | tr '\n' ' ')"
+  if [ -z "$sum" ]; then # formato inesperado: nao fica as cegas, mostra o final bruto
+    log "-- $label: (nao achei o resumo; final da saida abaixo)"
+    tail -15 "$out" | while IFS= read -r l; do log "     $l"; done
+    return
+  fi
+  log "-- $label: $sum"
+  if grep -qE '^\s*✖' "$out"; then
+    log "   FALHARAM:"
+    grep -E '^\s*✖' "$out" | sort -u | head -12 | while IFS= read -r l; do log "     $l"; done
+    log "   detalhes (esperado/atual):"
+    grep -E -B2 -A9 'AssertionError|expected:|actual:' "$out" | head -90 | while IFS= read -r l; do log "     $l"; done
+  fi
+}
+
 run_tests() { # $1 = rotulo; $2... = arquivos
   local label="$1"; shift
   local out="$WORK/test-$label.txt"
-  node --test "$@" >"$out" 2>&1
-  log "-- $label: $(grep -E '^ℹ (tests|pass|fail|cancelled|skipped) ' "$out" | tr '\n' ' ')"
-  if grep -qE '^\s*✖' "$out"; then
-    log "   FALHARAM:"
-    grep -E '^\s*✖' "$out" | sort -u | head -8 | while IFS= read -r l; do log "     $l"; done
-    log "   detalhes (esperado/atual):"
-    grep -E -A8 'AssertionError|expected|actual' "$out" | head -50 | while IFS= read -r l; do log "     $l"; done
-  fi
+  node --test --test-reporter=spec "$@" >"$out" 2>&1
+  summarize_tests "$label" "$out"
 }
 
 sec "D. Testes que falharam, sozinhos (2 rodadas)"
@@ -92,9 +104,8 @@ run_tests rodada2 server/test/posix-process.test.mjs server/test/orphans.test.mj
 
 if [ "$SUITE" = 1 ]; then
   sec "E. Suite completa (alguns minutos)"
-  node --test server/test/*.test.mjs >"$WORK/suite.txt" 2>&1
-  log "$(grep -E '^ℹ (tests|pass|fail|cancelled|skipped) ' "$WORK/suite.txt" | tr '\n' ' ')"
-  grep -E '^\s*✖' "$WORK/suite.txt" | sort -u | head -12 | while IFS= read -r l; do log "   $l"; done
+  node --test --test-reporter=spec server/test/*.test.mjs >"$WORK/suite.txt" 2>&1
+  summarize_tests suite "$WORK/suite.txt"
 fi
 
 sec "RESUMO"
