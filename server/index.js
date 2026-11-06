@@ -11,6 +11,7 @@ import { gitInfo } from './git.js';
 import { validateDir, setupWorkspaceRemoval, setupWorkspaceRename } from './workspaces.js';
 import { topicsState, openAndActivate, snapshotTabs, restoreTabs, setupWorkspaceTabs, setupTopics } from './topics.js';
 import { setupUiSettings } from './ui-settings.js';
+import { createLoadouts, setupLoadouts } from './loadouts.js';
 import { setupLayouts } from './layouts.js';
 import { createConversationStore, setupConversations, startConversationCapture } from './conversations.js';
 import { setupExecution, blockedReason } from './execution.js';
@@ -72,8 +73,11 @@ const mcpDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'mcp') : pat
 const maestro = createMaestro({ getTerminals: () => terminals, mcpDir, url: `http://127.0.0.1:${PORT}/mcp`, serverName: stableServerName(db, { save: store.saveOrThrow }) }); // nome com sufixo aleatório POR INSTALAÇÃO (estável entre boots, ver maestro.js): um .mcp.json homônimo não herda a pré-autorização // coordenação entre panes por MCP local (aprovação do usuário por padrão)
 // Conversas copiadas: com ORCH_DATA_DIR (testes, app desktop) na pasta de dados; no modo dev, FORA do repositório (mesmo motivo do mcpDir).
 const historyDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'history') : path.join(process.env.LOCALAPPDATA || os.homedir(), 'ai-dev-orchestrator', 'history');
+// Skills por papel (loadouts.js): plugins de sessão gerados numa pasta própria, FORA do workspace do usuário (mesmo critério do mcpDir/historyDir).
+const loadoutsDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'loadouts') : path.join(process.env.LOCALAPPDATA || os.homedir(), 'ai-dev-orchestrator', 'loadouts');
+const loadouts = createLoadouts({ db, dir: loadoutsDir });
 const conversations = createConversationStore({ dir: historyDir }); // histórico de conversas próprio, por workspace (texto das trocas; ver conversations.js)
-const terminals = createTerminalManager({ db, onEnd: (rec) => { if (db.workspaces.some((w) => w.id === rec.workspaceId)) conversations.sync(rec); }, track: childRegistry.track, worktrees, mcp: maestro, persist: store.saveOrThrow, isChildAlive: (terminalId) => childRegistry.pending().some((r) => r && r.kind === 'terminal' && r.terminalId === terminalId && pidAlive(r.pid)), usage: createUsageReader({ pricesFile: path.join(store.dataDir, 'pricing.json') }) }); // terminais interativos (PTY) do Claude Code: um processo por pane, em paralelo
+const terminals = createTerminalManager({ db, loadouts, onEnd: (rec) => { if (db.workspaces.some((w) => w.id === rec.workspaceId)) conversations.sync(rec); }, track: childRegistry.track, worktrees, mcp: maestro, persist: store.saveOrThrow, isChildAlive: (terminalId) => childRegistry.pending().some((r) => r && r.kind === 'terminal' && r.terminalId === terminalId && pidAlive(r.pid)), usage: createUsageReader({ pricesFile: path.join(store.dataDir, 'pricing.json') }) }); // terminais interativos (PTY) do Claude Code: um processo por pane, em paralelo
 let worktreeRecovery = { settled: [], inconsistent: [], unregistered: [], unverified: [] }; // E3: preenchido logo DEPOIS do reclaim dos processos filhos (abaixo)
 const app = express();
 // Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO em POST/PUT/PATCH/DELETE (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).
@@ -345,6 +349,7 @@ setupWorkspaceRemoval(app, { db, terminals, onRemoved: (id) => conversations.rem
 setupWorkspaceRename(app, { db });
 setupWorkspaceTabs(app, { db });
 setupTopics(app, { db });
+setupLoadouts(app, { loadouts }); // skills por papel: GET/PUT /api/loadouts
 setupUiSettings(app, { db }); // preferências da interface (db.settings.ui): GET/PUT /api/ui
 setupLayouts(app, { db }); // layout da grade por workspace
 setupConversations(app, { db, conversations }); // GET/DELETE /api/workspaces/:id/conversations[/:rec]

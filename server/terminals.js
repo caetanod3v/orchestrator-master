@@ -20,6 +20,7 @@ import { pidAlive } from './instance-lock.js';
 import { worktreeProblem } from './worktrees.js';
 import { asyncRoute } from './async-route.js';
 import { inspectProjectConfig } from './project-config.js';
+import { getProvider } from './providers/index.js';
 
 const ID_RE = /^term_[0-9a-f]{8}$/, REC_RE = /^ses_[0-9a-f]{8}$/, UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const SWEEP_MS = 2000; // varredura dos processos retidos (lingering): UM temporizador central, só existe enquanto há retidos
@@ -41,25 +42,16 @@ const UNCONFIRMED = 'o encerramento do processo NÃO foi confirmado: a sessão f
 const clampInt = (v, lo, hi, d) => (Number.isFinite(Number(v)) ? Math.min(hi, Math.max(lo, Math.trunc(Number(v)))) : d);
 const cleanTitle = (t) => String(t ?? '').replace(/[^\p{L}\p{N} _.-]/gu, '').trim().slice(0, 40);
 
-/** Claude Code no PATH (arquivo real, nunca por shell). `.cmd`/`.bat` precisam do cmd.exe. null se não achar. */
-export function resolveClaude({ env = process.env, platform = process.platform } = {}) {
-  const dirs = String(env.PATH ?? env.Path ?? '').split(path.delimiter).filter(Boolean);
-  const names = platform === 'win32' ? ['claude.exe', 'claude.cmd', 'claude.bat'] : ['claude'];
-  for (const d of dirs) for (const n of names) {
-    const f = path.join(d.replace(/^"|"$/g, ''), n);
-    try { if (fs.statSync(f).isFile()) return /\.(cmd|bat)$/i.test(f) ? { file: env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', f], viaShell: true } : { file: f, args: [], viaShell: false }; } catch { /* próximo */ }
-  }
-  return null;
-}
+export { resolveClaude } from './providers/claude.js'; // compatibilidade: continua exportado daqui
 let ptyCache;
 const loadPty = () => { if (ptyCache !== undefined) return ptyCache; try { ptyCache = createRequire(import.meta.url)('node-pty'); } catch { ptyCache = null; } return ptyCache; };
 
 /** `ptyLib`, `resolveCommand`, `track` e `worktrees` só são injetados nos testes/boot; o padrão é o node-pty real e o Claude Code do PATH. */
-export function createTerminalManager({ db, ptyLib = null, resolveCommand = resolveClaude, track = null, worktrees = null, maxSessions = MAX_SESSIONS, now = store.now, uid = store.uid, killTree = killTreeSync, waitFor = waitGone, usage = null, newSessionId = randomUUID, mcp = null, inspectConfig = inspectProjectConfig, persist = null, isChildAlive = null, transcriptExists = null, pidIsAlive = pidAlive, maxRecords = MAX_RECORDS, sweepMs = SWEEP_MS, setTimer = setInterval, clearTimer = clearInterval, onEnd = null } = {}) {
+export function createTerminalManager({ db, ptyLib = null, provider = getProvider(), loadouts = null, resolveCommand = provider.resolve, track = null, worktrees = null, maxSessions = MAX_SESSIONS, now = store.now, uid = store.uid, killTree = killTreeSync, waitFor = waitGone, usage = null, newSessionId = randomUUID, mcp = null, inspectConfig = inspectProjectConfig, persist = null, isChildAlive = null, transcriptExists = null, pidIsAlive = pidAlive, maxRecords = MAX_RECORDS, sweepMs = SWEEP_MS, setTimer = setInterval, clearTimer = clearInterval, onEnd = null } = {}) {
   const sessions = new Map();
   const allSubs = new Set(); // UMA conexão SSE leva a saída de TODOS os terminais: o navegador só abre ~6 conexões por origem; com uma por pane, 7+ terminais travavam a tela e até o botão de fechar
   const live = () => [...sessions.values()].filter((s) => s.status === 'running');
-  const describe = (s) => ({ id: s.id, role: s.role, roleLabel: ROLES[s.role]?.label ?? s.role, color: ROLES[s.role]?.color ?? null, title: s.title, workspaceId: s.workspaceId, topicId: s.topicId ?? null, cwd: s.cwd, worktreeId: s.worktreeId, recordId: s.recordId ?? null,
+  const describe = (s) => ({ id: s.id, role: s.role, provider: s.provider ?? provider.id, roleLabel: ROLES[s.role]?.label ?? s.role, color: ROLES[s.role]?.color ?? null, title: s.title, workspaceId: s.workspaceId, topicId: s.topicId ?? null, cwd: s.cwd, worktreeId: s.worktreeId, recordId: s.recordId ?? null,
     usage: safeUsage(s), status: s.status, pid: s.pid, cols: s.cols, rows: s.rows, startedAt: s.startedAt, endedAt: s.endedAt, exitCode: s.exitCode, lastOutputAt: s.lastOutputAt, bytes: s.bytes });
   /** tokens/custo do pane, lidos do transcript do Claude Code (null sem leitor, sem arquivo ainda ou em qualquer falha: é informativo, nunca derruba a listagem) */
   const safeUsage = (s) => { try { return usage?.read(s.claudeSessionId) ?? null; } catch { return null; } };
@@ -178,20 +170,21 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
       if (mcpCfg && cmd.viaShell && /[&|<>^%"!()]/.test(mcpCfg.configPath)) { revokeMcp(id); mcpCfg = null; } // wrapper .cmd (cmd.exe): caminho com metacaracteres quebraria a linha de comando; o terminal abre sem a coordenação
     }
     if (resumed && rec.usesMcp === true && !mcpCfg) { revokeMcp(id); return fail(409, 'Não foi possível renovar a credencial de coordenação (MCP) deste terminal; a sessão não foi retomada.'); }
-    const mcpArgs = mcpCfg ? ['--mcp-config', mcpCfg.configPath, '--allowedTools', `mcp__${mcp.serverName ?? 'orchestrator'}`] : [];
-    const args = mode === 'new' ? ['--append-system-prompt', ROLES[role].prompt, '--name', label, '--session-id', claudeSessionId, ...mcpArgs]
-      : ['--resume', rec.claudeSessionId, ...(mode === 'fork' ? ['--fork-session', '--session-id', claudeSessionId] : []), ...mcpArgs];
+    let pluginDir = null; // skills do papel (loadouts.js): pacote gerado fora do workspace; sem ele (falha ao gravar, caminho que o wrapper .cmd não aguenta) o terminal abre igual
+    try { pluginDir = loadouts?.pluginDirFor(role) ?? null; } catch { pluginDir = null; }
+    if (pluginDir && cmd.viaShell && /[&|<>^%"!()]/.test(pluginDir)) pluginDir = null;
+    const args = provider.paneArgs({ mode, prompt: ROLES[role].prompt, label, sessionId: claudeSessionId, resumeSessionId: rec?.claudeSessionId, mcp: mcpCfg ? { configPath: mcpCfg.configPath, serverName: mcp.serverName } : null, pluginDir });
     let p;
     try { p = pty.spawn(cmd.file, [...cmd.args, ...args], { name: 'xterm-256color', cols: c, rows: r, cwd, env, useConpty: true }); }
     catch (e) { revokeMcp(id); return fail(500, `Não foi possível iniciar o terminal: ${String(e?.message ?? e).slice(0, 160)}`); }
-    const s = { id, role, claudeSessionId, recordId: null, holdInput: resumed, title: label, workspaceId: ws.id, topicId, cwd, worktreeId: wt?.id ?? null, status: 'running', pid: p.pid, cols: c, rows: r, startedAt: now(), endedAt: null, exitCode: null, lastOutputAt: null, bytes: 0, chunks: [], chunkBytes: 0, subs: new Set(), tracked: null, p };
+    const s = { id, role, provider: provider.id, claudeSessionId, recordId: null, holdInput: resumed, title: label, workspaceId: ws.id, topicId, cwd, worktreeId: wt?.id ?? null, status: 'running', pid: p.pid, cols: c, rows: r, startedAt: now(), endedAt: null, exitCode: null, lastOutputAt: null, bytes: 0, chunks: [], chunkBytes: 0, subs: new Set(), tracked: null, p };
     try { s.tracked = track?.('terminal', p.pid, { terminalId: id, workspaceId: ws.id }) ?? null; } // processo sem registro não pode ficar vivo (o próximo boot não o acharia)
     catch (e) { const gone = abortLaunch(s, wt); return fail(503, `O terminal não pôde ser registrado (${e?.code || e?.message || 'erro'}); ${gone ? 'ele foi encerrado.' : UNCONFIRMED}`, gone ? {} : { code: 'exit_unconfirmed' }); }
     // histórico: retomada normal reaproveita o registro (é a mesma sessão do Claude Code); novo e fork criam um registro
     const list = records(true), before = [...list], links = list.map((x) => [x, x.forkedFrom]), prev = mode === 'resume' ? { ...rec } : null;
     let nrec;
     if (mode === 'resume') { nrec = rec; Object.assign(rec, { terminalId: id, topicId, state: 'running', endedAt: null, exitCode: null, lastResumedAt: s.startedAt, resumes: (rec.resumes ?? 0) + 1 }); delete rec.interruptedAt; delete rec.closedReason; delete rec.unconfirmedExit; }
-    else { nrec = { id: uid('ses'), terminalId: id, claudeSessionId, role, title: label, workspaceId: ws.id, topicId, cwd, worktreeId: wt?.id ?? null, usesMcp: !!mcpCfg, state: 'running', startedAt: s.startedAt, endedAt: null, exitCode: null, resumes: 0, forkedFrom: mode === 'fork' ? rec.id : null }; list.push(nrec); trimRecords(list, rec); }
+    else { nrec = { id: uid('ses'), terminalId: id, provider: provider.id, claudeSessionId, role, title: label, workspaceId: ws.id, topicId, cwd, worktreeId: wt?.id ?? null, usesMcp: !!mcpCfg, state: 'running', startedAt: s.startedAt, endedAt: null, exitCode: null, resumes: 0, forkedFrom: mode === 'fork' ? rec.id : null }; list.push(nrec); trimRecords(list, rec); }
     try { persistStrict(); } catch (e) {
       if (prev) { for (const k of Object.keys(rec)) delete rec[k]; Object.assign(rec, prev); } else db.terminalSessions = before;
       for (const [x, f] of links) { if (f === undefined) delete x.forkedFrom; else x.forkedFrom = f; }
@@ -287,7 +280,7 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
     const recs = records().filter(Boolean), has = transcriptLookup(recs.map((r) => r.claudeSessionId).filter((x) => UUID_RE.test(String(x))));
     return recs.map((r) => {
       const { block } = resumeBlock(r, has);
-      return { id: r.id, role: r.role, roleLabel: ROLES[r.role]?.label ?? r.role, color: ROLES[r.role]?.color ?? null, title: r.title, workspaceId: r.workspaceId, topicId: r.topicId ?? null, worktreeId: r.worktreeId ?? null, state: r.state, startedAt: r.startedAt, endedAt: r.endedAt ?? null, exitCode: r.exitCode ?? null, usesMcp: r.usesMcp === true, resumes: r.resumes ?? 0, forkedFrom: r.forkedFrom ?? null, active: r.state === 'running' && sessionActive(r.claudeSessionId), resumable: block === null, blockedReason: block?.code ?? null, blockedMessage: block?.message ?? null, closedReason: REASONS.includes(r.closedReason) ? r.closedReason : null };
+      return { id: r.id, role: r.role, provider: r.provider ?? 'claude', roleLabel: ROLES[r.role]?.label ?? r.role, color: ROLES[r.role]?.color ?? null, title: r.title, workspaceId: r.workspaceId, topicId: r.topicId ?? null, worktreeId: r.worktreeId ?? null, state: r.state, startedAt: r.startedAt, endedAt: r.endedAt ?? null, exitCode: r.exitCode ?? null, usesMcp: r.usesMcp === true, resumes: r.resumes ?? 0, forkedFrom: r.forkedFrom ?? null, active: r.state === 'running' && sessionActive(r.claudeSessionId), resumable: block === null, blockedReason: block?.code ?? null, blockedMessage: block?.message ?? null, closedReason: REASONS.includes(r.closedReason) ? r.closedReason : null };
     }).reverse();
   };
 

@@ -2,6 +2,7 @@ import React from 'react';
 import { useStore } from '../store.jsx';
 import { Panel } from '../components/ui.jsx';
 import { AgentCard } from '../components/Widgets.jsx';
+import LoadoutPanel from '../components/LoadoutPanel.jsx';
 
 const Pipe = ({ title, steps }) => (
   <div className="pipe-wrap">
@@ -24,6 +25,7 @@ export default function Agents() {
         <Pipe title="Ciclo autônomo" steps={[{ t: 'Você inicia o ciclo' }, { t: 'Planner', b: true }, { t: 'Executor', b: true }, { t: 'Verificações reais (se aprovadas)' }, { t: 'Relatório' }, { t: 'Planner', b: true }]} />
         <p className="dim lead-p">Planner e Executor são responsabilidades separadas e usam o Claude Code instalado: o Planner sem ferramentas (só texto, validado pelo servidor) e o Executor com leitura e edição de arquivos no espaço de trabalho. O estado de cada agente vem do servidor.</p>
       </Panel>
+      <LoadoutPanel />
     </div>
   );
 }
