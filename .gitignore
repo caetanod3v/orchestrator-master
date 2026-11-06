@@ -40,3 +40,6 @@ desktop/stage/
 desktop/release/
 
 data/history/
+
+# Instruções locais do Claude Code (não versionado)
+CLAUDE.md
