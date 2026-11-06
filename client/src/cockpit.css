@@ -199,7 +199,6 @@
 
 /* Painel do maestro */
 .mp { flex: none; margin: 0 var(--sp-1) var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); border-left: 3px solid #ec4899; border-radius: var(--r-3); background: var(--raise); max-height: 34vh; overflow: auto; }
-.mp-auto { border-color: var(--warn); border-left-color: var(--warn); }
 .mp-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-4); font-size: var(--fs-sm); }
 .mp-warn { color: var(--warn-text); font-size: var(--fs-xs); }
 .mp-note { margin: var(--sp-2) 0 0; }

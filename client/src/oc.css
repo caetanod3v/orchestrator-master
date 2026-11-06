@@ -253,7 +253,6 @@ input:focus-visible + .oc-switch-track { outline: 2px solid var(--focus); outlin
 
 /* ---------- Maestro e worktrees (mesmas classes de sempre, só ajuste de tom) ---------- */
 .mp, .tg-wt { margin: var(--sp-2) var(--sp-3) 0; background: var(--coal-1); box-shadow: inset 0 0 0 1px var(--coal-line); border-radius: var(--r-3); }
-.mp-auto { box-shadow: inset 0 0 0 1px rgba(255, 106, 43, .5); }
 
 /* ---------- movimento reduzido: preferência do sistema ou da própria interface ---------- */
 @media (prefers-reduced-motion: reduce) {
