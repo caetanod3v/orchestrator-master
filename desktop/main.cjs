@@ -13,7 +13,8 @@ const path = require('node:path');
 app.setName('AI Dev Orchestrator');
 const SMOKE = process.env.ORCH_DESKTOP_SMOKE || null; // só para verificação do pacote: sobe, confere as rotas e sai com um código
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, 'stage');
-const APP_DIR = path.join(RES, 'orchestrator'), NODE_EXE = path.join(RES, 'node', 'node.exe');
+const IS_WIN = process.platform === 'win32';
+const APP_DIR = path.join(RES, 'orchestrator'), NODE_EXE = IS_WIN ? path.join(RES, 'node', 'node.exe') : path.join(RES, 'node', 'bin', 'node'); // macOS/Linux: layout oficial do Node (bin/node + lib/node_modules/npm)
 const DATA_DIR = process.env.ORCH_DESKTOP_DATA || path.join(app.getPath('userData'), 'data');
 const LOG_FILE = path.join(app.getPath('userData'), 'logs', 'server.log');
 
@@ -35,8 +36,12 @@ function startServer() {
   fs.mkdirSync(DATA_DIR, { recursive: true }); fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
   if (!fs.existsSync(NODE_EXE)) throw new Error(`Node embutido não encontrado: ${NODE_EXE}`);
   const env = { ...process.env, PORT: String(port), ORCH_DATA_DIR: DATA_DIR, ORCH_API_TOKEN: API_TOKEN };
+  if (!IS_WIN) { // app aberto pelo Finder não herda o PATH do shell: inclui git instalado pelo usuário (~/.local/git, /opt/homebrew, /usr/local) antes do git antigo da Apple
+    const extra = [path.join(require('node:os').homedir(), '.local', 'git', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'].filter((d) => fs.existsSync(d));
+    env.PATH = [...extra, ...(env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin').split(':')].filter((d, i, a2) => d && a2.indexOf(d) === i).join(':');
+  }
   delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS; // o servidor roda no Node do pacote, nunca como Electron
-  child = spawn(NODE_EXE, [path.join(APP_DIR, 'server', 'index.js')], { cwd: APP_DIR, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(NODE_EXE, [path.join(APP_DIR, 'server', 'index.js')], { cwd: APP_DIR, env, windowsHide: true, detached: !IS_WIN, stdio: ['ignore', 'pipe', 'pipe'] }); // fora do Windows o servidor lidera o próprio grupo de processos (permite encerrar a árvore)
   log(`--- servidor iniciado (pid ${child.pid}) em 127.0.0.1:${port}; dados em ${DATA_DIR}`);
   for (const s of [child.stdout, child.stderr]) s.on('data', (d) => String(d).split(/\r?\n/).filter(Boolean).forEach(log));
   child.once('exit', (code, sig) => { log(`--- servidor encerrou (código ${code}, sinal ${sig})`); child = null; if (!quitting) fail('O servidor do orquestrador parou.'); });
@@ -52,7 +57,12 @@ function fail(message) {
 /** Interrompe a execução em curso (se houver) e encerra o servidor com TODA a árvore de processos (Claude Code incluído). */
 function stopServer() {
   const c = child; child = null; if (!c?.pid) return;
-  try { execFileSync('taskkill', ['/PID', String(c.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 8000 }); } catch { /* já encerrado */ }
+  if (IS_WIN) { try { execFileSync('taskkill', ['/PID', String(c.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 8000 }); } catch { /* já encerrado */ } return; }
+  // macOS/Linux: SIGTERM primeiro (o servidor encerra o Claude Code e os terminais dele e libera a trava); se não sair em ~4 s, SIGKILL no grupo inteiro
+  const alive = () => { try { process.kill(c.pid, 0); return true; } catch { return false; } };
+  try { process.kill(c.pid, 'SIGTERM'); } catch { return; }
+  for (let t = 0; t < 4000 && alive(); t += 100) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  if (alive()) { try { process.kill(-c.pid, 'SIGKILL'); } catch { try { process.kill(c.pid, 'SIGKILL'); } catch { /* já encerrado */ } } }
 }
 async function gracefulStop() {
   try { await fetch(`http://127.0.0.1:${port}/api/execution/stop`, { method: 'POST', headers: { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-orch-token': API_TOKEN }, body: '{}', signal: AbortSignal.timeout(2500) }); } catch { /* o servidor pode já ter caído */ }

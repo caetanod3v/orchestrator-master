@@ -27,14 +27,20 @@ const rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf
 const pkg = { name: rootPkg.name, version: rootPkg.version, private: true, type: 'module', dependencies: rootPkg.dependencies, devDependencies: rootPkg.devDependencies };
 fs.writeFileSync(path.join(APP, 'package.json'), JSON.stringify(pkg, null, 2));
 fs.copyFileSync(path.join(ROOT, 'package-lock.json'), path.join(APP, 'package-lock.json'));
-const npmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+const npmCli = [path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), path.join(path.dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')].find((p) => fs.existsSync(p)) ?? '';
 if (!fs.existsSync(npmCli)) throw new Error('npm não encontrado junto do Node atual.');
 run(process.execPath, [npmCli, 'ci', '--omit=dev', '--no-audit', '--no-fund', '--prefer-offline'], { cwd: APP });
 fs.writeFileSync(path.join(APP, 'package.json'), JSON.stringify({ ...pkg, devDependencies: undefined, scripts: undefined }, null, 2)); // o pacote não tem scripts de desenvolvimento
 
-step('Node embutido (node.exe + npm)');
-fs.copyFileSync(process.execPath, path.join(NODE, 'node.exe'));
-fs.cpSync(path.join(path.dirname(process.execPath), 'node_modules', 'npm'), path.join(NODE, 'node_modules', 'npm'), { recursive: true });
+step('Node embutido (node + npm)');
+if (process.platform === 'win32') {
+  fs.copyFileSync(process.execPath, path.join(NODE, 'node.exe'));
+  fs.cpSync(path.join(path.dirname(process.execPath), 'node_modules', 'npm'), path.join(NODE, 'node_modules', 'npm'), { recursive: true });
+} else { // macOS/Linux: bin/node + lib/node_modules/npm (o servidor procura o npm nos dois layouts)
+  fs.mkdirSync(path.join(NODE, 'bin'), { recursive: true }); fs.mkdirSync(path.join(NODE, 'lib', 'node_modules'), { recursive: true });
+  fs.copyFileSync(process.execPath, path.join(NODE, 'bin', 'node')); fs.chmodSync(path.join(NODE, 'bin', 'node'), 0o755);
+  fs.cpSync(path.join(path.dirname(process.execPath), '..', 'lib', 'node_modules', 'npm'), path.join(NODE, 'lib', 'node_modules', 'npm'), { recursive: true });
+}
 
 fs.writeFileSync(path.join(STAGE, 'manifest.json'), JSON.stringify({ app: rootPkg.version, node: process.version, builtAt: new Date().toISOString() }, null, 2));
 const size = (d) => { let n = 0; const walk = (p) => { for (const e of fs.readdirSync(p, { withFileTypes: true })) { const f = path.join(p, e.name); e.isDirectory() ? walk(f) : (n += fs.statSync(f).size); } }; walk(d); return (n / 1048576).toFixed(1); };

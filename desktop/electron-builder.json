@@ -49,5 +49,24 @@
     "deleteAppDataOnUninstall": false,
     "shortcutName": "AI Dev Orchestrator"
   },
+  "mac": {
+    "icon": "build/icon-mac.png",
+    "category": "public.app-category.developer-tools",
+    "target": [
+      {
+        "target": "dir",
+        "arch": [
+          "x64"
+        ]
+      },
+      {
+        "target": "dmg",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "identity": null
+  },
   "afterPack": "scripts/after-pack.cjs"
 }

@@ -8,10 +8,12 @@
   "scripts": {
     "stage": "node scripts/prepare.mjs",
     "dir": "npm run stage && electron-builder --win dir",
-    "dist": "npm run stage && electron-builder --win portable nsis"
+    "dist": "npm run stage && electron-builder --win portable nsis",
+    "dir:mac": "npm run stage && electron-builder --mac dir",
+    "dist:mac": "npm run stage && electron-builder --mac dmg"
   },
   "devDependencies": {
-    "electron": "^45.2.1",
+    "electron": "^43.8.7",
     "electron-builder": "^26.18.0"
   }
 }

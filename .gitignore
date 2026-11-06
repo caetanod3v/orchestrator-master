@@ -33,3 +33,8 @@ client/dist/
 
 # Credenciais MCP temporarias dos terminais (tokens)
 data/mcp/
+
+# macOS e build do desktop
+.DS_Store
+desktop/stage/
+desktop/release/
