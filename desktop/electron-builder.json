@@ -1,7 +1,7 @@
 {
-  "appId": "dev.orchestrator.desktop",
-  "productName": "AI Dev Orchestrator",
-  "copyright": "AI Dev Orchestrator",
+  "appId": "com.forge.dev",
+  "productName": "FORGE",
+  "copyright": "FORGE",
   "directories": {
     "output": "release",
     "buildResources": "build"
@@ -40,15 +40,15 @@
     ]
   },
   "portable": {
-    "artifactName": "AI-Dev-Orchestrator-${version}-Portable.${ext}"
+    "artifactName": "FORGE-${version}-Portable.${ext}"
   },
   "nsis": {
-    "artifactName": "AI-Dev-Orchestrator-${version}-Setup.${ext}",
+    "artifactName": "FORGE-${version}-Setup.${ext}",
     "oneClick": false,
     "perMachine": false,
     "allowToChangeInstallationDirectory": true,
     "deleteAppDataOnUninstall": false,
-    "shortcutName": "AI Dev Orchestrator"
+    "shortcutName": "FORGE"
   },
   "mac": {
     "icon": "build/icon-mac.png",

@@ -1,9 +1,9 @@
 {
-  "name": "ai-dev-orchestrator-desktop",
+  "name": "forge-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Casca desktop (Electron) do AI Dev Orchestrator: janela própria + o servidor existente com o Node embutido",
-  "author": "AI Dev Orchestrator",
+  "description": "Casca desktop (Electron) do FORGE: janela própria + o servidor existente com o Node embutido",
+  "author": "FORGE",
   "main": "main.cjs",
   "scripts": {
     "stage": "node scripts/prepare.mjs",
