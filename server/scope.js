@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { MAX_SCAN, MAX_HASH_BYTES, SKIP_DIRS, safeRelPath } from './evidence.js';
+import { MAX_SCAN, MAX_HASH_BYTES, isSkippedDir, safeRelPath } from './evidence.js';
 import { isSecretPath, isSensitivePath } from './policy.js';
 
 const MAX_DEPTH = 12, MAX_WATCHED = 500;
@@ -30,7 +30,7 @@ export function scopeSnapshot(root) {
         if (++scanned > MAX_SCAN) { complete = false; break; }
         const rel = dir ? `${dir}/${e.name}` : e.name;
         if (e.isSymbolicLink()) continue;
-        if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name) && depth < MAX_DEPTH) stack.push([rel, depth + 1]); continue; }
+        if (e.isDirectory()) { if (!isSkippedDir(e.name) && depth < MAX_DEPTH) stack.push([rel, depth + 1]); continue; }
         if (!e.isFile()) continue;
         const kind = kindOf(rel); if (!kind) continue;
         if (Object.keys(files).length >= MAX_WATCHED) { complete = false; break; }

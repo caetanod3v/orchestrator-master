@@ -10,7 +10,8 @@
 import { spawn, execFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { parseLine, createUsageTracker } from './stream.js';
-import { killTreeSync, descendantsOf, processStartedAt, waitGone, START_TOLERANCE_MS } from '../orphans.js';
+import { killTreeSync, processStartedAt, waitGone, START_TOLERANCE_MS } from '../orphans.js';
+import { killTree } from '../proc.js';
 import { pidAlive } from '../instance-lock.js';
 
 export const bus = new EventEmitter(); // 'task' | 'log' | 'state' -> consumido pelo SSE
@@ -22,22 +23,6 @@ export const CLAUDE_ARGS = [
   '--no-session-persistence', '--strict-mcp-config', '--setting-sources', 'user',
   '--tools', 'Read,Edit,Write,Glob,Grep',
 ];
-
-function killTree(child) {
-  return new Promise((resolve) => {
-    if (process.platform === 'win32') {
-      execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => resolve());
-    } else {
-      if (child.exitCode !== null || child.signalCode !== null) return resolve(); // já saiu: nada a encerrar (e o PID pode até ter sido reaproveitado)
-      const subs = descendantsOf(child.pid); // lidos antes: sem o pai os subprocessos passam a ser do init e não se acha mais a relação
-      const sweep = () => { for (const p of subs) { try { process.kill(p, 'SIGKILL'); } catch { /* já encerrado */ } } };
-      // Resolve quando o filho SAI (não depois de um tempo fixo): o SIGTERM costuma bastar. Se não sair em 3 s, SIGKILL nele e nos subprocessos.
-      const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* já encerrado */ } sweep(); resolve(); }, 3000);
-      child.once('exit', () => { clearTimeout(timer); sweep(); resolve(); }); // subprocessos que sobraram do filho encerrado também morrem
-      child.kill('SIGTERM');
-    }
-  });
-}
 
 /**
  * `command`/`prefixArgs` só existem para os testes injetarem uma CLI falsa; o servidor

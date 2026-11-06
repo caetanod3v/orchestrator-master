@@ -43,14 +43,19 @@ export function categoryOf(rel) {
   return null;
 }
 
-/** Caminho relativo seguro para "arquivo esperado": dentro do workspace, sem `..`, absoluto, unidade, coringa nem diretórios internos. Devolve o caminho normalizado ou null. */
+/** O nome é o diretório interno do Git? Windows e macOS (APFS padrão) ignoram caixa, e o Windows ignora pontos/espaços finais e fluxos (`.git::$INDEX_ALLOCATION`): `.GIT`, `.git.` e `.git ` são o mesmo `.git`. `.github`/`.gitignore` não. */
+export const isGitName = (name) => { const n = String(name ?? '').split(':')[0].replace(/[. ]+$/, '').toLowerCase(); return n === '.git' || /^\.?git~\d+$/.test(n); }; // inclui o nome curto 8.3 do NTFS (`GIT~1`)
+/** Diretório que o instantâneo não percorre (a entrada `.git` vale em qualquer caixa). */
+export const isSkippedDir = (name) => SKIP_DIRS.has(name) || isGitName(name);
+
+/** Caminho relativo seguro para "arquivo esperado": dentro do workspace, sem `..`, absoluto, unidade, coringa nem diretórios internos. Devolve o caminho normalizado ou null. `.git` é recusado em QUALQUER segmento (ex.: `sub/.GIT/hooks/x`, que é um repositório aninhado/submódulo). */
 export function safeRelPath(p) {
   if (typeof p !== 'string') return null;
   const s = p.trim().replace(/\\/g, '/');
   // eslint-disable-next-line no-control-regex
   if (!s || s.length > 200 || /[\u0000-\u001f*?<>|"]/.test(s) || s.startsWith('/') || /^[A-Za-z]:/.test(s)) return null;
   const parts = s.split('/').filter((x) => x !== '.' && x !== '');
-  if (!parts.length || parts.some((x) => x === '..') || parts[0] === '.git') return null;
+  if (!parts.length || parts.some((x) => x === '..' || isGitName(x))) return null;
   return parts.join('/');
 }
 
@@ -91,7 +96,7 @@ export function snapshotWorkspace(root, { commands = [], expected = [] } = {}) {
       if (++scanned > MAX_SCAN) { complete = false; break; }
       const rel = dir ? `${dir}/${e.name}` : e.name;
       if (e.isSymbolicLink()) continue; // nunca segue link para fora do workspace
-      if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name) && depth < MAX_DEPTH) stack.push([rel, depth + 1]); continue; }
+      if (e.isDirectory()) { if (!isSkippedDir(e.name) && depth < MAX_DEPTH) stack.push([rel, depth + 1]); continue; }
       if (!e.isFile()) continue;
       const cat = categoryOf(rel) ?? (isRef(rel) ? 'referenced' : null);
       if (!cat) continue;

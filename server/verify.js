@@ -7,12 +7,13 @@
 //  - sem shell na nossa chamada (node + npm-cli.js), cwd = raiz do workspace validado, sem hooks pre/post;
 //  - ambiente sem segredos, timeout, limite de saída e encerramento da árvore de processos.
 // Limite honesto: `npm run` executa código do projeto (inclusive o que o Executor editou).
-import { spawn, execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { validateDir } from './workspaces.js';
 import * as store from './store.js';
 import { killTreeSync, waitGone } from './orphans.js';
+import { killTree } from './proc.js';
 
 export const ALLOWED_SCRIPTS = ['test', 'build', 'lint', 'typecheck'];
 export const MAX_ITEMS = 4;
@@ -54,13 +55,6 @@ function cleanEnv() {
   const env = {};
   for (const [k, v] of Object.entries(process.env)) if (!SECRET_ENV.test(k)) env[k] = v;
   return { ...env, CI: '1', NO_UPDATE_NOTIFIER: '1', npm_config_update_notifier: 'false', npm_config_fund: 'false', npm_config_audit: 'false' };
-}
-
-function killTree(child) {
-  return new Promise((resolve) => {
-    if (process.platform === 'win32') execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => resolve());
-    else { child.kill('SIGKILL'); resolve(); }
-  });
 }
 
 /**
