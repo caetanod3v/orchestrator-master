@@ -1,0 +1,33 @@
+
+=== Ambiente
+macOS: 12.7.6  arquitetura: x86_64
+node: v22.23.4  em: /Users/caetano/.nvm/versions/node/v22.23.4/bin/node
+git: db4c8cb chore(mac): script de diagnostico do macOS com envio do relatorio pelo GitHub  branch: rebrand/forge
+alteracoes rastreadas: 0
+
+=== A. ps no terminal
+linhas de 'ps -A -o pid=,ppid=': 408
+      1     0
+    102     1
+    103     1
+
+=== B. ps visto pelo node
+linhas pelo node: 407
+amostra: ["    1     0","  102     1"]
+
+=== C. Experimento direto: pai -> neto e descendantsOf
+pai: 77410  neto (esperado): 77411
+descendantsOf(pai) devolveu: [77411]  -> OK
+PID  PPID STAT COMMAND
+77410 77408 S+   /Users/caetano/.nvm/versions/node/v22.23.4/bin/node -e const g = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); console.log(g.pid); setInterval(() => {}, 1000)
+77411 77410 R+   /Users/caetano/.nvm/versions/node/v22.23.4/bin/node -e setInterval(() => {}, 1000)
+linhas do ps com pai/neto: ["77410 77408","77411 77410"]
+
+=== D. Testes que falharam, sozinhos (2 rodadas)
+-- rodada1: 
+-- rodada2: 
+
+=== RESUMO
+ps: 408 linhas | veja as secoes C e D acima
+
+=== Enviando o relatorio
