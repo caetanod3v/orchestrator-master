@@ -19,6 +19,14 @@ export const ORPHAN_NOTE = {
 };
 const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
+/** Converte a saída de `ps -o etime=` ([[dd-]hh:]mm:ss) em segundos; null se não reconhecer o formato. */
+export function parseEtime(text) {
+  const m = /^\s*(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)\s*$/.exec(String(text ?? ''));
+  if (!m) return null;
+  const [d, h, mi, se] = [m[1], m[2], m[3], m[4]].map((x) => Number(x ?? 0));
+  return ((d * 24 + h) * 60 + mi) * 60 + se;
+}
+
 /** Hora de criação do processo (ms desde a época) ou null se não foi possível saber. */
 export function processStartedAt(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
@@ -30,8 +38,9 @@ export function processStartedAt(pid) {
       const ms = Number(out.trim());
       return Number.isFinite(ms) && ms > 0 ? ms : null;
     }
-    const secs = Number(execFileSync('ps', ['-o', 'etimes=', '-p', String(pid)], { encoding: 'utf8', timeout: 8_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim());
-    return Number.isFinite(secs) ? Date.now() - secs * 1000 : null;
+    // `etime` ([[dd-]hh:]mm:ss) existe em Linux e macOS; `etimes` (segundos) só no procps do Linux, não no ps do macOS/BSD
+    const secs = parseEtime(execFileSync('ps', ['-o', 'etime=', '-p', String(pid)], { encoding: 'utf8', timeout: 8_000, stdio: ['ignore', 'pipe', 'ignore'] }));
+    return secs === null ? null : Date.now() - secs * 1000;
   } catch { return null; }
 }
 
