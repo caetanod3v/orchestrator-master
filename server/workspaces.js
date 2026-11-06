@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as store from './store.js';
+import { dropWorkspaceTabs, snapshotTabs, restoreTabs } from './topics.js';
 
 // Validação básica: caminho absoluto, existente, diretório, legível. Nada é executado.
 export function validateDir(input) {
@@ -28,7 +29,10 @@ const ACTIVE_CYCLE = ['planning', 'running'];
  * Motivo pelo qual o workspace NÃO pode ser removido do cadastro agora, ou null. Uma missão com execução, ciclo ativo ou ciclo
  * bloqueado (retomável) ainda depende do workspace; ciclos completed/cancelled/limit_reached não bloqueiam.
  */
-export function workspaceRemovalBlocker(db, workspaceId) {
+export function workspaceRemovalBlocker(db, workspaceId, terminals = null) {
+  // Terminal vivo do workspace ficaria órfão (invisível na grade, ocupando vaga e sem como retomar): feche-os antes.
+  let live = 0; try { live = (terminals?.list?.() ?? []).filter((t) => t.workspaceId === workspaceId && t.status === 'running').length; } catch { live = 0; }
+  if (live) return `Há ${live} terminal(is) aberto(s) neste workspace; feche-os antes de remover o workspace.`;
   const missions = db.missions.filter((m) => m.workspaceId === workspaceId);
   if (missions.some((m) => m.tasks.some((t) => t.status === 'running'))) return 'Há uma execução em andamento neste workspace.';
   if (missions.some((m) => ACTIVE_CYCLE.includes(m.cycle?.status))) return 'Há um ciclo em andamento neste workspace; aguarde ou cancele o ciclo antes de remover o workspace.';
@@ -38,14 +42,24 @@ export function workspaceRemovalBlocker(db, workspaceId) {
 }
 
 /** DELETE /api/workspaces/:id (recebe `db` por injeção; a UI e as demais rotas não mudam). */
-export function setupWorkspaceRemoval(app, { db }) {
+export function setupWorkspaceRemoval(app, { db, terminals = null, onRemoved = null }) {
   app.delete('/api/workspaces/:id', (req, res) => {
     const ws = db.workspaces.find((w) => w.id === req.params.id);
     if (!ws) return res.status(404).json({ error: 'Workspace não encontrado.' });
-    const why = workspaceRemovalBlocker(db, ws.id);
+    const why = workspaceRemovalBlocker(db, ws.id, terminals);
     if (why) return res.status(409).json({ error: why });
-    db.workspaces = db.workspaces.filter((w) => w.id !== ws.id);
-    if (db.settings.activeWorkspaceId === ws.id) db.settings.activeWorkspaceId = db.workspaces[0]?.id ?? null;
+    const prevWorkspaces = db.workspaces, snap = snapshotTabs(db);
+    try {
+      db.workspaces = db.workspaces.filter((w) => w.id !== ws.id);
+      dropWorkspaceTabs(db, ws.id); // tira das abas abertas e arquiva os tópicos (terminais não são tocados)
+      if (db.settings.activeWorkspaceId === null && db.settings.openWorkspaceIds.length === 0) db.settings.activeWorkspaceId = db.workspaces[0]?.id ?? null; // sem aba aberta, mantém o comportamento de antes (outro cadastrado vira ativo)
+      if (db.settings.activeWorkspaceId && !db.settings.openWorkspaceIds.includes(db.settings.activeWorkspaceId)) db.settings.openWorkspaceIds.push(db.settings.activeWorkspaceId);
+      store.saveOrThrow();
+    } catch {
+      db.workspaces = prevWorkspaces; restoreTabs(db, snap);
+      return res.status(500).json({ error: 'Não foi possível remover o workspace: o banco não pôde ser gravado; nada foi alterado.' });
+    }
+    try { onRemoved?.(ws.id); } catch { /* informativo: limpeza do histórico de conversas */ }
     store.log('workspace', `Workspace removido do cadastro: ${ws.name} (arquivos intactos)`);
     store.save();
     res.status(204).end();

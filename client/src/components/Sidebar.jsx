@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../api.js';
+import { api, nav } from '../api.js';
 import { useStore } from '../store.jsx';
 import { usePrefs } from '../hooks.js';
-import { environments } from '../env-view.js';
-import { Icon, Equalizer } from './ui.jsx';
+import { environments, wsTone } from '../env-view.js';
+import { Icon } from './ui.jsx';
 import AgentsPopover from './ProviderPanel.jsx';
 import { BOX, pixelPaths } from '../brand-mark.mjs';
 
@@ -17,6 +17,7 @@ export const Logo = ({ size = 32 }) => (
 );
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const TONE_LABEL = { idle: 'ocioso', work: 'trabalhando', attn: 'requer a sua atenção' };
 function describe(e) {
   const parts = [];
   if (e.running) parts.push(plural(e.running, 'terminal ativo', 'terminais ativos') + (e.working ? ` (${e.working} trabalhando)` : ''));
@@ -24,6 +25,22 @@ function describe(e) {
   if (e.failed) parts.push(plural(e.failed, 'terminou com falha', 'terminaram com falha'));
   if (e.pendingTasks) parts.push(plural(e.pendingTasks, 'tarefa do maestro aguardando você', 'tarefas do maestro aguardando você'));
   return parts.join(', ') || 'sem terminais';
+}
+
+/**
+ * Ícone de estado do workspace (sempre animado, movimento simples de pulso): verde = ocioso (pulso lento), laranja = trabalhando (asterisco, pulso rápido),
+ * vermelho escuro = requer atenção (exclamação). O estado vem só dos dados reais (wsTone); a animação está em oc.css e é desligada por "movimento reduzido".
+ */
+export function WsIcon({ tone }) {
+  return (
+    <span className={`wsi wsi-${tone}`} aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" focusable="false">
+        {tone === 'attn' && <path d="M9 3.2v7M9 14.4v.2" strokeWidth="2.4" />}
+        {tone === 'work' && <path d="M9 2.8v12.4M3.6 5.9l10.8 6.2M3.6 12.1l10.8-6.2" />}
+        {tone === 'idle' && <circle cx="9" cy="9" r="4.4" fill="currentColor" stroke="none" />}
+      </svg>
+    </span>
+  );
 }
 
 const MAX_NAME = 80;
@@ -35,7 +52,7 @@ function EnvRename({ env, onSave, onCancel }) {
   const finish = (save) => { if (done.current) return; done.current = true; if (save) onSave(value); else onCancel(); };
   return (
     <div className="oc-env oc-env-edit on">
-      <span className="oc-env-ico"><Icon name="workspace" size={17} /></span>
+      <WsIcon tone={wsTone(env)} />
       <input className="oc-env-input" autoFocus maxLength={MAX_NAME} value={value} aria-label={`Novo nome para o ambiente ${env.original}`} title={`Pasta: ${env.path}\nEnter confirma, Esc cancela. Vazio restaura "${env.original}".`}
         onFocus={(e) => e.target.select()} onChange={(e) => setValue(e.target.value)} onBlur={() => finish(true)}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); } }} />
@@ -43,29 +60,32 @@ function EnvRename({ env, onSave, onCancel }) {
   );
 }
 
+/** Um workspace = uma linha: ícone de estado + nome + contagens. Clicar abre o workspace. Recolhida a sidebar, só o ícone. */
 function EnvItem({ env, collapsed, editing, onPick, onEdit, onSave, onCancel }) {
-  // vermelho = falha de verdade; âmbar = espera por você (tarefa do maestro); laranja = trabalhando; verde = saudável
-  const tone = env.failed ? 'err' : env.pendingTasks ? 'warn' : env.working ? 'work' : env.running ? 'live' : 'none';
-  const full = `${env.name}: ${describe(env)}${env.active ? ' (aberto)' : ''}`;
+  const tone = wsTone(env);
+  const full = `${env.name}: ${TONE_LABEL[tone]}; ${describe(env)}${env.active ? ' (aberto)' : ''}`;
   if (editing) return <li><EnvRename env={env} onSave={onSave} onCancel={onCancel} /></li>;
+  const attn = env.failed + env.pendingTasks;
   return (
     <li className="oc-envrow">
-      <button type="button" className={`oc-env${env.active ? ' on' : ''}`} onClick={() => onPick(env)} aria-current={env.active ? 'true' : undefined} aria-label={full} title={collapsed ? full : env.renamed ? `${env.path}\nNome original: ${env.original}` : env.path}>
-        <span className={`oc-env-ico tone-${tone}`}><Icon name="workspace" size={17} /><i className="oc-dot" aria-hidden="true" /></span>
-        <span className="oc-env-name side-label">{env.name}</span>
-        <span className="oc-env-badges" aria-hidden="true">
-          {env.attention && <span className={`oc-badge ${env.failed ? 'attn' : 'warn'}`} title={describe(env)}><Icon name="alert" size={12} />{env.failed + env.pendingTasks}</span>}
-          {env.working > 0 ? <span className="oc-badge work"><Equalizer />{env.working}</span> : env.running > 0 ? <span className="oc-badge live"><i />{env.running}</span> : env.exited > 0 && !env.attention ? <span className="oc-badge off">{env.exited}</span> : null}
-        </span>
-      </button>
-      {!collapsed && <button type="button" className="oc-iconbtn oc-env-pen" onClick={() => onEdit(env.id)} aria-label={`Renomear o ambiente ${env.name}`} title="Renomear (só o nome exibido)"><Icon name="pencil" size={13} /></button>}
+      <div className="oc-envrow-head">
+        <button type="button" className={`oc-env tone-${tone}${env.active ? ' on' : ''}`} onClick={() => onPick(env)} aria-current={env.active ? 'true' : undefined} aria-label={full} title={collapsed ? full : env.renamed ? `${env.path}\nNome original: ${env.original}` : env.path}>
+          <WsIcon tone={tone} />
+          <span className="oc-env-name side-label">{env.name}</span>
+          <span className="oc-env-badges" aria-hidden="true">
+            {attn > 0 && <span className="oc-cnt attn" title={describe(env)}>{attn}</span>}
+            {env.running > 0 && <span className="oc-cnt">{env.running}</span>}
+          </span>
+        </button>
+        {!collapsed && <button type="button" className="oc-iconbtn oc-env-pen" onClick={() => onEdit(env.id)} aria-label={`Renomear o ambiente ${env.name}`} title="Renomear (só o nome exibido)"><Icon name="pencil" size={13} /></button>}
+      </div>
     </li>
   );
 }
 
-/** Ambientes de trabalho: um item por workspace que tem terminais (ou que está aberto), montado a partir dos dados reais. Em telas estreitas vira uma gaveta modal. */
-export default function Sidebar({ modal = false, collapsed = false, onToggle, onClose, onOpenSettings, onOpenWorkspaces }) {
-  const { workspaces, state, terminals, maestro, workingIds, act } = useStore();
+/** Ambientes de trabalho: um item por workspace cadastrado, montado a partir dos dados reais. Em telas estreitas vira uma gaveta modal. */
+export default function Sidebar({ modal = false, collapsed = false, onToggle, onClose, onOpenWorkspaces }) {
+  const { workspaces, state, terminals, maestro, workingIds, openWorkspaceIds, act } = useStore();
   const [prefs] = usePrefs();
   const box = useRef(null);
   const [editId, setEditId] = useState(null);
@@ -95,7 +115,10 @@ export default function Sidebar({ modal = false, collapsed = false, onToggle, on
     if (next === env.name || (!env.renamed && next === env.original)) return; // nada mudou
     await act(() => api.post(`/api/workspaces/${env.id}/rename`, { displayName: next }));
   };
-  const pick = async (env) => { if (!env.active) await act(() => api.post(`/api/workspaces/${env.id}/activate`)); if (modal) onClose(); };
+  const pick = async (env) => {
+    if (!env.active) await act(async () => { if (!openWorkspaceIds.includes(env.id)) await nav.openWorkspace(env.id); return nav.activateWorkspace(env.id); });
+    if (modal) onClose();
+  };
   const initials = (prefs.name || 'Você').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
   const cls = `oc-side${collapsed && !modal ? ' collapsed' : ''}${modal ? ' modal' : ''}`;
   const sum = [totals.running ? plural(totals.running, 'ativo', 'ativos') : null, totals.attention ? `${totals.attention} ${totals.attention === 1 ? 'alerta' : 'alertas'}` : null].filter(Boolean).join(' · ');
@@ -109,21 +132,20 @@ export default function Sidebar({ modal = false, collapsed = false, onToggle, on
           : <button type="button" className="oc-iconbtn oc-collapse" onClick={onToggle} aria-label={collapsed ? 'Expandir a barra lateral' : 'Recolher a barra lateral'} aria-expanded={!collapsed} title={collapsed ? 'Expandir' : 'Recolher'}><Icon name="panel" size={17} /></button>}
       </div>
 
-      <div className="oc-side-title side-label"><span>Ambientes</span>{envs.length > 0 && <span className="oc-n">{envs.length}</span>}
+      <div className="oc-side-title side-label"><span>Workspaces</span>{envs.length > 0 && <span className="oc-n">{envs.length}</span>}
         <button type="button" className="oc-iconbtn oc-plus" onClick={onOpenWorkspaces} aria-label="Abrir ou adicionar workspace" title="Abrir ou adicionar workspace"><Icon name="plus" size={14} /></button>
       </div>
 
-      <nav className="oc-envs" aria-label="Ambientes">
+      <nav className="oc-envs" aria-label="Workspaces">
         {envs.length === 0
-          ? <div className="oc-env-empty side-label"><p>Nenhum ambiente ainda.</p><button type="button" className="oc-link" onClick={onOpenWorkspaces}>Adicionar um workspace</button></div>
+          ? <div className="oc-env-empty side-label"><p>Nenhum workspace ainda.</p><button type="button" className="oc-link" onClick={onOpenWorkspaces}>Adicionar um workspace</button></div>
           : <ul>{envs.map((e) => <EnvItem key={e.id} env={e} collapsed={collapsed && !modal} editing={editId === e.id} onPick={pick} onEdit={setEditId} onSave={(t) => save(e, t)} onCancel={() => setEditId(null)} />)}</ul>}
-        {collapsed && !modal && <button type="button" className="oc-env oc-env-add" onClick={onOpenWorkspaces} aria-label="Abrir ou adicionar workspace" title="Abrir ou adicionar workspace"><span className="oc-env-ico"><Icon name="folderPlus" size={17} /></span></button>}
+        {collapsed && !modal && <button type="button" className="oc-env oc-env-add" onClick={onOpenWorkspaces} aria-label="Abrir ou adicionar workspace" title="Abrir ou adicionar workspace"><span className="wsi wsi-add"><Icon name="folderPlus" size={17} /></span></button>}
       </nav>
 
       <div className="oc-side-foot">
         {state && <AgentsPopover className="oc-sum" tone={totals.working ? 'work' : totals.running ? 'live' : 'none'} title="Agentes por provider (todos os ambientes)"><span className="oc-agents-t side-label">{sum || 'nenhum terminal ativo'}</span><span className="oc-agents-n">{totals.running}</span></AgentsPopover>}
         <div className="oc-side-user">
-          <button type="button" className="oc-gear" onClick={onOpenSettings} aria-label="Configurações" title="Configurações"><Icon name="gear" size={18} /></button>
           <span className="oc-me side-label"><span className="oc-avatar" aria-hidden="true">{initials}</span><span className="oc-me-t"><b>{prefs.name || 'Você'}</b></span></span>
         </div>
       </div>

@@ -1,4 +1,6 @@
 import React from 'react';
+import { AGENT_SIZE, agentPath } from '../agent-mark.mjs';
+const AGENT_D = agentPath();
 
 import { STATUS, statusLabel, EVIDENCE_BASIS } from '../labels.js';
 export { STATUS, statusLabel, EVIDENCE_BASIS };
@@ -73,7 +75,7 @@ const ICONS = {
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2', paperclip: 'M20 12l-8 8a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8', play: 'M8 5.5l11 6.5-11 6.5z', arrowRight: 'M5 12h14M13 6l6 6-6 6',
   chat: 'M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z', cockpit: 'M4 4h7v8H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 14h7v6H4z',
   missions: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01', agents: 'M12 4a3.2 3.2 0 1 0 0 6.4A3.2 3.2 0 0 0 12 4zM5 20a7 7 0 0 1 14 0',
-  workspace: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', activity: 'M3 12h4l3-8 4 16 3-8h4',
+  workspace: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z', folderOpen: 'M3 18V7a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v2M3 18l2.6-7.2A2 2 0 0 1 7.5 9.5H21a1 1 0 0 1 1 1.3L19.7 17a2 2 0 0 1-1.9 1.3H4a1 1 0 0 1-1-.3z', activity: 'M3 12h4l3-8 4 16 3-8h4',
   settings: 'M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4',
   planner: 'M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 17c7 0 2-10 8-10', executor: 'M4 6l6 6-6 6M12 18h8',
   gate: 'M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6zM9 12l2 2 4-4', queue: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01', target: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
@@ -91,4 +93,8 @@ export const Icon = ({ name, size = 18 }) => (
 export { cycleApprovalPending } from '../op-state.js';
 
 /** Três barras que sobem e descem: há saída sendo produzida AGORA (dado real: a saída do pane cresceu na última consulta). Parada sob prefers-reduced-motion. */
+/** Glifo de atividade da sidebar: 3 células verticais; um ponto brilhante desce topo → meio → base em passos (animação em oc.css). Decorativo: o estado real vai no aria-label da linha. */
+export const Scan = () => <span className="oc-scan" aria-hidden="true"><i /><i /><i /></span>;
+/** Ícone de agente (pixel art) da sidebar: herda a cor do texto (currentColor), que a linha define pelo estado. Decorativo. */
+export const AgentMark = ({ size = 16 }) => <svg className="tp-mark" width={size} height={size} viewBox={`0 0 ${AGENT_SIZE} ${AGENT_SIZE}`} fill="currentColor" shapeRendering="crispEdges" aria-hidden="true" focusable="false"><path d={AGENT_D} /></svg>;
 export const Equalizer = () => <span className="oc-eq" aria-hidden="true"><i /><i /><i /></span>;

@@ -99,3 +99,21 @@ test('paneName: não repete o papel quando o título já o contém', () => {
   assert.deepEqual(paneName({ title: 'api-fix', roleLabel: 'Revisor' }, null), { role: 'Revisor', name: 'api-fix' });
   assert.deepEqual(paneName({ title: '' }, { label: 'Scout' }), { role: '', name: 'Scout' });
 });
+
+// ---------- expandir/recolher das pastas de workspace (client/src/topic-state.js) ----------
+import { parseOpenMap, loadOpenMap, saveOpenMap, isExpanded, OPEN_KEY } from '../../client/src/topic-state.js';
+
+test('topic-state: sem escolha salva só o ativo começa expandido; a escolha salva vence', () => {
+  assert.equal(isExpanded({}, 'a', true), true); assert.equal(isExpanded({}, 'b', false), false);
+  assert.equal(isExpanded({ a: false, b: true }, 'a', true), false); assert.equal(isExpanded({ a: false, b: true }, 'b', false), true);
+  assert.equal(isExpanded(undefined, 'a', false), false);
+});
+
+test('topic-state: persistência tolerante a texto inválido e a armazenamento que falha', () => {
+  assert.deepEqual(parseOpenMap('{"a":true,"b":"x","c":false}'), { a: true, c: false });
+  for (const raw of ['nada', '[1]', 'null', undefined, '"x"']) assert.deepEqual(parseOpenMap(raw), {});
+  const mem = new Map(); const st = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
+  saveOpenMap({ a: true }, st); assert.equal(mem.has(OPEN_KEY), true); assert.deepEqual(loadOpenMap(st), { a: true });
+  const broken = { getItem() { throw new Error('x'); }, setItem() { throw new Error('x'); } };
+  assert.deepEqual(loadOpenMap(broken), {}); assert.doesNotThrow(() => saveOpenMap({}, broken));
+});

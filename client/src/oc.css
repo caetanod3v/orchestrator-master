@@ -28,7 +28,7 @@
 .oc-brand { display: inline-flex; align-items: center; gap: var(--sp-3); min-width: 0; color: var(--strong); }
 .oc-brand svg { flex: none; border-radius: 5px; transition: transform var(--dur-3) var(--ease), filter var(--dur-3) ease; }
 .oc-brand:hover svg { transform: rotate(-6deg) scale(1.06); filter: drop-shadow(0 0 8px rgba(255, 106, 43, .45)); }
-.oc-brand-name { font-family: var(--mono); font-size: 13px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; white-space: nowrap; }
+.oc-brand-name { font-family: var(--mono); font-size: 12px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; white-space: nowrap; }
 .oc-brand-name::after { content: '_'; margin-left: 1px; color: var(--brand); animation: oc-caret 1.1s steps(1) infinite; }
 .side-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .oc-side.collapsed .side-label, .oc-side.collapsed .oc-env-badges { display: none; }
@@ -63,8 +63,8 @@
 .oc-badge.attn { color: var(--danger-text); box-shadow: inset 0 0 0 1px rgba(255, 77, 79, .5); background: var(--err-bg); }
 .oc-envrow { position: relative; }
 .oc-env-pen { position: absolute; right: 4px; top: 50%; width: 24px; height: 24px; margin-top: -12px; background: var(--coal-3); opacity: 0; transform: scale(.9); pointer-events: none; transition: opacity var(--dur-ui) ease, transform var(--dur-ui) var(--ease), color var(--dur-ui) ease; }
-.oc-envrow:hover .oc-env-pen, .oc-envrow:focus-within .oc-env-pen { opacity: 1; transform: none; pointer-events: auto; }
-.oc-envrow:hover .oc-env-badges, .oc-envrow:focus-within .oc-env-badges { opacity: 0; } .oc-env-badges { transition: opacity var(--dur-ui) ease; }
+.oc-envrow-head:hover .oc-env-pen, .oc-envrow-head:focus-within .oc-env-pen { opacity: 1; transform: none; pointer-events: auto; }
+.oc-envrow-head:hover .oc-env-badges, .oc-envrow-head:focus-within .oc-env-badges { opacity: 0; } .oc-env-badges { transition: opacity var(--dur-ui) ease; }
 .oc-env-pen:hover { color: var(--brand); }
 @media (hover: none) { .oc-env-pen { opacity: .7; pointer-events: auto; transform: none; } .oc-envrow .oc-env-badges { opacity: 1 !important; } .oc-env-pen { position: static; margin: 0; } .oc-envrow { display: flex; align-items: center; } }
 .oc-env-edit { cursor: text; }
@@ -265,3 +265,134 @@ html[data-motion="reduced"] .oc-eq i:nth-child(1) { transform: scaleY(.45); } ht
 html[data-motion="reduced"] .oc-gear:hover svg, html[data-motion="reduced"] .oc-plus:hover svg { transform: none; }
 
 @media (max-width: 900px) { .oc-bar { padding-inline: var(--sp-2); } .oc-total { display: none; } .oc-grid { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: none !important; grid-auto-rows: minmax(260px, 1fr); overflow: auto; } .oc-gutter { display: none; } .oc-cell { grid-column: auto !important; } }
+
+/* ---------- histórico de sessões (SessionHistory.jsx) ---------- */
+.sh-body { padding: var(--sp-4) var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); max-height: min(70vh, 640px); overflow: auto; }
+.sh-bar { display: flex; align-items: center; gap: var(--sp-3); }
+.sh-only { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--dim); }
+.sh-sum { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--warn-text); font-size: var(--fs-sm); }
+.sh-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sh-row { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-2); background: var(--coal-2); box-shadow: inset 2px 0 0 var(--role); }
+.sh-row.restore { background: var(--coal-3); box-shadow: inset 2px 0 0 var(--role), inset 0 0 0 1px var(--line-control); }
+.sh-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sh-t { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.sh-t b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--strong); }
+.sh-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--role); }
+.sh-role { flex: none; font-family: var(--mono); font-size: 11px; color: var(--role); }
+.sh-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--sp-3); }
+.sh-why { color: var(--faint); }
+.sh-act { flex: none; display: flex; gap: var(--sp-2); }
+@media (max-width: 640px) { .sh-row { flex-direction: column; align-items: stretch; } .sh-act { justify-content: flex-end; } }
+.sh-h { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-2); } .sh-h .oc-h { margin: 0; }
+
+/* ---------- sidebar: workspaces em primeiro plano, tópicos subordinados (refinamento visual; só aparência, sem mudar estrutura nem comportamento) ----------
+   Mesma paleta: grafite/preto, laranja para ativo e execução, verde saudável, vermelho falha. Movimento curto e desligado por prefers-reduced-motion / "Animações reduzidas". */
+/* workspace = linha principal */
+.oc-side .oc-env { min-height: 42px; font-size: var(--fs-md); transition: background-color var(--dur-ui) ease, box-shadow var(--dur-3) ease, color var(--dur-ui) ease; }
+.oc-side .oc-env-name { font-weight: 600; letter-spacing: .005em; }
+.oc-side .oc-env[aria-expanded="true"] { color: var(--text); }
+.oc-side .oc-env:hover { background: linear-gradient(90deg, rgba(255, 255, 255, .06), rgba(255, 255, 255, .018)); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); color: var(--strong); }
+.oc-side .oc-env:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.oc-side .oc-env.on { background: linear-gradient(90deg, rgba(255, 106, 43, .18), rgba(255, 106, 43, .05) 68%, transparent); box-shadow: inset 0 0 0 1px var(--brand-line), 0 0 18px -8px rgba(255, 106, 43, .55); color: var(--strong); }
+.oc-side .oc-env-ico { width: 30px; height: 30px; border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--coal-line); transition: color var(--dur-ui) ease, background-color var(--dur-ui) ease, box-shadow var(--dur-3) ease, transform var(--dur-3) var(--ease); }
+.oc-side .oc-env[aria-expanded="true"] .oc-env-ico { color: var(--text); }
+.oc-side .oc-env.on .oc-env-ico { background: rgba(255, 106, 43, .12); box-shadow: inset 0 0 0 1px var(--brand-line), var(--glow-sm); }
+.oc-side .oc-env:hover .oc-env-ico { transform: none; }
+.oc-side .oc-caret.open { color: var(--dim); }
+.oc-side .oc-badge.work { box-shadow: inset 0 0 0 1px rgba(255, 106, 43, .45), 0 0 10px -3px rgba(255, 106, 43, .55); }
+.oc-envs { gap: 4px; }
+/* tópicos = ramo da árvore dentro do workspace (guia vertical; sem cartões) */
+.oc-envs ul.tp-in { margin: 2px 0 6px 19px; padding: 0 0 0 var(--sp-3); gap: 1px; border-left: 1px solid var(--coal-line); overflow: hidden; animation: oc-unfold var(--dur-3) var(--ease) backwards; }
+.oc-envgroup:has(> .oc-envrow-head .oc-env.on) ul.tp-in { border-left-color: rgba(255, 106, 43, .3); }
+.tp { min-height: 28px; gap: var(--sp-2); padding: 0 var(--sp-2); border-radius: var(--r-1); font-size: 12.5px; color: var(--dim); }
+.tp::before { top: 6px; bottom: 6px; }
+.tp:hover { background: rgba(255, 255, 255, .04); color: var(--strong); }
+.tp.on { background: rgba(255, 106, 43, .075); color: var(--strong); }
+.tp-name { font-weight: 450; }
+.tp.on .tp-name { font-weight: 550; }
+.tp-dot { width: 6px; height: 6px; }
+.tp.tone-work .tp-dot { animation: oc-breathe 2.4s ease-in-out infinite; }
+.tp-badges .oc-badge { min-width: 18px; padding: 0 5px; font-size: 10.5px; }
+.tp-add { min-height: 26px; font-size: 12px; }
+@keyframes oc-unfold { from { opacity: 0; max-height: 0; transform: translateY(-3px); } to { opacity: 1; max-height: 640px; transform: none; } }
+@keyframes oc-breathe { 0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--run); } 50% { opacity: .65; box-shadow: 0 0 9px var(--run); } }
+@media (prefers-reduced-motion: reduce) { .oc-envs ul.tp-in, .tp.tone-work .tp-dot { animation: none; } }
+html[data-motion="reduced"] .oc-envs ul.tp-in, html[data-motion="reduced"] .tp.tone-work .tp-dot { animation: none; }
+
+/* ---------- sidebar: glifo de atividade no estilo da referência (Overclock) ----------
+   "Trabalhando" = coluna de 3 células no canto direito da linha; um ponto brilhante desce topo → meio → base em passos, ciclo de 1,6 s, com defasagem por linha.
+   Amarelo próprio deste glifo (escopo da sidebar; a paleta global não muda). Falha (vermelho), saudável (verde) e parado continuam estáticos. */
+.oc-side { --glyph-work: #e8d84c; --glyph-work-rgb: 232, 216, 76; --scan-t: 1.6s; }
+.oc-scan { --ph: 0s; display: inline-flex; flex-direction: column; justify-content: space-between; align-items: center; gap: 1.5px; height: 12px; width: 3px; flex: none; }
+.oc-scan i { display: block; width: 3px; height: 3px; border-radius: 1px; background: var(--glyph-work); opacity: .22; animation: oc-scan-cell var(--scan-t) steps(1, end) infinite; animation-delay: calc(var(--d, 0s) - var(--ph)); }
+.oc-scan i:nth-child(2) { --d: -1.0667s; } .oc-scan i:nth-child(3) { --d: -.5333s; }
+@keyframes oc-scan-cell { 0% { opacity: 1; box-shadow: 0 0 5px rgba(var(--glyph-work-rgb), .65); } 33.34% { opacity: .22; box-shadow: none; } 100% { opacity: .22; box-shadow: none; } }
+/* cada linha começa em um ponto diferente do ciclo: a lista "respira" em ondas, sem piscar tudo junto */
+.oc-envs ul > li:nth-child(3n+2) .oc-scan, .tp-list > .tp-row:nth-child(3n+2) .oc-scan { --ph: .45s; }
+.oc-envs ul > li:nth-child(3n+3) .oc-scan, .tp-list > .tp-row:nth-child(3n+3) .oc-scan { --ph: .95s; }
+.oc-side .oc-badge.work { gap: 5px; color: var(--glyph-work); box-shadow: inset 0 0 0 1px rgba(var(--glyph-work-rgb), .4), 0 0 10px -4px rgba(var(--glyph-work-rgb), .5); }
+/* os pontos de "trabalhando" ficam na mesma cor do glifo; sem segunda animação competindo com ele */
+.tp.tone-work .tp-dot { background: var(--glyph-work); box-shadow: 0 0 5px rgba(var(--glyph-work-rgb), .6); animation: none; }
+.oc-side .tone-work .oc-dot { --dot: var(--glyph-work); }
+/* workspace como cabeçalho de grupo: peso forte e contagens apagadas à direita (só a atividade e a atenção ganham cor) */
+.oc-side .oc-env-name { font-weight: 650; }
+.oc-env-badges .oc-badge.live, .oc-env-badges .oc-badge.off { box-shadow: none; background: none; color: var(--faint); padding-inline: 4px; }
+.oc-env-badges .oc-badge.live i { opacity: .8; }
+.oc-side .oc-env.on .oc-env-badges .oc-badge.live, .oc-side .oc-env.on .oc-env-badges .oc-badge.off { color: var(--dim); }
+/* parado e movimento reduzido: o glifo fica fixo com o ponto no meio */
+@media (prefers-reduced-motion: reduce) { .oc-scan i { animation: none; } .oc-scan i:nth-child(2) { opacity: 1; box-shadow: 0 0 5px rgba(var(--glyph-work-rgb), .65); } }
+html[data-motion="reduced"] .oc-scan i { animation: none; } html[data-motion="reduced"] .oc-scan i:nth-child(2) { opacity: 1; box-shadow: 0 0 5px rgba(var(--glyph-work-rgb), .65); }
+
+/* ---------- sidebar: ícone de agente (pixel art) à esquerda de cada tópico; a cor é o estado (o glifo à direita é quem anima) ---------- */
+.tp-mark { flex: none; color: var(--faint); opacity: .85; transition: color var(--dur-ui) ease, opacity var(--dur-ui) ease, filter var(--dur-3) ease; }
+.tp:hover .tp-mark, .tp.on .tp-mark { opacity: 1; }
+.tp.on .tp-mark { color: var(--dim); }
+.tp.tone-live .tp-mark { color: var(--ok); }
+.tp.tone-warn .tp-mark { color: var(--warn); filter: drop-shadow(0 0 3px rgba(252, 187, 0, .45)); }
+.tp.tone-err .tp-mark { color: var(--err); filter: drop-shadow(0 0 3px rgba(255, 77, 79, .5)); }
+.tp.tone-work .tp-mark { color: var(--glyph-work); filter: drop-shadow(0 0 3px rgba(var(--glyph-work-rgb), .55)); }
+.tp { gap: var(--sp-3); }
+
+/* ---------- sidebar simplificada: só workspaces, pegada de terminal ----------
+   Uma linha por workspace: ícone de estado animado + nome em mono + contagem. Verde = ocioso, laranja = trabalhando, vermelho escuro com "!" = requer atenção.
+   Todos os ícones têm o mesmo movimento simples (pulso de opacidade e escala), com ritmo diferente por estado. Desligado por prefers-reduced-motion / "Animações reduzidas". */
+.oc-side { --ws-idle: var(--ok); --ws-work: var(--run); --ws-attn: #c4262b; --ws-attn-text: #e2484d; }
+.oc-side .oc-env { min-height: 34px; padding: 0 var(--sp-2); gap: var(--sp-3); font-size: 13px; letter-spacing: 0; border-radius: var(--r-1); }
+.oc-side .oc-env-name { font-weight: 500; }
+.oc-side .oc-env:hover { background: rgba(255, 255, 255, .045); box-shadow: none; }
+.oc-side .oc-env.on { background: rgba(255, 106, 43, .09); box-shadow: none; color: var(--strong); }
+.oc-side .oc-env.on::before { top: 7px; bottom: 7px; box-shadow: none; }
+.oc-envs { gap: 2px; }
+.wsi { --c: var(--ws-idle); --t: 3.2s; --lo: .6; --s0: .84; --s1: 1.08; flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; color: var(--c); }
+.wsi svg { display: block; transform-origin: 50% 50%; animation: ws-pulse var(--t) ease-in-out infinite; }
+.wsi-work { --c: var(--ws-work); --t: 1.8s; --lo: .65; --s0: .82; --s1: 1.14; animation: ws-spin 4.8s linear infinite; } /* trabalhando: pulsa e gira (o asterisco tem simetria de 60°, então o giro fecha sem emenda) */
+.wsi-work svg { filter: drop-shadow(0 0 2px rgba(255, 106, 43, .35)); }
+.wsi-attn { --c: var(--ws-attn); --t: 2s; --lo: .65; --s0: .88; --s1: 1.1; }
+.wsi-attn svg { filter: drop-shadow(0 0 2px rgba(196, 38, 43, .4)); }
+.wsi-add { color: var(--dim); } .wsi-add svg { animation: none; filter: none; }
+@keyframes ws-spin { to { transform: rotate(360deg); } }
+@keyframes ws-pulse { 0%, 100% { opacity: var(--lo); transform: scale(var(--s0)); } 50% { opacity: 1; transform: scale(var(--s1)); } }
+.oc-cnt { flex: none; min-width: 14px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--faint); }
+.oc-cnt.attn { color: var(--ws-attn-text); font-weight: 600; }
+.oc-env-badges { gap: 8px; }
+/* O movimento dos ícones de estado dos workspaces NÃO obedece ao "reduzir movimento" do sistema (a regra global acima apagaria todas as animações do app com
+   animation: none !important; sem isso a sidebar ficaria parada para quem tem os efeitos de animação do Windows desligados). Só o interruptor do próprio app
+   ("Animações reduzidas", html[data-motion="reduced"]) os para. A especificidade maior desta regra vence o !important da regra global. */
+html:not([data-motion="reduced"]) .oc-app .wsi svg { animation: ws-pulse var(--t) ease-in-out infinite !important; }
+html:not([data-motion="reduced"]) .oc-app .wsi-work { animation: ws-spin 4.8s linear infinite !important; }
+html:not([data-motion="reduced"]) .oc-app .wsi-add svg { animation: none !important; }
+html[data-motion="reduced"] .wsi, html[data-motion="reduced"] .wsi svg { animation: none; }
+
+.oc-restore { margin: var(--sp-3) 0 0; }
+
+.sh-tabs { display: flex; gap: var(--sp-2); }
+.conv-q { flex: 1; min-width: 0; max-width: 320px; padding: 6px var(--sp-3); border-radius: var(--r-2); border: 1px solid var(--line-control); background: var(--coal-2); color: var(--strong); font: inherit; }
+.conv-row { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 3px; padding: var(--sp-2) var(--sp-3); border: 0; border-radius: var(--r-2); background: var(--coal-2); color: inherit; font: inherit; cursor: pointer; }
+.conv-row:hover, .conv-row:focus-visible { background: var(--coal-3); }
+.conv-snip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-reader { display: flex; flex-direction: column; gap: var(--sp-3); }
+.conv-title { margin: 0; }
+.conv-msgs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.conv-msg { padding: var(--sp-2) var(--sp-3); border-radius: var(--r-2); background: var(--coal-2); }
+.conv-msg.me { box-shadow: inset 2px 0 0 var(--brand); }
+.conv-t { white-space: pre-wrap; overflow-wrap: anywhere; }

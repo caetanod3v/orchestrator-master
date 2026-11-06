@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar.jsx';
+import Topbar from './components/Topbar.jsx';
 import Cockpit from './pages/Cockpit.jsx';
 import SettingsDialog from './components/SettingsDialog.jsx';
 import WorkspaceDialog from './components/WorkspaceDialog.jsx';
 import { useStore } from './store.jsx';
-import { usePrefs } from './hooks.js';
+import { usePrefs, useUi } from './hooks.js';
 import { Icon, PersistenceNote } from './components/ui.jsx';
 
 const NARROW = '(max-width: 900px)';
@@ -24,7 +25,8 @@ function useNarrow() {
 export default function App() {
   const [navOpen, setNavOpen] = useState(false);
   const [dialog, setDialog] = useState(() => (location.hash.startsWith('#/settings') ? 'settings' : null)); // 'settings' | 'workspaces' | null (#/settings: link antigo)
-  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem('side') === 'collapsed'; } catch { return false; } });
+  const [ui, uiActions] = useUi();
+  const collapsed = ui.sidebarCollapsed;
   const narrow = useNarrow();
   const menuRef = useRef(null);
   const [prefs] = usePrefs();
@@ -34,26 +36,28 @@ export default function App() {
   useEffect(() => { document.documentElement.dataset.motion = prefs.motion; }, [prefs.motion]);
   useEffect(() => { if (!narrow) setNavOpen(false); }, [narrow]);
   const closeNav = useCallback(() => { setNavOpen(false); setTimeout(() => menuRef.current?.focus(), 0); }, []);
-  const toggleSide = () => setCollapsed((c) => { try { localStorage.setItem('side', c ? 'open' : 'collapsed'); } catch { /* sem armazenamento */ } return !c; });
+  const toggleSide = () => uiActions.setSidebarCollapsed(!collapsed);
   const openSettings = useCallback(() => { setNavOpen(false); setDialog('settings'); }, []);
   const openWorkspaces = useCallback(() => { setNavOpen(false); setDialog('workspaces'); }, []);
   const closeDialog = useCallback(() => { setDialog(null); if (location.hash.startsWith('#/settings')) history.replaceState(null, '', location.pathname + location.search); }, []);
 
-  const side = { onOpenSettings: openSettings, onOpenWorkspaces: openWorkspaces };
+  const side = { onOpenWorkspaces: openWorkspaces };
   return (
     <div className="oc-app">
       <button type="button" className="skip" onClick={() => document.getElementById('main')?.focus()}>Pular para o conteúdo</button>
       {!narrow && <Sidebar collapsed={collapsed} onToggle={toggleSide} {...side} />}
       {narrow && navOpen && <><div className="oc-scrim" onClick={closeNav} aria-hidden="true" /><Sidebar modal onClose={closeNav} {...side} /></>}
       <div className="oc-main">
+        <Topbar narrow={narrow} onMenu={() => setNavOpen(true)} menuRef={menuRef} navOpen={navOpen} onOpenSettings={openSettings} onOpenWorkspaces={openWorkspaces} />
         {error && <div className="banner err" role="alert">{error}</div>}
+        {(ui.status.state === 'offline' || ui.status.state === 'error') && <div className="banner err" role="status" data-testid="ui-sync-note">{ui.status.message}</div>}
         {state?.persistence && !state.persistence.ok && (
           <div className="banner err" role="alert">
             O banco não está sendo gravado em disco (erro {state.persistence.error}): o estado só existe em memória. <PersistenceNote incident={state.persistenceIncident} />
           </div>
         )}
         <main id="main" tabIndex={-1} className="oc-content">
-          <Cockpit narrow={narrow} onMenu={() => setNavOpen(true)} menuRef={menuRef} onOpenWorkspaces={openWorkspaces} />
+          <Cockpit onOpenWorkspaces={openWorkspaces} />
         </main>
       </div>
       {toast && (

@@ -38,3 +38,5 @@ data/mcp/
 .DS_Store
 desktop/stage/
 desktop/release/
+
+data/history/

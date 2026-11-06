@@ -23,6 +23,8 @@ import { inspectProjectConfig } from './project-config.js';
 
 const ID_RE = /^term_[0-9a-f]{8}$/, REC_RE = /^ses_[0-9a-f]{8}$/, UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const SWEEP_MS = 2000; // varredura dos processos retidos (lingering): UM temporizador central, só existe enquanto há retidos
+/** Por que o terminal acabou (registro de sessão): user = fechado pelo usuário; exit = o processo terminou sozinho; shutdown = o servidor foi encerrado de forma graciosa (o terminal estava aberto); crash = o servidor caiu (apurado no boot). */
+export const REASONS = ['user', 'exit', 'shutdown', 'crash'];
 export const MAX_RECORDS = 200; // histórico de sessões retomáveis (db.terminalSessions): passando disso saem as mais antigas que NÃO estão rodando
 export const MAX_SESSIONS = 10, MAX_INPUT = 64 * 1024, BUFFER_BYTES = 512 * 1024, MAX_SUBSCRIBERS = 8, MAX_ALL_SUBSCRIBERS = 4;
 // Prompts SEM caracteres especiais de shell (& | < > ^ % "): se o Claude Code for um wrapper .cmd, os argumentos passam pelo cmd.exe.
@@ -53,11 +55,11 @@ let ptyCache;
 const loadPty = () => { if (ptyCache !== undefined) return ptyCache; try { ptyCache = createRequire(import.meta.url)('node-pty'); } catch { ptyCache = null; } return ptyCache; };
 
 /** `ptyLib`, `resolveCommand`, `track` e `worktrees` só são injetados nos testes/boot; o padrão é o node-pty real e o Claude Code do PATH. */
-export function createTerminalManager({ db, ptyLib = null, resolveCommand = resolveClaude, track = null, worktrees = null, maxSessions = MAX_SESSIONS, now = store.now, uid = store.uid, killTree = killTreeSync, waitFor = waitGone, usage = null, newSessionId = randomUUID, mcp = null, inspectConfig = inspectProjectConfig, persist = null, isChildAlive = null, transcriptExists = null, pidIsAlive = pidAlive, maxRecords = MAX_RECORDS, sweepMs = SWEEP_MS, setTimer = setInterval, clearTimer = clearInterval } = {}) {
+export function createTerminalManager({ db, ptyLib = null, resolveCommand = resolveClaude, track = null, worktrees = null, maxSessions = MAX_SESSIONS, now = store.now, uid = store.uid, killTree = killTreeSync, waitFor = waitGone, usage = null, newSessionId = randomUUID, mcp = null, inspectConfig = inspectProjectConfig, persist = null, isChildAlive = null, transcriptExists = null, pidIsAlive = pidAlive, maxRecords = MAX_RECORDS, sweepMs = SWEEP_MS, setTimer = setInterval, clearTimer = clearInterval, onEnd = null } = {}) {
   const sessions = new Map();
   const allSubs = new Set(); // UMA conexão SSE leva a saída de TODOS os terminais: o navegador só abre ~6 conexões por origem; com uma por pane, 7+ terminais travavam a tela e até o botão de fechar
   const live = () => [...sessions.values()].filter((s) => s.status === 'running');
-  const describe = (s) => ({ id: s.id, role: s.role, roleLabel: ROLES[s.role]?.label ?? s.role, color: ROLES[s.role]?.color ?? null, title: s.title, workspaceId: s.workspaceId, cwd: s.cwd, worktreeId: s.worktreeId, recordId: s.recordId ?? null,
+  const describe = (s) => ({ id: s.id, role: s.role, roleLabel: ROLES[s.role]?.label ?? s.role, color: ROLES[s.role]?.color ?? null, title: s.title, workspaceId: s.workspaceId, topicId: s.topicId ?? null, cwd: s.cwd, worktreeId: s.worktreeId, recordId: s.recordId ?? null,
     usage: safeUsage(s), status: s.status, pid: s.pid, cols: s.cols, rows: s.rows, startedAt: s.startedAt, endedAt: s.endedAt, exitCode: s.exitCode, lastOutputAt: s.lastOutputAt, bytes: s.bytes });
   /** tokens/custo do pane, lidos do transcript do Claude Code (null sem leitor, sem arquivo ainda ou em qualquer falha: é informativo, nunca derruba a listagem) */
   const safeUsage = (s) => { try { return usage?.read(s.claudeSessionId) ?? null; } catch { return null; } };
@@ -81,7 +83,7 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
     }
   }
   // Boot: este processo não tem nenhuma sessão viva, então o que o banco ainda diz "running" foi interrompido (queda do servidor ou do app).
-  (() => { let changed = false; for (const r of records()) if (r && r.state === 'running') { r.state = 'interrupted'; r.interruptedAt = now(); changed = true; } if (changed) persistLoose(); })();
+  (() => { let changed = false; for (const r of records()) if (r && r.state === 'running') { r.state = 'interrupted'; r.interruptedAt = now(); r.closedReason = 'crash'; changed = true; } if (changed) persistLoose(); })();
   const norm = (x) => { const r = path.resolve(String(x ?? '')).replace(/[\\/]+$/, ''); return process.platform === 'win32' ? r.toLowerCase() : r; };
   const sessionActive = (claudeSessionId) => [...sessions.values()].some((x) => x.status === 'running' && x.claudeSessionId === claudeSessionId);
   // Processos cujo encerramento NÃO foi confirmado (taskkill falhou, lançou ou o PID continuou vivo): o registro de filho e o worktree em uso só são liberados quando a morte for
@@ -120,9 +122,24 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
     creating++;
     try { return await createReserved(opts); } finally { creating--; }
   }
-  async function createReserved({ workspaceId, role = 'builder', title, cols, rows, isolate = false, acknowledgeProjectConfig = false } = {}) {
-    const ws = (db.workspaces ?? []).find((w) => w.id === (workspaceId ?? db.settings?.activeWorkspaceId));
-    if (!ws) return fail(409, 'Nenhum espaço de trabalho ativo: cadastre e ative um em "Espaços de trabalho".');
+  /** Tópico (db.topics, criado por topics.js): null/ausente = Geral. Só vale se existir, não estiver arquivado e pertencer ao MESMO espaço de trabalho da sessão. */
+  function checkTopic(topicId, ws) {
+    if (topicId === undefined || topicId === null) return { ok: true, topicId: null };
+    const bad = (m) => fail(400, m, { code: 'topic_invalid' });
+    if (typeof topicId !== 'string' || !topicId) return bad('topicId deve ser o identificador de um tópico.');
+    const t = (Array.isArray(db.topics) ? db.topics : []).find((x) => x && x.id === topicId);
+    if (!t) return bad('Tópico não encontrado.');
+    if (t.archivedAt) return bad('Este tópico está arquivado: reabra-o antes de abrir terminais nele.');
+    if (t.workspaceId !== ws.id) return bad('Este tópico pertence a outro espaço de trabalho.');
+    return { ok: true, topicId: t.id };
+  }
+  async function createReserved({ workspaceId, topicId, role = 'builder', title, cols, rows, isolate = false, acknowledgeProjectConfig = false } = {}) {
+    // workspaceId explícito é conferido contra o cadastro (400 se não existir): o terminal nunca roda no contexto de outro espaço. Sem ele vale o ativo (como antes).
+    const explicit = workspaceId !== undefined && workspaceId !== null;
+    if (explicit && typeof workspaceId !== 'string') return fail(400, 'workspaceId deve ser o identificador de um espaço de trabalho.', { code: 'workspace_not_found' });
+    const ws = (db.workspaces ?? []).find((w) => w.id === (explicit ? workspaceId : db.settings?.activeWorkspaceId));
+    if (!ws) return explicit ? fail(400, 'Espaço de trabalho não encontrado.', { code: 'workspace_not_found' }) : fail(409, 'Nenhum espaço de trabalho ativo: cadastre e ative um em "Espaços de trabalho".');
+    const tp = checkTopic(topicId, ws); if (!tp.ok) return tp; // antes de qualquer efeito (worktree, processo)
     const v = validateDir(ws.path); if (!v.ok) return fail(409, `Espaço de trabalho inválido: ${v.error}`);
     // M3: configuração executável do projeto não revisada (ver project-config.js) só roda no pane com confirmação explícita. Com `isolate` o worktree traz apenas arquivos versionados.
     if (!isolate && acknowledgeProjectConfig !== true) {
@@ -131,6 +148,8 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
     }
     const cmd = resolveCommand(); if (!cmd) return fail(409, 'Claude Code não foi encontrado no PATH.');
     const pty = ptyLib ?? loadPty(); if (!pty) return fail(503, 'O módulo de terminal (node-pty) não está disponível neste ambiente.');
+    const gone = () => !(db.workspaces ?? []).some((w) => w.id === ws.id); // o cadastro pode mudar durante os awaits (inspeção, worktree): nunca nasce terminal de workspace removido
+    if (gone()) return fail(409, 'O espaço de trabalho foi removido enquanto o terminal era preparado.', { code: 'workspace_not_found' });
     const id = uid('term'), label = cleanTitle(title) || `${ROLES[role].label} ${++seq}`;
     let cwd = v.path, wt = null;
     if (isolate) {
@@ -138,8 +157,9 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
       const r = await worktrees.create({ mission: { id }, workspace: ws }); // worktree próprio do pane (branch orch/…); nada é alterado na branch nem no workspace principal
       if (!r.ok) return fail(r.status ?? 409, `Isolamento não criado: ${r.error}`);
       wt = r.record; cwd = wt.path;
+      if (gone()) { try { worktrees.release?.(wt.id, 'terminal_ended'); } catch { /* informativo */ } return fail(409, 'O espaço de trabalho foi removido enquanto o terminal era preparado.', { code: 'workspace_not_found' }); }
     }
-    return launch({ id, ws, role, label, cwd, wt, cols, rows, claudeSessionId: newSessionId(), mode: 'new', cmd, pty });
+    return launch({ id, ws, role, label, cwd, wt, cols, rows, claudeSessionId: newSessionId(), mode: 'new', topicId: tp.topicId, cmd, pty });
   }
 
   /**
@@ -147,7 +167,7 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
    * Na retomada o Claude Code restaura histórico, prompt de sistema, nome e permission mode: NÃO se repassa nada disso. O MCP não é restaurado: credencial NOVA a cada retomada.
    * Falha ao gravar o histórico desfaz tudo (processo, credencial, registro): nunca fica um pane vivo sem registro.
    */
-  function launch({ id, ws, role, label, cwd, wt, cols, rows, claudeSessionId, mode, rec = null, cmd, pty }) {
+  function launch({ id, ws, role, label, cwd, wt, cols, rows, claudeSessionId, mode, topicId = null, rec = null, cmd, pty }) {
     const resumed = mode !== 'new';
     const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' }; delete env.ELECTRON_RUN_AS_NODE; delete env.NODE_OPTIONS;
     delete env.CLAUDE_CODE_CHILD_SESSION; // herdada de uma sessão do Claude Code que abriu o servidor: com ela o filho NÃO grava transcrição (sem consumo e sem retomada). As demais CLAUDE_CODE_* ficam.
@@ -164,14 +184,14 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
     let p;
     try { p = pty.spawn(cmd.file, [...cmd.args, ...args], { name: 'xterm-256color', cols: c, rows: r, cwd, env, useConpty: true }); }
     catch (e) { revokeMcp(id); return fail(500, `Não foi possível iniciar o terminal: ${String(e?.message ?? e).slice(0, 160)}`); }
-    const s = { id, role, claudeSessionId, recordId: null, holdInput: resumed, title: label, workspaceId: ws.id, cwd, worktreeId: wt?.id ?? null, status: 'running', pid: p.pid, cols: c, rows: r, startedAt: now(), endedAt: null, exitCode: null, lastOutputAt: null, bytes: 0, chunks: [], chunkBytes: 0, subs: new Set(), tracked: null, p };
+    const s = { id, role, claudeSessionId, recordId: null, holdInput: resumed, title: label, workspaceId: ws.id, topicId, cwd, worktreeId: wt?.id ?? null, status: 'running', pid: p.pid, cols: c, rows: r, startedAt: now(), endedAt: null, exitCode: null, lastOutputAt: null, bytes: 0, chunks: [], chunkBytes: 0, subs: new Set(), tracked: null, p };
     try { s.tracked = track?.('terminal', p.pid, { terminalId: id, workspaceId: ws.id }) ?? null; } // processo sem registro não pode ficar vivo (o próximo boot não o acharia)
     catch (e) { const gone = abortLaunch(s, wt); return fail(503, `O terminal não pôde ser registrado (${e?.code || e?.message || 'erro'}); ${gone ? 'ele foi encerrado.' : UNCONFIRMED}`, gone ? {} : { code: 'exit_unconfirmed' }); }
     // histórico: retomada normal reaproveita o registro (é a mesma sessão do Claude Code); novo e fork criam um registro
     const list = records(true), before = [...list], links = list.map((x) => [x, x.forkedFrom]), prev = mode === 'resume' ? { ...rec } : null;
     let nrec;
-    if (mode === 'resume') { nrec = rec; Object.assign(rec, { terminalId: id, state: 'running', endedAt: null, exitCode: null, lastResumedAt: s.startedAt, resumes: (rec.resumes ?? 0) + 1 }); delete rec.interruptedAt; delete rec.unconfirmedExit; }
-    else { nrec = { id: uid('ses'), terminalId: id, claudeSessionId, role, title: label, workspaceId: ws.id, cwd, worktreeId: wt?.id ?? null, usesMcp: !!mcpCfg, state: 'running', startedAt: s.startedAt, endedAt: null, exitCode: null, resumes: 0, forkedFrom: mode === 'fork' ? rec.id : null }; list.push(nrec); trimRecords(list, rec); }
+    if (mode === 'resume') { nrec = rec; Object.assign(rec, { terminalId: id, topicId, state: 'running', endedAt: null, exitCode: null, lastResumedAt: s.startedAt, resumes: (rec.resumes ?? 0) + 1 }); delete rec.interruptedAt; delete rec.closedReason; delete rec.unconfirmedExit; }
+    else { nrec = { id: uid('ses'), terminalId: id, claudeSessionId, role, title: label, workspaceId: ws.id, topicId, cwd, worktreeId: wt?.id ?? null, usesMcp: !!mcpCfg, state: 'running', startedAt: s.startedAt, endedAt: null, exitCode: null, resumes: 0, forkedFrom: mode === 'fork' ? rec.id : null }; list.push(nrec); trimRecords(list, rec); }
     try { persistStrict(); } catch (e) {
       if (prev) { for (const k of Object.keys(rec)) delete rec[k]; Object.assign(rec, prev); } else db.terminalSessions = before;
       for (const [x, f] of links) { if (f === undefined) delete x.forkedFrom; else x.forkedFrom = f; }
@@ -257,7 +277,7 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
     if (again.block) return fail(again.block.status, again.block.message, { code: again.block.code });
     const claudeSessionId = fork ? newSessionId() : rec.claudeSessionId;
     if (fork && (!UUID_RE.test(String(claudeSessionId)) || records().some((x) => x.claudeSessionId === claudeSessionId))) return fail(500, 'Não foi possível gerar um identificador novo para o fork.');
-    return launch({ id: uid('term'), ws: again.ws, role: rec.role, label: rec.title, cwd: again.cwd, wt: again.wt, cols, rows, claudeSessionId, mode: fork ? 'fork' : 'resume', rec, cmd, pty });
+    return launch({ id: uid('term'), ws: again.ws, role: rec.role, label: rec.title, cwd: again.cwd, wt: again.wt, cols, rows, claudeSessionId, mode: fork ? 'fork' : 'resume', topicId: checkTopic(rec.topicId, again.ws).topicId ?? null, rec, cmd, pty }); // tópico sumido/arquivado/de outro workspace: a sessão volta para Geral (null), sem bloquear a retomada
   }
   /**
    * Histórico para a interface: sem o UUID do Claude Code, sem caminhos e sem ids de processo. `resumable`/`blockedReason` são INFORMATIVOS (a retomada refaz todas as
@@ -267,12 +287,12 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
     const recs = records().filter(Boolean), has = transcriptLookup(recs.map((r) => r.claudeSessionId).filter((x) => UUID_RE.test(String(x))));
     return recs.map((r) => {
       const { block } = resumeBlock(r, has);
-      return { id: r.id, role: r.role, roleLabel: ROLES[r.role]?.label ?? r.role, color: ROLES[r.role]?.color ?? null, title: r.title, workspaceId: r.workspaceId, worktreeId: r.worktreeId ?? null, state: r.state, startedAt: r.startedAt, endedAt: r.endedAt ?? null, exitCode: r.exitCode ?? null, usesMcp: r.usesMcp === true, resumes: r.resumes ?? 0, forkedFrom: r.forkedFrom ?? null, active: r.state === 'running' && sessionActive(r.claudeSessionId), resumable: block === null, blockedReason: block?.code ?? null, blockedMessage: block?.message ?? null };
+      return { id: r.id, role: r.role, roleLabel: ROLES[r.role]?.label ?? r.role, color: ROLES[r.role]?.color ?? null, title: r.title, workspaceId: r.workspaceId, topicId: r.topicId ?? null, worktreeId: r.worktreeId ?? null, state: r.state, startedAt: r.startedAt, endedAt: r.endedAt ?? null, exitCode: r.exitCode ?? null, usesMcp: r.usesMcp === true, resumes: r.resumes ?? 0, forkedFrom: r.forkedFrom ?? null, active: r.state === 'running' && sessionActive(r.claudeSessionId), resumable: block === null, blockedReason: block?.code ?? null, blockedMessage: block?.message ?? null, closedReason: REASONS.includes(r.closedReason) ? r.closedReason : null };
     }).reverse();
   };
 
   /** `confirmed: false` = o encerramento do processo NÃO foi confirmado: registro de filho e worktree em uso ficam retidos (ver `lingering`). */
-  function finish(s, exitCode, { confirmed = true } = {}) {
+  function finish(s, exitCode, { confirmed = true, reason = 'exit' } = {}) {
     if (s.status === 'exited') return;
     releasePty(s.p); revokeMcp(s.id);
     if (confirmed) { if (s.worktreeId) { try { worktrees?.release?.(s.worktreeId, 'terminal_ended'); } catch { /* informativo */ } } } // volta a "execução terminada": nada é removido nem integrado
@@ -280,7 +300,10 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
     if (confirmed) { try { s.tracked?.release(); } catch { /* informativo */ } } else { lingering.set(s.id, { pid: s.pid, claudeSessionId: s.claudeSessionId, worktreeId: s.worktreeId, tracked: s.tracked }); startSweep(); }
     s.tracked = null;
     const rec = s.recordId ? records().find((x) => x && x.id === s.recordId) : null;
-    if (rec && rec.terminalId === s.id) { rec.state = 'exited'; rec.endedAt = s.endedAt; rec.exitCode = s.exitCode; if (!confirmed) rec.unconfirmedExit = true; persistLoose(); }
+    if (rec && rec.terminalId === s.id) { rec.state = 'exited'; rec.endedAt = s.endedAt; rec.exitCode = s.exitCode; rec.closedReason = REASONS.includes(reason) ? reason : 'exit';
+      if (reason === 'shutdown') { rec.state = 'interrupted'; rec.interruptedAt = s.endedAt; } // encerramento gracioso do servidor: o terminal ESTAVA aberto, igual a uma queda (retomável); só fechar pelo usuário ou terminar sozinho vira 'exited'
+      if (!confirmed) rec.unconfirmedExit = true; persistLoose();
+      try { onEnd?.(rec); } catch { /* informativo: o histórico de conversa nunca atrapalha o encerramento */ } }
     if (sessions.get(s.id) !== s) return; // lançamento desfeito (nunca anunciado): ninguém para avisar
     for (const res of s.subs) send(res, 'exit', { exitCode: s.exitCode, endedAt: s.endedAt });
     for (const res of allSubs) send(res, 'exit', { id: s.id, exitCode: s.exitCode, endedAt: s.endedAt });
@@ -297,7 +320,7 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
     try { killTree(pid); } catch { /* já encerrado ou sem permissão: a confirmação abaixo decide */ }
     try { return !!waitFor(pid, 2000); } catch { return false; }
   }
-  const kill = (s) => { if (s.status !== 'running') return; const gone = terminate(s.pid); releasePty(s.p); finish(s, null, { confirmed: gone }); };
+  const kill = (s, reason = 'exit') => { if (s.status !== 'running') return; const gone = terminate(s.pid); releasePty(s.p); finish(s, null, { confirmed: gone, reason }); };
   /**
    * O processo nasceu mas o terminal NÃO chegou a ser registrado (track ou histórico falharam): encerra com confirmação e passa pelo MESMO finish() (credencial revogada, registro de
    * filho e worktree liberados só se a morte for confirmada; senão ficam retidos em `lingering`). Sem confirmação o worktree é marcado em uso, para ninguém limpá-lo debaixo do processo.
@@ -330,7 +353,7 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
   /** Encerra o processo (com a árvore) se ainda roda; um terminal que já terminou é removido da lista. O worktree do pane, se houver, NÃO é removido (pode conter trabalho). */
   function close(id) {
     const s = get(id); if (!s) return fail(404, 'Terminal não encontrado.');
-    const wasRunning = s.status === 'running'; kill(s);
+    const wasRunning = s.status === 'running'; kill(s, 'user');
     for (const res of s.subs) { try { res.end(); } catch { /* fechado */ } } s.subs.clear(); sessions.delete(id); for (const res of allSubs) send(res, 'closed', { id }); try { usage?.forget?.(s.claudeSessionId); } catch { /* informativo */ }
     return { ok: true, status: 200, closed: id, wasRunning, worktreeId: s.worktreeId, stillAlive: lingering.has(id) };
   }
@@ -355,7 +378,7 @@ export function createTerminalManager({ db, ptyLib = null, resolveCommand = reso
     res.on('close', () => { clearInterval(beat); s.subs.delete(res); });
     return true;
   }
-  function killAllSync() { for (const s of live()) kill(s); }
+  function killAllSync() { for (const s of live()) kill(s, 'shutdown'); }
 
   return { create, resume, history, write, resize, readOutput, peek, close, subscribe, subscribeAll, killAllSync, get: (id) => { const s = get(id); return s ? describe(s) : null; }, list: () => [...sessions.values()].map(describe), count: () => live().length, roles: () => roleIds().map((k) => ({ id: k, label: ROLES[k].label, color: ROLES[k].color })) };
 }
@@ -364,7 +387,7 @@ export function setupTerminals(app, { manager }) {
   const body = (req) => (req.body && typeof req.body === 'object' ? req.body : {});
   const out = (res, r, pick = (x) => x) => (r.ok ? res.status(r.status).json(pick(r)) : res.status(r.status).json({ error: r.error, ...(r.code ? { code: r.code, files: r.files } : {}) }));
   app.get('/api/terminals', (req, res) => res.json({ roles: manager.roles(), maxSessions: MAX_SESSIONS, sessions: manager.list() }));
-  app.post('/api/terminals', asyncRoute(async (req, res) => { const b = body(req); out(res, await manager.create({ workspaceId: typeof b.workspaceId === 'string' ? b.workspaceId : undefined, role: b.role, title: b.title, cols: b.cols, rows: b.rows, isolate: b.isolate === true, acknowledgeProjectConfig: b.acknowledgeProjectConfig === true }), (r) => ({ session: r.session })); }));
+  app.post('/api/terminals', asyncRoute(async (req, res) => { const b = body(req); out(res, await manager.create({ workspaceId: b.workspaceId, topicId: b.topicId, role: b.role, title: b.title, cols: b.cols, rows: b.rows, isolate: b.isolate === true, acknowledgeProjectConfig: b.acknowledgeProjectConfig === true }), (r) => ({ session: r.session })); }));
   app.get('/api/terminals/stream', (req, res) => { if (manager.subscribeAll(res) === null) res.status(429).json({ error: 'Conexões demais com o fluxo de terminais.' }); });
   app.get('/api/terminals/:id/stream', (req, res) => {
     const r = manager.subscribe(req.params.id, res);

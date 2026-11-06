@@ -9,6 +9,10 @@ import { uid, now } from './store.js';
 import { claudeCodeExecutor as realExecutor } from './executor/index.js';
 import { gitInfo } from './git.js';
 import { validateDir, setupWorkspaceRemoval, setupWorkspaceRename } from './workspaces.js';
+import { topicsState, openAndActivate, snapshotTabs, restoreTabs, setupWorkspaceTabs, setupTopics } from './topics.js';
+import { setupUiSettings } from './ui-settings.js';
+import { setupLayouts } from './layouts.js';
+import { createConversationStore, setupConversations, startConversationCapture } from './conversations.js';
 import { setupExecution, blockedReason } from './execution.js';
 import { missionStatus } from './mission-status.js';
 import { deliveryOf } from './delivery.js';
@@ -66,7 +70,10 @@ const worktrees = createWorktreeManager({ db, track: childRegistry.track, childr
 // Credenciais MCP dos panes: com ORCH_DATA_DIR (testes, app desktop) ficam na pasta de dados; no modo dev, FORA do repositório (um agente com cwd no repositório leria data/ sem pedir permissão).
 const mcpDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'mcp') : path.join(process.env.LOCALAPPDATA || os.homedir(), 'ai-dev-orchestrator', 'mcp');
 const maestro = createMaestro({ getTerminals: () => terminals, mcpDir, url: `http://127.0.0.1:${PORT}/mcp`, serverName: stableServerName(db, { save: store.saveOrThrow }) }); // nome com sufixo aleatório POR INSTALAÇÃO (estável entre boots, ver maestro.js): um .mcp.json homônimo não herda a pré-autorização // coordenação entre panes por MCP local (aprovação do usuário por padrão)
-const terminals = createTerminalManager({ db, track: childRegistry.track, worktrees, mcp: maestro, persist: store.saveOrThrow, isChildAlive: (terminalId) => childRegistry.pending().some((r) => r && r.kind === 'terminal' && r.terminalId === terminalId && pidAlive(r.pid)), usage: createUsageReader({ pricesFile: path.join(store.dataDir, 'pricing.json') }) }); // terminais interativos (PTY) do Claude Code: um processo por pane, em paralelo
+// Conversas copiadas: com ORCH_DATA_DIR (testes, app desktop) na pasta de dados; no modo dev, FORA do repositório (mesmo motivo do mcpDir).
+const historyDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'history') : path.join(process.env.LOCALAPPDATA || os.homedir(), 'ai-dev-orchestrator', 'history');
+const conversations = createConversationStore({ dir: historyDir }); // histórico de conversas próprio, por workspace (texto das trocas; ver conversations.js)
+const terminals = createTerminalManager({ db, onEnd: (rec) => { if (db.workspaces.some((w) => w.id === rec.workspaceId)) conversations.sync(rec); }, track: childRegistry.track, worktrees, mcp: maestro, persist: store.saveOrThrow, isChildAlive: (terminalId) => childRegistry.pending().some((r) => r && r.kind === 'terminal' && r.terminalId === terminalId && pidAlive(r.pid)), usage: createUsageReader({ pricesFile: path.join(store.dataDir, 'pricing.json') }) }); // terminais interativos (PTY) do Claude Code: um processo por pane, em paralelo
 let worktreeRecovery = { settled: [], inconsistent: [], unregistered: [], unverified: [] }; // E3: preenchido logo DEPOIS do reclaim dos processos filhos (abaixo)
 const app = express();
 // Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO em POST/PUT/PATCH/DELETE (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).
@@ -108,6 +115,7 @@ app.get('/api/state', async (req, res) => {
     worktrees: { isolation: worktreeIsolation(), items: worktrees.list(), unregistered: worktreeRecovery.unregistered }, // Marco C, aditivo
     supervision: sv, // Marco B, aditivo: { supervisor, maxMinutes, stallMinutes, autoResumes, source } — efetivo + origem de cada valor
     activeWorkspace: find(db.workspaces, db.settings.activeWorkspaceId) || null,
+    ...topicsState(db), // aditivo: openWorkspaceIds[] (abas), topics[] (só não arquivados) e activeTopicIds{ wsId: topicId }
     // costUsd/runs (legado: execuções reais que reportaram custo) + durationMs + tokens agregados por agente/missão/ciclo (ver usage.js); null sem nenhum dado
     usage: summarizeUsage(visibleMissions(), db.chat),
   });
@@ -132,8 +140,15 @@ app.post('/api/workspaces', (req, res) => {
     hasPackageJson: v.hasPackageJson,
     createdAt: now(),
   };
-  db.workspaces.push(ws);
-  if (!db.settings.activeWorkspaceId) db.settings.activeWorkspaceId = ws.id;
+  const snap = snapshotTabs(db);
+  try {
+    db.workspaces.push(ws);
+    if (!db.settings.activeWorkspaceId) openAndActivate(db, ws.id); // o novo só vira ativo (e abre a aba) se não havia nenhum; senão fica cadastrado e fechado até open/activate
+    store.saveOrThrow();
+  } catch {
+    db.workspaces.pop(); restoreTabs(db, snap);
+    return bad(res, 'Não foi possível cadastrar o workspace: o banco não pôde ser gravado; nada foi alterado.', 500);
+  }
   store.log('workspace', `Workspace cadastrado: ${ws.name}`, { workspaceId: ws.id });
   commit();
   res.status(201).json(ws);
@@ -142,7 +157,11 @@ app.post('/api/workspaces', (req, res) => {
 app.post('/api/workspaces/:id/activate', (req, res) => {
   const ws = find(db.workspaces, req.params.id);
   if (!ws) return bad(res, 'Workspace não encontrado.', 404);
-  db.settings.activeWorkspaceId = ws.id;
+  const snap = snapshotTabs(db);
+  try { openAndActivate(db, ws.id); store.saveOrThrow(); } catch { // ativar abre a aba implicitamente
+    restoreTabs(db, snap);
+    return bad(res, 'Não foi possível ativar o workspace: o banco não pôde ser gravado; nada foi alterado.', 500);
+  }
   store.log('workspace', `Workspace ativo: ${ws.name}`, { workspaceId: ws.id });
   commit();
   res.json(ws);
@@ -322,8 +341,14 @@ const { startTaskRun } = setupExecution(app, { db, executor: claudeCodeExecutor,
 childRegistry.reclaim({ executor: claudeCodeExecutor });
 worktreeRecovery = await worktrees.recover(); // E3: a conciliação dos worktrees (inclusive `prepare` interrompido) só roda DEPOIS do reclaim: ela depende de saber se o preparador ainda vive // órfãos do Planner/verificador: depois dos do Executor, antes de qualquer ciclo (setupCycle) e de ouvir a porta
 setupVerification(app, { db, verifier });
-setupWorkspaceRemoval(app, { db });
+setupWorkspaceRemoval(app, { db, terminals, onRemoved: (id) => conversations.removeWorkspace(id) });
 setupWorkspaceRename(app, { db });
+setupWorkspaceTabs(app, { db });
+setupTopics(app, { db });
+setupUiSettings(app, { db }); // preferências da interface (db.settings.ui): GET/PUT /api/ui
+setupLayouts(app, { db }); // layout da grade por workspace
+setupConversations(app, { db, conversations }); // GET/DELETE /api/workspaces/:id/conversations[/:rec]
+{ const capture = startConversationCapture({ db, conversations }); setTimeout(() => { capture.sweep().catch(() => {}); }, 3000).unref?.(); } // captura ao vivo das sessões rodando + varredura única das interrompidas // layout da grade de terminais por workspace (db.settings.layouts): GET /api/layouts, PUT /api/workspaces/:id/layout
 const cycle = setupCycle(app, { db, executor: claudeCodeExecutor, planner, startTaskRun, verifier, router, limits: cycleLimits, multiStep: () => orchestration().planMode, stepRetries: () => orchestration().stepRetries, supervision: () => supervisionMs(supervision()), worktrees, worktreeIsolation: () => worktreeIsolation().enabled });
 setupWorktrees(app, { db, manager: worktrees });
 setupTerminals(app, { manager: terminals });

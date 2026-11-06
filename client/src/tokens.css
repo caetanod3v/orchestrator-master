@@ -28,7 +28,7 @@
   --ok-text: #5ee9b5; --warn-text: #ffd236; --danger-text: #ffa3a3;
 
   /* tipografia: fontes do sistema (nada externo; o produto roda offline). Mono só para hora, caminho e comando. */
-  --sans: 'Geist Variable', 'Geist', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --sans: var(--mono); /* o app inteiro usa a fonte de terminal (a sans original só vale como reserva do sistema se a mono faltar) */
   --mono: 'Geist Mono Variable', 'Geist Mono', 'Cascadia Mono', 'JetBrains Mono', ui-monospace, Consolas, 'Courier New', monospace;
   /* escala (mínimo de 12px): xs metadado | sm apoio e controles | md corpo | lg subtítulo | xl título de página | 2xl título da conversa */
   --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-xl: 22px; --fs-2xl: 30px;
