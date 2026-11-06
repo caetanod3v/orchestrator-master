@@ -1,15 +1,16 @@
-// Teste REAL: servidor real + Claude Code real em C:\ai-dev-orchestrator\.test-workspace
+// Teste REAL (consome creditos do Claude): servidor real + Claude Code real num workspace de teste dentro do repositorio (.test-workspace, ignorado pelo git). Rode: npm run test:real
 import { spawn, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = 'C:/ai-dev-orchestrator';
-const WS = `${ROOT}/.test-workspace`;
+const ROOT = path.resolve(fileURLToPath(new URL('../../../', import.meta.url))); // raiz do repositorio, em qualquer pasta e sistema
+const WS = path.join(ROOT, '.test-workspace');
 fs.rmSync(WS, { recursive: true, force: true });
 fs.mkdirSync(WS);
 execFileSync('git', ['init', '-q'], { cwd: WS });
-fs.writeFileSync(`${WS}/LEIAME.txt`, 'Workspace de teste do AI Dev Orchestrator.\n');
+fs.writeFileSync(`${WS}/LEIAME.txt`, 'Workspace de teste do FORGE.\n');
 
 const data = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-real-'));
 const server = spawn('node', ['server/index.js'], { cwd: ROOT, env: { ...process.env, PORT: '4398', ORCH_DATA_DIR: data }, stdio: 'ignore' });
@@ -18,7 +19,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const api = async (m, p, b) => { const r = await fetch(B + p, { method: m, headers: { 'content-type': 'application/json', origin: 'http://localhost:5173' }, body: b ? JSON.stringify(b) : undefined }); return { status: r.status, body: await r.json().catch(() => null) }; };
 try {
   for (let i = 0; i < 30; i++) { try { await fetch(B + '/api/state'); break; } catch { await sleep(300); } }
-  const ws = (await api('POST', '/api/workspaces', { path: WS.replace(/\//g, '\\'), name: 'test-workspace' })).body;
+  const ws = (await api('POST', '/api/workspaces', { path: WS, name: 'test-workspace' })).body;
   const m = (await api('POST', '/api/missions', { title: 'Teste real do executor', objective: 'Validar a integração com o Claude Code em um workspace de teste.', workspaceId: ws.id })).body;
   const t = (await api('POST', `/api/missions/${m.id}/tasks`, { title: 'Crie o arquivo hello.txt na raiz contendo exatamente a frase: olá do orquestrador. Não altere nenhum outro arquivo.' })).body;
   const P = `/api/missions/${m.id}/tasks/${t.id}`;
@@ -49,7 +50,7 @@ try {
   console.log('--- log ---\n' + cur.log.join('\n'));
   console.log('--- disco ---');
   console.log('hello.txt existe:', fs.existsSync(`${WS}/hello.txt`), '->', fs.existsSync(`${WS}/hello.txt`) ? JSON.stringify(fs.readFileSync(`${WS}/hello.txt`, 'utf8')) : '');
-  console.log('LEIAME.txt intacto:', fs.readFileSync(`${WS}/LEIAME.txt`, 'utf8') === 'Workspace de teste do AI Dev Orchestrator.\n');
+  console.log('LEIAME.txt intacto:', fs.readFileSync(`${WS}/LEIAME.txt`, 'utf8') === 'Workspace de teste do FORGE.\n');
   console.log('git status:', execFileSync('git', ['status', '--porcelain'], { cwd: WS }).toString().trim());
   console.log('commits no workspace:', (() => { try { return execFileSync('git', ['log', '--oneline'], { cwd: WS, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || 'nenhum'; } catch { return 'nenhum'; } })());
 } finally {
