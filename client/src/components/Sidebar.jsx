@@ -4,7 +4,6 @@ import { useStore } from '../store.jsx';
 import { usePrefs } from '../hooks.js';
 import { environments, wsTone, wsAlert } from '../env-view.js';
 import { Icon, WorkStar } from './ui.jsx';
-import AgentsPopover from './ProviderPanel.jsx';
 import { BOX, pixelPaths } from '../brand-mark.mjs';
 
 /** Marca: maestro em pixel art (fonte única em brand-mark.mjs, a mesma do favicon e do ícone do app). O azul escuro do bastão é fixo: faz parte da marca, não do tema. */
@@ -91,7 +90,6 @@ export default function Sidebar({ modal = false, collapsed = false, onToggle, on
   const sessions = terminals?.sessions ?? [];
   const activeId = state?.activeWorkspace?.id ?? null;
   const envs = useMemo(() => environments({ workspaces, sessions, activeId, workingIds, maestroTasks: maestro?.tasks ?? [], finished: unseenWs }), [workspaces, sessions, activeId, workingIds, maestro, unseenWs]);
-  const totals = useMemo(() => ({ running: sessions.filter((s) => s.status === 'running').length, working: workingIds.size, attention: envs.reduce((n, e) => n + (e.attention ? e.failed + e.pendingTasks : 0), 0) }), [sessions, workingIds, envs]);
 
   useEffect(() => {
     if (!modal) return undefined;
@@ -120,7 +118,6 @@ export default function Sidebar({ modal = false, collapsed = false, onToggle, on
   };
   const initials = (prefs.name || 'Você').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
   const cls = `oc-side${collapsed && !modal ? ' collapsed' : ''}${modal ? ' modal' : ''}`;
-  const sum = [totals.running ? plural(totals.running, 'ativo', 'ativos') : null, totals.attention ? `${totals.attention} ${totals.attention === 1 ? 'alerta' : 'alertas'}` : null].filter(Boolean).join(' · ');
 
   return (
     <aside id="nav-drawer" ref={box} className={cls} {...(modal ? { role: 'dialog', 'aria-modal': true, 'aria-label': 'Ambientes de trabalho' } : { 'aria-label': 'Ambientes de trabalho' })}>
@@ -143,7 +140,6 @@ export default function Sidebar({ modal = false, collapsed = false, onToggle, on
       </nav>
 
       <div className="oc-side-foot">
-        {state && <AgentsPopover className="oc-sum" tone={totals.working ? 'work' : totals.running ? 'live' : 'none'} title="Agentes por provider (todos os ambientes)"><span className="oc-agents-t side-label">{sum || 'nenhum terminal ativo'}</span><span className="oc-agents-n">{totals.running}</span></AgentsPopover>}
         <div className="oc-side-user">
           <span className="oc-me side-label"><span className="oc-avatar" aria-hidden="true">{initials}</span><span className="oc-me-t"><b>{prefs.name || 'Você'}</b></span></span>
         </div>

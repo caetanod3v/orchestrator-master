@@ -31,7 +31,8 @@ function Row({ r, busy, locked, onResume }) {
 }
 
 /** Histórico de sessões do workspace ativo: lista o que o servidor registrou e reabre sessões interrompidas ou encerradas (retomada normal ou fork). Nada é decidido aqui: o servidor refaz todas as checagens. */
-export default function SessionHistory({ ws, topicId, where, order = [], autoRestore = true, onAutoRestore, onClose }) {
+/** Conteúdo do histórico (sem moldura): usado nas Configurações. */
+export function SessionHistoryBody({ ws, topicId, where, order = [], autoRestore = true, onAutoRestore }) {
   const { topics, notify, loadTerminals, terminals } = useStore();
   const [tab, setTab] = useState('sessoes'); // sessoes | conversas
   const [progress, setProgress] = useState(null); // { i, n } durante a restauração em lote
@@ -92,7 +93,7 @@ export default function SessionHistory({ ws, topicId, where, order = [], autoRes
   };
 
   return (
-    <Dialog title={`Histórico · ${ws.displayName || ws.name}`} onClose={onClose} id="sh-dlg" size="lg">
+    <>
       <div className="sh-body">
       <div className="sh-tabs" role="group" aria-label="Tipo de histórico"><Btn kind={tab === 'sessoes' ? 'primary' : 'quiet'} aria-pressed={tab === 'sessoes'} onClick={() => setTab('sessoes')}>Sessões</Btn><Btn kind={tab === 'conversas' ? 'primary' : 'quiet'} aria-pressed={tab === 'conversas'} onClick={() => setTab('conversas')}>Conversas</Btn></div>
       {onAutoRestore && <label className="sh-auto" title="Ao abrir um workspace sem terminais, reabre sozinho as sessões que estavam abertas quando o app ou o servidor foi encerrado (só as do último encerramento). Vale só neste navegador."><input type="checkbox" role="switch" checked={autoRestore} onChange={(e) => onAutoRestore(e.target.checked)} /> Restaurar sessões automaticamente ao abrir o workspace</label>}
@@ -110,6 +111,11 @@ export default function SessionHistory({ ws, topicId, where, order = [], autoRes
       {rows.others.length > 0 && <section aria-label="Outras sessões"><h3 className="oc-h">{rows.restore.length ? 'Outras sessões' : 'Sessões'}</h3><ul className="sh-list">{rows.others.map((r) => <Row key={r.id} r={r} busy={busy} locked={busy !== null} onResume={resume} />)}</ul></section>}
       </>}
       </div>
-    </Dialog>
+    </>
   );
+}
+
+/** Mesmo conteúdo dentro de um diálogo (mantido para quem precisar abrir sozinho). */
+export default function SessionHistory({ onClose, ...props }) {
+  return <Dialog title={`Histórico · ${props.ws.displayName || props.ws.name}`} onClose={onClose} id="sh-dlg" size="lg"><SessionHistoryBody {...props} /></Dialog>;
 }

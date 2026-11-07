@@ -4,23 +4,19 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { api } from '../api.js';
 import { useStore } from '../store.jsx';
-import { usePrefs, useLayouts } from '../hooks.js';
+import { usePrefs, useLayouts, useLayoutMode, useAutoRestore } from '../hooks.js';
 import { orderSessions, mergeOrder, sameList, EMPTY as EMPTY_LAYOUT } from '../layout-state.js';
-import { historyRows, resumeBody, needsConfigAck, restorePlan, batchSummary, lastShutdownRestore, attemptKey, readAutoRestore, writeAutoRestore } from '../session-history.js';
+import { historyRows, resumeBody, needsConfigAck, restorePlan, batchSummary, lastShutdownRestore, attemptKey } from '../session-history.js';
 import { Btn, Icon, WorkStar } from './ui.jsx';
 import { paneUsage, squadUsage } from '../usage-view.js';
 import { createTerminalStream, isOld } from '../terminal-stream.js';
-import { paneState, pendingByPane, paneName, shapeFor, focusPlacement, layoutModeId, LAYOUT_MODES, evenTracks, dragTracks, dividerAt } from '../env-view.js';
+import { paneState, pendingByPane, paneName, shapeFor, focusPlacement, evenTracks, dragTracks, dividerAt } from '../env-view.js';
 import MaestroPopover from './MaestroPopover.jsx';
-import AgentsPopover from './ProviderPanel.jsx';
-import SessionHistory from './SessionHistory.jsx';
+import TeamMenu from './TeamMenu.jsx';
+import { PRESETS, presetById, changeImpact, inferTeam } from '../team-view.js';
 
-// Squads prontos: o mesmo fluxo abre 2, 4 ou 6 terminais do Claude Code em paralelo, cada um com o seu papel.
-export const SQUADS = [
-  { id: 'duo', label: 'Dupla', roles: ['builder', 'reviewer'] },
-  { id: 'squad', label: 'Squad de 4', roles: ['maestro', 'builder', 'builder', 'reviewer'] },
-  { id: 'full', label: 'Squad de 6', roles: ['maestro', 'scout', 'builder', 'builder', 'builder', 'reviewer'] },
-];
+// Presets de equipe (team-view.js): o mesmo fluxo abre 2, 4 ou 6 terminais do Claude Code em paralelo, cada um com o seu papel. Os ids gravados continuam duo/squad/full; só o rótulo do squad de quatro virou "Squad".
+export const SQUADS = PRESETS.filter((p) => p.id !== 'builder');
 const MAX_CHUNK = 60_000; // o servidor aceita até 64 KB por entrada
 const THEME = { background: '#090909', foreground: '#d2d2d2', cursor: '#c94a4a', cursorAccent: '#090909', selectionBackground: 'rgba(168, 58, 58, .35)', red: '#b84646', brightRed: '#c94a4a', green: '#5fa377', brightGreen: '#7fb592', yellow: '#92713e', brightYellow: '#c9a46a' };
 const STATE_LABEL = { working: 'executando', idle: 'ocioso', done: 'concluído', waiting: 'aguardando', exited: 'encerrado', failed: 'falhou', boot: 'iniciando' };
@@ -133,10 +129,7 @@ export default function TerminalGrid({ onOpenWorkspaces, onOpenSettings }) {
   const [busy, setBusy] = useState(false);
   const [layouts, layoutActions, layoutsReady] = useLayouts(); // layout por workspace (ordem, ampliado, trilhas), no servidor
   const [restorable, setRestorable] = useState(0); // sessões deste workspace que estavam abertas e podem voltar
-  const [histOpen, setHistOpen] = useState(false); // diálogo do histórico de sessões (retomar/fork)
-  const [modes, setModes] = useState(() => { try { return JSON.parse(localStorage.getItem('forge.layoutMode') || '{}') || {}; } catch { return {}; } }); // modo da grade por workspace: conveniência desta tela (não vai ao servidor)
-  const [autoRestore, setAutoRestoreState] = useState(readAutoRestore); // restaurar sozinho as sessões do último encerramento ao entrar no workspace
-  const setAutoRestore = (on) => { setAutoRestoreState(on); writeAutoRestore(on); };
+  const [autoRestore] = useAutoRestore(); // restaurar sozinho as sessões do último encerramento ao entrar no workspace (liga/desliga em Configurações > Histórico de sessões)
   const attempted = useRef(new Set()), autoBusy = useRef(false); // 'já tentei' por registro+instante: uma sessão não é reaberta em laço nem notificada duas vezes
   const [focusBy, setFocusBy] = useState({}); // workspaceId -> id do terminal em foco (modo Foco)
   const ws = state?.activeWorkspace;
@@ -159,8 +152,11 @@ export default function TerminalGrid({ onOpenWorkspaces, onOpenSettings }) {
   const liveMine = mine.filter((s) => s.status === 'running').length;
   const room = (terminals?.maxSessions ?? 8) - live;
   const total = squadUsage(mine);
-  const mode = layoutModeId(ws && modes[ws.id]);
-  const setMode = (m) => { const next = { ...modes, [ws.id]: m }; setModes(next); try { localStorage.setItem('forge.layoutMode', JSON.stringify(next)); } catch { /* sem armazenamento: vale só nesta sessão */ } };
+  const [mode] = useLayoutMode(ws?.id); // escolhido em Configurações > Visualização
+  const team = (ws && L.team) || null; // equipe escolhida DESTE workspace (gravada no layout por workspace)
+  // Workspace "com equipe" = preset gravado OU já tem terminais (então a configuração inicial não se aplica mais). Sem preset gravado, a identificação sai dos papéis que estão lá.
+  const hasTeam = !!ws && (!!team || mine.length > 0);
+  const teamId = team ?? inferTeam(mine.map((x) => x.role));
   const maxId = L.maximized ? (mine.find((s) => s.recordId === L.maximized)?.id ?? null) : null;
 
   // layout da grade: trilhas por formato (1x1, 2x1, 2x2, 3x2…); ao mudar o número de terminais volta a divisões iguais
@@ -186,7 +182,7 @@ export default function TerminalGrid({ onOpenWorkspaces, onOpenSettings }) {
     let alive = true;
     api.get('/api/terminals/history').then((d) => { if (alive) setRestorable(historyRows({ history: d?.sessions, workspaceId: ws.id }).restore.length); }).catch(() => {});
     return () => { alive = false; };
-  }, [ws?.id, mine.length, histOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ws?.id, mine.length]); // eslint-disable-line react-hooks/exhaustive-deps
   // Restauração automática: workspace aberto, sem nenhum terminal, e o servidor diz que há sessões do último encerramento retomáveis. Nunca confirma sozinha a configuração de projeto não revisada.
   useEffect(() => {
     if (!ws || !autoRestore || !layoutsReady || !terminals || mine.length > 0 || autoBusy.current) return undefined;
@@ -223,10 +219,11 @@ export default function TerminalGrid({ onOpenWorkspaces, onOpenSettings }) {
 
   const opening = useRef(false); // trava síncrona: dois cliques seguidos nunca abrem duas vezes (o estado `busy` só vale depois da renderização)
   const nextSquad = () => 1 + Math.max(0, ...sessions.map((x) => Number(/ S(\d+)\.\d+$/.exec(x.title)?.[1] ?? 0)));
-  const open = async (list, { squad = false } = {}) => {
-    if (opening.current) return;
-    if (!ws) { onOpenWorkspaces?.(); return; }
-    if (squad && liveMine > 0 && !window.confirm(`Já há ${liveMine} ${liveMine === 1 ? 'terminal ativo' : 'terminais ativos'} em ${where}. Abrir MAIS ${list.length} terminais de um novo squad?`)) return;
+  /** Abre os terminais. `join` = chave de squad (session.squadId) de um squad ATIVO deste workspace: o terminal entra no worktree dele. Devolve false se não abriu nada por decisão/trava. */
+  const open = async (list, { squad = false, join = null, confirmMore = true } = {}) => {
+    if (opening.current) return false;
+    if (!ws) { onOpenWorkspaces?.(); return false; }
+    if (squad && confirmMore && liveMine > 0 && !window.confirm(`Já há ${liveMine} ${liveMine === 1 ? 'terminal ativo' : 'terminais ativos'} em ${where}. Abrir MAIS ${list.length} terminais de uma nova equipe?`)) return false;
     opening.current = true; setBusy(true);
     const n = squad ? nextSquad() : null;
     if (list.length > 1) notify(`Abrindo ${list.length} terminais; o Claude Code leva alguns segundos para iniciar em cada um.`);
@@ -240,7 +237,7 @@ export default function TerminalGrid({ onOpenWorkspaces, onOpenSettings }) {
         const squadId = head[0].status === 'fulfilled' ? head[0].value?.session?.squadId : null;
         const tail = squadId ? await Promise.allSettled(list.slice(1).map((r, i) => spawn(r, i + 1, false, squadId))) : list.slice(1).map(() => ({ status: 'rejected', reason: head[0].reason ?? new Error('o worktree do squad não foi criado') }));
         rs = [...head, ...tail];
-      } else rs = await Promise.allSettled(list.map((r, i) => spawn(r, i, false)));
+      } else rs = await Promise.allSettled(list.map((r, i) => spawn(r, i, false, join)));
       // M3: configuração executável do projeto não revisada no Git: o servidor recusa e só abre com a confirmação explícita (uma pergunta para o lote inteiro)
       const held = rs.map((x, i) => (x.status === 'rejected' && x.reason?.code === 'project_config_unreviewed' ? i : -1)).filter((i) => i >= 0);
       if (held.length && window.confirm(`${rs[held[0]].reason.message}\n\nAbrir ${held.length === 1 ? 'o terminal' : `os ${held.length} terminais`} mesmo assim?`)) {
@@ -250,6 +247,32 @@ export default function TerminalGrid({ onOpenWorkspaces, onOpenSettings }) {
       const bad = rs.filter((r) => r.status === 'rejected');
       if (bad.length) notify(`${bad.length} de ${list.length} terminais não abriram: ${bad[0].reason?.message ?? 'erro'}`, 'error');
     } finally { opening.current = false; setBusy(false); loadTerminals(); }
+    return true;
+  };
+  // ---- equipe do workspace ----
+  const liveRolesMine = mine.filter((x) => x.status === 'running').map((x) => x.role);
+  const squadKeyMine = mine.find((x) => x.status === 'running' && x.squadId)?.squadId ?? null; // worktree do squad ativo: terminais novos entram nele
+  const roleLabel = (r) => byRole[r]?.label ?? r;
+  /** Workspace sem equipe: escolher o preset a configura e abre os terminais (o fluxo de sempre). A equipe só é gravada se o usuário não cancelou. */
+  const configure = async (p) => { const ran = await open(p.roles, { squad: p.roles.length > 1 }); if (ran !== false && ws) layoutActions.setTeam(ws.id, p.id); };
+  /** Trocar o preset: informa o impacto e confirma. Nunca encerra nada; só abre o que faltar, no worktree do squad quando há um ativo. */
+  const changeTeam = async (id) => {
+    const target = presetById(id); if (!target || !ws) return;
+    if (liveMine === 0) { await configure(target); return; }
+    const im = changeImpact({ from: teamId, to: id, liveRoles: liveRolesMine, labelOf: roleLabel, room });
+    if (im.needsConfirm && !window.confirm(im.text)) return;
+    layoutActions.setTeam(ws.id, id);
+    if (im.open.length) await open(im.open, { join: squadKeyMine, confirmMore: false });
+  };
+  const addAgents = (roles) => open(roles, { join: squadKeyMine });
+  const removeAgent = async (s) => {
+    if (s.status === 'running' && !window.confirm(`Encerrar "${s.title}"?\n\nO processo é interrompido. A sessão continua no histórico e pode ser retomada; o worktree é mantido${s.squadId ? ' (ele é compartilhado com o resto da equipe)' : ''}.`)) return;
+    await close(s);
+  };
+  const resetTeam = () => {
+    if (!ws) return;
+    if (liveMine > 0 && !window.confirm(`Redefinir a equipe de ${where}?\n\nOs ${liveMine} ${liveMine === 1 ? 'terminal ativo continua' : 'terminais ativos continuam'} rodando: nada é encerrado. Só voltam a aparecer os presets de configuração inicial.`)) return;
+    layoutActions.setTeam(ws.id, null);
   };
   const closeAll = async () => {
     if (!mine.length || !window.confirm(`Encerrar os ${mine.length} terminais de ${where}? Os agentes em andamento serão interrompidos (worktrees são mantidos).`)) return;
@@ -280,35 +303,29 @@ export default function TerminalGrid({ onOpenWorkspaces, onOpenSettings }) {
 
   return (
     <div className={`tg${maxId ? ' tg-full' : ''}`}>
-      <div className="oc-bar" role="toolbar" aria-label={`Terminais de ${where}`}>
-        <button type="button" className="oc-wschip" onClick={onOpenWorkspaces} title={ws ? `${ws.path}\nTrocar ou adicionar workspace` : 'Escolher um workspace'}>
-          <Icon name="workspace" size={15} /><b>{ws ? where : 'Nenhum workspace'}</b><Icon name="chevronsUpDown" size={14} />
-        </button>
-        {ws && <>
-          <div className="oc-grp" role="group" aria-label="Squads">
-            {SQUADS.map((q) => <Btn key={q.id} kind="quiet" disabled={busy || q.roles.length > room} onClick={() => open(q.roles, { squad: true })} title={q.roles.map((r) => byRole[r]?.label ?? r).join(', ')}>{q.label}</Btn>)}
-          </div>
-          <div className="oc-grp" role="group" aria-label="Novo terminal">
-            <label className="sr" htmlFor="tg-role">Papel do novo terminal</label>
-            <select id="tg-role" className="oc-sel" value={role} onChange={(e) => setPref('role', e.target.value)}>{roles.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}</select>
-            <Btn disabled={busy || room < 1} onClick={() => open([role])} title="Abrir um terminal com este papel"><Icon name="plus" size={12} /> Terminal</Btn>
-          </div>
-        </>}
-        <div className="oc-right">
-        {ws && <>
-          {mine.length > 1 && <div className="oc-seg" role="radiogroup" aria-label="Organização dos terminais">
-            {LAYOUT_MODES.map((m) => <button key={m.id} type="button" role="radio" aria-checked={mode === m.id} className={mode === m.id ? 'on' : ''} onClick={() => setMode(m.id)} title={{ auto: 'Grade automática', cols: 'Todos lado a lado', rows: 'Todos empilhados', focus: 'Um terminal grande e os outros numa tira' }[m.id]}>{m.label}</button>)}
-          </div>}
-          <Btn kind="quiet" onClick={() => setHistOpen(true)} title="Sessões anteriores deste workspace: retomar ou fazer fork"><Icon name="clock" size={14} /> Histórico</Btn>
-          <label className="oc-iso" title="Terminal avulso trabalha num git worktree próprio; um squad inteiro compartilha UM worktree (isolado do projeto principal, mas os terminais do squad editam os mesmos arquivos). Exige repositório Git.">
-            <input type="checkbox" role="switch" checked={isolate} onChange={(e) => setPref('isolate', e.target.checked)} /><span className="oc-switch-track" aria-hidden="true"><i /></span>Worktree
-          </label>
-          <span className="oc-total" title={total.partialCost ? 'Há panes sem custo conhecido: o total em dólares não é exibido. Crie data/pricing.json com os preços por modelo (USD por milhão de tokens) para ver o custo.' : total.cost === '—' ? 'Custo indisponível: crie data/pricing.json com os preços por modelo (USD por milhão de tokens).' : 'Soma dos terminais deste tópico'}>{total.tokens} tok · {total.cost}</span>
-          {mine.length > 1 && <Btn kind="quiet" disabled={busy} onClick={closeAll} title="Encerra e remove todos os terminais deste tópico">Encerrar todos</Btn>}
-          {maestro && (maestro.autonomous || maestro.tasks.length > 0 || mine.some((x) => x.role === 'maestro' && x.status === 'running')) && <MaestroPopover onOpenSettings={onOpenSettings} />}
-          <AgentsPopover className="oc-count" tone={mine.some((x) => x.status === 'running' && workingIds.has(x.id)) ? 'work' : liveMine ? 'live' : 'none'} title={`${live} de ${terminals?.maxSessions ?? '…'} terminais no total (todos os ambientes). Clique para ver os agentes por provider.`}><span className="oc-agents-t">{liveMine} {liveMine === 1 ? 'ativo' : 'ativos'}</span></AgentsPopover>
-        </>}
+      <div className="oc-bar tbx" role="toolbar" aria-label={`Terminais de ${where}`}>
+        {/* Grupo 1 (esquerda): workspace e equipe. Sem equipe: presets de configuração inicial; com equipe: identificação compacta que abre o gerenciamento */}
+        <div className="tbx-g">
+          <button type="button" className="oc-wschip" onClick={onOpenWorkspaces} title={ws ? `${ws.path}\nTrocar ou adicionar workspace` : 'Escolher um workspace'}>
+            <Icon name="workspace" size={14} /><b>{ws ? where : 'Nenhum workspace'}</b><Icon name="chevronsUpDown" size={12} />
+          </button>
+          {ws && (hasTeam
+            ? <TeamMenu defaultRole={role} preset={teamId} saved={!!team} sessions={mine} stateOf={(x) => paneState(x, workingIds, pendingIds)} roles={roles} byRole={byRole} room={room} busy={busy} where={where} onChange={changeTeam} onAdd={addAgents} onRemove={removeAgent} onReset={resetTeam} />
+            : <div className="tbx-presets" role="group" aria-label="Configurar a equipe do workspace">
+                {PRESETS.map((p) => <Btn key={p.id} kind="quiet" disabled={busy || p.roles.length > room} onClick={() => configure(p)} title={`${p.label}: ${p.roles.map(roleLabel).join(', ')}`}>{p.label}</Btn>)}
+              </div>)}
         </div>
+        {/* Grupo 2: controles operacionais (à direita). Visualização e Histórico ficam em Configurações */}
+        {ws && (
+          <div className="tbx-g tbx-end">
+            <label className="oc-iso" title="Terminal avulso trabalha num git worktree próprio; um squad inteiro compartilha UM worktree (isolado do projeto principal, mas os terminais do squad editam os mesmos arquivos). Exige repositório Git.">
+              <input type="checkbox" role="switch" checked={isolate} onChange={(e) => setPref('isolate', e.target.checked)} /><span className="oc-switch-track" aria-hidden="true"><i /></span>Worktree
+            </label>
+            {total.panes > 0 && <span className="oc-total" title={total.partialCost ? 'Há panes sem custo conhecido: o total em dólares não é exibido. Crie data/pricing.json com os preços por modelo (USD por milhão de tokens) para ver o custo.' : total.cost === '—' ? 'Custo indisponível: crie data/pricing.json com os preços por modelo (USD por milhão de tokens).' : 'Soma dos terminais deste workspace'}>{total.tokens} tok · {total.cost}</span>}
+            {mine.length > 1 && <Btn kind="quiet" disabled={busy} onClick={closeAll} title="Encerrar todos os terminais deste workspace (pede confirmação)" aria-label="Encerrar todos">Encerrar<span className="tbx-l"> todos</span></Btn>}
+            {maestro && (maestro.autonomous || maestro.tasks.length > 0 || mine.some((x) => x.role === 'maestro' && x.status === 'running')) && <MaestroPopover onOpenSettings={onOpenSettings} />}
+          </div>
+        )}
       </div>
 
       {!ws ? (
@@ -324,9 +341,8 @@ export default function TerminalGrid({ onOpenWorkspaces, onOpenSettings }) {
           <h3>{where}</h3>
           <p className="dim">Nenhum terminal ativo.</p>
           <div className="oc-empty-act">
-            <Btn kind="primary" disabled={busy || room < 1} onClick={() => open([role])}><Icon name="plus" size={12} /> Novo terminal</Btn>
-            {SQUADS.map((q) => <Btn key={q.id} kind="quiet" disabled={busy || q.roles.length > room} onClick={() => open(q.roles, { squad: true })} title={q.roles.map((r) => byRole[r]?.label ?? r).join(', ')}>{q.label}</Btn>)}
-            {restorable > 0 && <Btn kind="quiet" onClick={() => setHistOpen(true)} title="Abre o histórico de sessões para retomá-las, na ordem em que estavam">Restaurar {restorable} {restorable === 1 ? 'sessão' : 'sessões'}</Btn>}
+            {PRESETS.map((p, k) => <Btn key={p.id} kind={k === PRESETS.length - 1 ? 'primary' : 'quiet'} disabled={busy || p.roles.length > room} onClick={() => configure(p)} title={`${p.label}: ${p.roles.map(roleLabel).join(', ')}`}>{k === PRESETS.length - 1 && <Icon name="plus" size={12} />}{p.label}</Btn>)}
+            {restorable > 0 && <Btn kind="quiet" onClick={() => onOpenSettings?.('historico')} title="Abre Configurações > Histórico de sessões para retomá-las, na ordem em que estavam">Restaurar {restorable} {restorable === 1 ? 'sessão' : 'sessões'}</Btn>}
           </div>
           <p className="dim small oc-foot">Os terminais <b>não passam</b> pelas aprovações do ciclo automático: o que o agente faz ali é decisão sua.</p>
         </div>
@@ -339,7 +355,6 @@ export default function TerminalGrid({ onOpenWorkspaces, onOpenSettings }) {
           {showGutters && cur.rows.slice(0, -1).map((_, i) => <Gutter key={`y${i}`} axis="y" index={i} tracks={cur.rows} onTracks={(t) => setAxis('rows', t)} gridRef={gridRef} label={`Redimensionar linhas ${i + 1} e ${i + 2}`} style={{ top: `calc(${dividerAt(cur.rows, i)}% - 5px)`, left: 0, right: 0 }} />)}
         </div>
       </div>
-      {histOpen && ws && <SessionHistory ws={ws} topicId={topicId} where={where} order={L.order} autoRestore={autoRestore} onAutoRestore={setAutoRestore} onClose={() => setHistOpen(false)} />}
     </div>
   );
 }

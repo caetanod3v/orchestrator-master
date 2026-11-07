@@ -277,17 +277,6 @@ input:focus-visible + .oc-switch-track { outline: 2px solid var(--focus); outlin
 .oc-seg button.on { background: var(--coal-3); color: var(--strong); }
 .oc-cell.is-strip .oc-pane { opacity: .92; }
 
-.tb-now { display: inline-flex; align-items: center; gap: var(--sp-3); min-width: 0; }
-.tb-ws { font-family: var(--mono); font-weight: 500; font-size: 12.5px; color: var(--strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
-.tb-run { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); white-space: nowrap; }
-.tb-run i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.tb-run.live { color: var(--ok-text); } .tb-run.live i { background: var(--ok); }
-.tb-run.work { color: var(--run-text); } .tb-run.work i { background: var(--run); animation: wt-pulse 2.4s ease-in-out infinite; }
-.tb-run.warn { color: var(--warn-text); } .tb-run.warn i { background: var(--warn); }
-.tb-run.err { color: var(--danger-text); } .tb-run.err i { background: var(--err); }
-.tb-ag { white-space: nowrap; }
-@media (max-width: 700px) { .tb-ag { display: none; } .tb-ws { max-width: 140px; } }
-
 .ad { flex: none; border-top: 1px solid var(--coal-line); background: var(--coal-1); }
 .ad-bar { display: flex; align-items: center; gap: var(--sp-3); min-height: 30px; padding: 0 var(--sp-3); }
 .ad-last { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

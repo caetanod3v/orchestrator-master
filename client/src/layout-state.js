@@ -8,6 +8,7 @@ import { api } from './api.js';
 export const LAYOUT_KEY = 'orch.layout.v1';
 export const MAX_ORDER = 24;
 const MAX_GRIDS = 16;
+const TEAM_IDS = ['duo', 'squad', 'full', 'builder']; // espelha server/layouts.js (TEAM_PRESETS)
 const REC_RE = /^ses_[0-9a-f]{8}$/;
 const KEY_RE = /^([1-9]|1[0-2])x([1-9]|1[0-2])$/;
 const WS_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -22,7 +23,9 @@ export function sanitizeLayout(raw) {
   const order = [...new Set(Array.isArray(r.order) ? r.order.filter((x) => typeof x === 'string' && REC_RE.test(x)) : [])].slice(0, MAX_ORDER);
   const grids = {};
   if (isObj(r.grids)) for (const [k, g] of Object.entries(r.grids)) if (KEY_RE.test(k) && isObj(g) && okTracks(g.cols) && okTracks(g.rows) && Object.keys(grids).length < MAX_GRIDS) grids[k] = { cols: [...g.cols], rows: [...g.rows] };
-  return { order, maximized: typeof r.maximized === 'string' && REC_RE.test(r.maximized) ? r.maximized : null, grids };
+  const out = { order, maximized: typeof r.maximized === 'string' && REC_RE.test(r.maximized) ? r.maximized : null, grids };
+  if (TEAM_IDS.includes(r.team)) out.team = r.team;
+  return out;
 }
 const sanitizeMap = (m) => (isObj(m) ? Object.fromEntries(Object.entries(m).filter(([k]) => WS_RE.test(k)).map(([k, v]) => [k, sanitizeLayout(v)])) : {});
 export const roundTracks = (a) => a.map((n) => Math.round(n * 10000) / 10000);
@@ -79,8 +82,8 @@ export function createLayoutSync({ get = () => api.get('/api/layouts'), put = (i
       for (const ws of Object.keys(server)) applyServer(ws, server[ws]);
       const skipMigration = afterReject; afterReject = false;
       if (!skipMigration) for (const ws of Object.keys(layouts)) { // só no cache: migra UMA vez (workspace que o servidor não conhece será recusado com 404 e esquecido)
-        if (server[ws]) continue; const l = layouts[ws]; if (!l.order.length && !l.maximized && !Object.keys(l.grids).length) continue;
-        pending = { ...pending, [ws]: mergePatch({ order: [...l.order], maximized: l.maximized, grids: l.grids }, pending[ws]) };
+        if (server[ws]) continue; const l = layouts[ws]; if (!l.order.length && !l.maximized && !Object.keys(l.grids).length && !l.team) continue;
+        pending = { ...pending, [ws]: mergePatch({ order: [...l.order], maximized: l.maximized, grids: l.grids, ...(l.team ? { team: l.team } : {}) }, pending[ws]) };
       }
       persistLocal(); emit(); if (hasPending()) flush();
     } catch { scheduleRetry(); } finally { loading = false; }
@@ -114,6 +117,8 @@ export function createLayoutSync({ get = () => api.get('/api/layouts'), put = (i
       change(ws, { grids: { [key]: g } });
     },
     setOrder: (ws, ids) => { const o = [...new Set((ids ?? []).filter((x) => REC_RE.test(x)))].slice(-MAX_ORDER); if (!sameList(o, view(ws).order)) change(ws, { order: o }); },
+    /** Equipe escolhida do workspace (id do preset) ou null para limpar. Só organização: não abre nem fecha terminal. */
+    setTeam: (ws, team) => { const t = team === null ? null : (TEAM_IDS.includes(team) ? team : undefined); if (t === undefined || (t ?? null) === (view(ws).team ?? null)) return; change(ws, { team: t }); },
     /** O usuário FECHOU o terminal: sai da ordem salva e, se estava ampliado, do estado ampliado. */
     forget: (ws, recordId) => { const l = view(ws); if (!recordId) return; const patch = {}; if (l.order.includes(recordId)) patch.order = l.order.filter((x) => x !== recordId); if (l.maximized === recordId) patch.maximized = null; if (Object.keys(patch).length) change(ws, patch); },
   });

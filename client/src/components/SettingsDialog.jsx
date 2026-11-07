@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useStore } from '../store.jsx';
-import { usePrefs } from '../hooks.js';
+import { usePrefs, useLayoutMode, useLayouts, useAutoRestore } from '../hooks.js';
+import { LAYOUT_MODES } from '../env-view.js';
+import { SessionHistoryBody } from './SessionHistory.jsx';
 import { FONT_RANGE } from '../prefs.js';
 import Dialog from './Dialog.jsx';
 import { Btn, Icon } from './ui.jsx';
@@ -11,6 +13,8 @@ import { terminalWorktrees } from '../worktree-view.js';
 const SECTIONS = [
   ['perfil', 'Perfil e conta', 'user'],
   ['geral', 'Preferências gerais', 'sliders'],
+  ['visualizacao', 'Visualização', 'panel'],
+  ['historico', 'Histórico de sessões', 'clock'],
   ['aparencia', 'Aparência', 'sun'],
   ['cli', 'Claude Code CLI', 'terminal'],
   ['providers', 'Providers', 'layers'],
@@ -28,6 +32,10 @@ export default function SettingsDialog({ onClose, initial = 'perfil' }) {
   const { state, terminals, refresh, workspaces } = useStore();
   const [wtScope, setWtScope] = useState('open'); // worktrees: do workspace aberto ou de todos
   const openWs = state?.activeWorkspace ?? null;
+  const [mode, setMode] = useLayoutMode(openWs?.id);
+  const [layouts] = useLayouts();
+  const [autoRestore, setAutoRestore] = useAutoRestore();
+  const wsName = openWs ? (openWs.displayName || openWs.name) : '';
   const [prefs, setPref] = usePrefs();
   const [tab, setTab] = useState(initial);
   const [checking, setChecking] = useState(false);
@@ -62,12 +70,27 @@ export default function SettingsDialog({ onClose, initial = 'perfil' }) {
             <Row title="Isolar novos terminais em worktree" hint="Cada terminal trabalha numa branch Git própria, sem pisar nos arquivos dos outros. Exige repositório Git.">
               <Switch checked={prefs.isolate} onChange={(v) => setPref('isolate', v)} label="Isolar novos terminais em worktree" />
             </Row>
-            <Row title="Papel do novo terminal" hint="Usado pelo botão “Novo terminal”.">
+            <Row title="Papel do novo terminal" hint="Papel sugerido ao adicionar um terminal pelo menu da equipe, na barra de terminais.">
               <select value={prefs.role} onChange={(e) => setPref('role', e.target.value)} aria-label="Papel do novo terminal" disabled={!roles.length}>
                 {roles.length ? roles.map((r) => <option key={r.id} value={r.id}>{r.label}</option>) : <option value={prefs.role}>{prefs.role}</option>}
               </select>
             </Row>
           </>}
+
+          {tab === 'visualizacao' && <>
+            {!openWs ? <p className="dim small oc-lead">Abra um workspace para escolher como os terminais dele são organizados na tela.</p> : <>
+              <p className="dim small oc-lead">Vale para o workspace aberto ({wsName}); cada workspace guarda a sua escolha neste navegador. Com um só terminal, todos os modos ocupam a tela inteira.</p>
+              <Row title="Organização dos terminais" hint="Grade se adapta ao número de terminais; Colunas põe todos lado a lado; Linhas empilha; Foco dá um terminal grande e os outros numa tira.">
+                <div className="oc-seg" role="radiogroup" aria-label="Organização dos terminais">
+                  {LAYOUT_MODES.map((m) => <button key={m.id} type="button" role="radio" aria-checked={mode === m.id} className={mode === m.id ? 'on' : ''} onClick={() => setMode(m.id)} title={{ auto: 'Grade automática', cols: 'Todos lado a lado', rows: 'Todos empilhados', focus: 'Um terminal grande e os outros numa tira' }[m.id]}>{m.label}</button>)}
+                </div>
+              </Row>
+            </>}
+          </>}
+
+          {tab === 'historico' && (openWs
+            ? <SessionHistoryBody ws={openWs} topicId={null} where={wsName} order={layouts[openWs.id]?.order ?? []} autoRestore={autoRestore} onAutoRestore={setAutoRestore} />
+            : <p className="dim small oc-lead">Abra um workspace para ver o histórico de sessões dele.</p>)}
 
           {tab === 'aparencia' && <>
             <Row title="Tema" hint="Escuro (grafite e preto). Ainda não há outro tema." />

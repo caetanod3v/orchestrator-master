@@ -7,7 +7,7 @@
 .oc-wschip, .oc-seg, .oc-seg button, .oc-sel, .oc-pane, .mp, .tg-wt, .ad, .oc-squad, .oc-env { border-radius: 2px; }
 
 /* ---------- LEDs de status ---------- */
-.oc-pdot, .oc-dot, .wt-dot, .tb-c i, .tb-run i { border-radius: 0; width: 7px; height: 7px; flex: none; filter: none; box-shadow: none; transition: background-color .3s ease, box-shadow .3s ease; }
+.oc-pdot, .oc-dot, .wt-dot, .tb-c i { border-radius: 0; width: 7px; height: 7px; flex: none; filter: none; box-shadow: none; transition: background-color .3s ease, box-shadow .3s ease; }
 .oc-pdot::after, .oc-dot::after { display: none; } /* sem anel pulsante: o LED é o indicador */
 /* terminal: ocioso = cinza sem luz | trabalhando = verde com halo | iniciando = âmbar | falhou = vermelho | encerrado = verde apagado (concluído) */
 .oc-pdot { background: var(--led-idle); }
@@ -29,16 +29,9 @@
 .wt-done { animation: wt-pop .35s ease both; background: var(--led-err); box-shadow: 0 0 4px rgba(194, 78, 78, .4); }
 /* contadores e estado da barra superior */
 .tb-c i { background: var(--led-idle); }
-.tb-c.live.has i { background: var(--led-run); box-shadow: 0 0 4px 1px rgba(95, 163, 119, .4); }
-.tb-c.warn.has i { background: var(--led-warn); box-shadow: 0 0 4px 1px rgba(169, 131, 73, .4); }
-.tb-c.err.has i { background: var(--led-err); box-shadow: 0 0 4px 1px rgba(194, 78, 78, .45); }
-.tb-run i { background: var(--led-idle); animation: none; }
-.tb-run.work i { background: var(--led-run); box-shadow: 0 0 5px 1px rgba(95, 163, 119, .45); animation: rt-led 2.4s ease-in-out infinite; }
-.tb-run.warn i { background: var(--led-warn); box-shadow: 0 0 5px 1px rgba(169, 131, 73, .4); }
-.tb-run.done i { background: var(--led-ok); box-shadow: 0 0 3px rgba(79, 138, 99, .3); }
-.tb-run.done { color: var(--ok-text); }
-.tb-run.err i { background: var(--led-err); box-shadow: 0 0 5px 1px rgba(194, 78, 78, .45); }
-.tb-run.live, .tb-run.none { color: var(--dim); }
+.tb-c.live.has i { background: var(--led-run); box-shadow: 0 0 6px 1px rgba(95, 163, 119, 0.58); }
+.tb-c.warn.has i { background: var(--led-warn); box-shadow: 0 0 6px 1px rgba(169, 131, 73, 0.58); }
+.tb-c.err.has i { background: var(--led-err); box-shadow: 0 0 6px 1px rgba(194, 78, 78, 0.65); }
 /* ícones de workspace na sidebar */
 .oc-side { --ws-idle: var(--led-idle); --ws-work: var(--led-run); --ws-err: var(--led-err); --ws-wait: var(--led-warn); --ws-done: var(--led-ok); --ws-attn-text: var(--danger-text); }
 .wsi-err { --c: var(--ws-err); --t: 2s; --lo: .7; --s0: .92; --s1: 1.06; }
@@ -80,7 +73,6 @@
 .tb-c { padding: 0 6px; box-shadow: none; background: transparent; font-size: 11px; color: var(--faint); }
 .tb-c.live.has, .tb-c.warn.has, .tb-c.err.has { background: transparent; box-shadow: none; }
 .tb-c.live.has { color: var(--dim); } .tb-c.warn.has { color: var(--warn-text); } .tb-c.err.has { color: var(--danger-text); }
-.tb-ws { font-size: 12px; }
 
 /* ---------- worktrees: uma linha recolhível ---------- */
 .tg-wt { margin: 0; padding: 0; background: transparent; box-shadow: none; border-radius: 0; border-bottom: 1px solid var(--line); }
@@ -122,7 +114,7 @@
 /* scanline: faixa de 1px a cada 3px, ~3,5% de opacidade; não captura mouse e some em "animações reduzidas" */
 .oc-pbody::after { content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 2; background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(255, 255, 255, .03) 2px 3px); }
 html[data-motion="reduced"] .oc-pbody::after { display: none; }
-@media (prefers-reduced-motion: reduce) { .oc-pbody::after { display: none; } .oc-pdot, .tb-run i { animation: none !important; } }
+@media (prefers-reduced-motion: reduce) { .oc-pbody::after { display: none; } .oc-pdot { animation: none !important; } }
 
 /* ---------- marca, navegação e ação primária ---------- */
 .oc-brand-name { font-family: var(--mono); letter-spacing: .16em; text-transform: uppercase; }
@@ -191,3 +183,91 @@ html:not([data-motion="reduced"]) .oc-app .oc-pstate .wstar { animation: ws-spin
 .mpo-fold { margin-top: var(--sp-2); padding: 2px 0; border: 0; background: transparent; color: var(--dim); font: 400 11.5px var(--mono); cursor: pointer; }
 .mpo-fold:hover { color: var(--strong); }
 .mpo-panel .mp-tl { padding: var(--sp-1) 0 0; border-top: 0; max-height: 220px; }
+
+/* ---------- Status global (um só componente) ---------- */
+.ss-btn { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border: 0; border-radius: 2px; background: transparent; color: var(--faint); font: 400 11.5px var(--mono); font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap; transition: color var(--dur-ui) ease, background-color var(--dur-ui) ease; }
+.ss-btn:hover, .ss-btn[aria-expanded="true"] { background: var(--coal-2); color: var(--text); }
+.ss-led { flex: none; width: 7px; height: 7px; background: var(--led-idle); margin-right: 2px; }
+.ss-btn.tone-work .ss-led { background: var(--led-run); box-shadow: 0 0 7px 1px rgba(95, 163, 119, 0.65); animation: rt-led 2.4s ease-in-out infinite; }
+.ss-btn.tone-done .ss-led { background: var(--led-ok); box-shadow: 0 0 5px rgba(79, 138, 99, 0.43); }
+.ss-btn.tone-warn .ss-led { background: var(--led-warn); box-shadow: 0 0 7px 1px rgba(169, 131, 73, 0.58); }
+.ss-btn.tone-err .ss-led { background: var(--led-err); box-shadow: 0 0 7px 1px rgba(194, 78, 78, 0.65); }
+.ss-c b { font-weight: 500; } .ss-sep { color: var(--line-strong); }
+.ss-c.has.live { color: var(--dim); } .ss-c.has.work { color: var(--run-text); } .ss-c.has.warn { color: var(--warn-text); } .ss-c.has.err { color: var(--danger-text); } /* só o texto muda de tom; nunca brilha */
+.ss-panel { position: fixed; z-index: var(--z-pop); overflow: auto; padding: var(--sp-2) var(--sp-3) var(--sp-3); background: var(--raise); border-radius: 2px; box-shadow: 0 0 0 1px var(--line-strong), 0 10px 28px rgba(0, 0, 0, .5); font-size: 12px; }
+.ss-h { display: flex; flex-direction: column; gap: 2px; margin: 0 0 var(--sp-2); padding-bottom: var(--sp-2); border-bottom: 1px solid var(--line); }
+.ss-h b { font: 500 11px var(--mono); letter-spacing: var(--caps-track); text-transform: uppercase; color: var(--strong); } .ss-h span { color: var(--dim); }
+.ss-g { padding: var(--sp-2) 0; border-bottom: 1px solid var(--line); } .ss-g:last-child { border-bottom: 0; padding-bottom: 0; }
+.ss-g h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font: 500 11px var(--mono); letter-spacing: var(--caps-track); text-transform: uppercase; color: var(--dim); }
+.ss-g h3 i { width: 6px; height: 6px; background: var(--led-idle); } .ss-g h3 span { margin-left: auto; color: var(--text); letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.ss-g.work h3 i { background: var(--led-run); box-shadow: 0 0 6px rgba(95, 163, 119, 0.58); } .ss-g.warn h3 i { background: var(--led-warn); box-shadow: 0 0 6px rgba(169, 131, 73, 0.58); } .ss-g.err h3 i { background: var(--led-err); box-shadow: 0 0 6px rgba(194, 78, 78, 0.58); }
+.ss-g ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; } .ss-g li b { font-weight: 500; color: var(--text); } .ss-g li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ss-empty { margin: var(--sp-2) 0; }
+/* telas estreitas: só os números (o texto completo fica no title e no leitor de tela) */
+@media (max-width: 900px) { .ss-l { display: none; } .ss-btn { gap: 4px; padding: 0 6px; } }
+
+/* ---------- Toolbar de terminais: UM container flex, três grupos (workspace e equipe | visualização | controles) ---------- */
+.tg { container-type: inline-size; }
+.tbx { --tb-h: 24px; display: flex; flex-wrap: nowrap; align-items: center; column-gap: 12px; row-gap: 4px; min-height: 0; padding: 4px var(--sp-3); }
+.tbx-g { position: relative; display: flex; flex: 0 0 auto; align-items: center; gap: 4px; min-height: var(--tb-h); white-space: nowrap; }
+.tbx-g + .tbx-g { padding-left: 12px; }
+.tbx-g + .tbx-g::before { content: ''; position: absolute; left: 0; top: 50%; width: 1px; height: 14px; margin-top: -7px; background: var(--line-strong); } /* divisor entre grupos, não contorno em cada controle */
+.tbx-end { margin-left: auto; }
+.tbx-presets { display: flex; align-items: center; gap: 2px; }
+/* altura única para todo controle da barra: nada fica deslocado dentro da linha */
+.tbx .btn, .tbx .oc-sel, .tbx .oc-wschip, .tbx .oc-seg button, .tbx .oc-iso, .tbx .mpo-btn, .tbx .tm-btn { height: var(--tb-h); box-sizing: border-box; }
+.tbx .oc-iso, .tbx .oc-total { display: inline-flex; align-items: center; }
+.tbx .oc-seg { display: inline-flex; align-items: stretch; }
+.tbx .oc-seg button { display: inline-flex; align-items: center; }
+
+/* ---------- Equipe: identificação compacta + gerenciamento ---------- */
+.tm-btn { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 2px; background: transparent; color: var(--strong); font: 400 11.5px var(--mono); cursor: pointer; box-shadow: inset 0 -1px 0 var(--brand); transition: background-color var(--dur-ui) ease; }
+.tm-btn b { font-weight: 500; } .tm-btn:hover, .tm-btn[aria-expanded="true"] { background: var(--coal-2); }
+.tm-panel { white-space: normal; position: fixed; z-index: var(--z-pop); overflow: auto; padding: var(--sp-2) var(--sp-3) var(--sp-3); background: var(--raise); border-radius: 2px; box-shadow: 0 0 0 1px var(--line-strong), 0 10px 28px rgba(0, 0, 0, .5); font-size: 12px; }
+.tm-h { display: flex; flex-direction: column; gap: 2px; margin: 0 0 var(--sp-2); padding-bottom: var(--sp-2); border-bottom: 1px solid var(--line); }
+.tm-h b { font: 500 11px var(--mono); letter-spacing: var(--caps-track); text-transform: uppercase; color: var(--strong); } .tm-h span { color: var(--dim); }
+.tm-s { padding: var(--sp-2) 0; border-bottom: 1px solid var(--line); }
+.tm-s h3 { display: flex; align-items: baseline; margin: 0 0 6px; font: 500 11px var(--mono); letter-spacing: var(--caps-track); text-transform: uppercase; color: var(--dim); }
+.tm-s h3 span { margin-left: auto; letter-spacing: 0; text-transform: none; color: var(--faint); }
+.tm-l { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tm-l li { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.tm-led { flex: none; width: 7px; height: 7px; background: var(--led-idle); }
+.tm-l li.st-working .tm-led { background: var(--led-run); box-shadow: 0 0 6px 1px rgba(95, 163, 119, 0.58); } .tm-l li.st-waiting .tm-led { background: var(--led-warn); box-shadow: 0 0 6px 1px rgba(169, 131, 73, 0.58); }
+.tm-l li.st-failed .tm-led { background: var(--led-err); box-shadow: 0 0 6px 1px rgba(194, 78, 78, 0.58); } .tm-l li.st-done .tm-led { background: var(--led-ok); } .tm-l li.st-exited { opacity: .6; }
+.tm-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .tm-n b { font-weight: 500; color: var(--text); }
+.tm-x { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border: 0; border-radius: 2px; background: transparent; color: var(--faint); cursor: pointer; }
+.tm-x:hover:not(:disabled) { color: var(--danger-text); background: var(--coal-2); }
+.tm-row { display: flex; align-items: center; gap: 6px; } .tm-row .btn { height: 24px; padding: 0 8px; font-size: 11.5px; }
+.tm-presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; margin-bottom: 6px; }
+.tm-presets button { display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px 2px; border: 0; border-radius: 2px; background: transparent; color: var(--dim); font: 400 11.5px var(--mono); cursor: pointer; box-shadow: inset 0 0 0 1px var(--line); }
+.tm-presets button:hover:not(:disabled) { color: var(--strong); box-shadow: inset 0 0 0 1px var(--line-control); }
+.tm-presets button.on { color: var(--strong); box-shadow: inset 0 0 0 1px var(--brand-line), inset 0 -2px 0 var(--brand); }
+.tm-miss { margin: 6px 0 0; } .tm-foot { margin: var(--sp-2) 0 0; }
+.tm-link { padding: 0; border: 0; background: none; color: var(--dim); font: inherit; text-decoration: underline; cursor: pointer; } .tm-link:hover:not(:disabled) { color: var(--strong); } .tm-link:disabled { opacity: .4; cursor: default; }
+
+/* ---------- Toolbar: uma linha só, com degraus INTENCIONAIS conforme a largura ----------
+   Grupo 1 (workspace e equipe) e grupo 2 (visualização) à esquerda; grupo 3 (controles operacionais) à direita (margin-left: auto no grupo, não nos controles).
+   Só o nome do workspace encolhe (reticências); nenhum controle é cortado nem sobreposto. Larguras medidas no navegador (veja a validação).
+   - largura >= 760 px: tudo com texto completo, em uma linha.
+   - 520 a 760 px: modo compacto, mesma linha: "Encerrar todos" vira "Encerrar", "autônomo" vira "auto", some o contador de tokens.
+   - < 520 px: quebra em duas linhas de propósito (equipe em cima; operacionais embaixo, à direita).
+   Visualização (Grade, Colunas, Linhas, Foco) e Histórico ficam em Configurações, para dar o máximo de espaço aos terminais. */
+.tbx-s { display: none; }
+.tbx-g:first-child { flex: 0 1 auto; min-width: 0; }
+.tbx-g:first-child .oc-wschip { min-width: 0; flex: 0 1 auto; }
+.tbx-g:first-child .oc-wschip b { min-width: 0; overflow: hidden; text-overflow: ellipsis; max-width: 22ch; }
+@container (max-width: 760px) {
+  .tbx { column-gap: 8px; }
+  .tbx-g + .tbx-g { padding-left: 8px; }
+  .tbx-l, .tbx .oc-total { display: none; }
+  .tbx-s { display: inline; }
+  .tbx .oc-seg button { padding-inline: 5px; }
+  .tbx .btn { padding-inline: 6px; }
+  .tbx-g:first-child .oc-wschip b { max-width: 14ch; }
+}
+@container (max-width: 520px) {
+  .tbx { flex-wrap: wrap; }
+  .tbx-g + .tbx-g { padding-left: 0; }
+  .tbx-g + .tbx-g::before { display: none; } /* em duas linhas o divisor vertical sairia do lugar */
+  .tbx-l { display: inline; } .tbx-s { display: none; }
+}

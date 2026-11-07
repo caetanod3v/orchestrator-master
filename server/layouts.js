@@ -7,6 +7,7 @@ import { now } from './store.js';
 export const MAX_ORDER = 24;
 export const MAX_GRIDS = 16;
 export const MAX_TRACKS = 8;
+export const TEAM_PRESETS = Object.freeze(['duo', 'squad', 'full', 'builder']); // equipe escolhida do workspace (client/src/team-view.js); só o id fica gravado
 const REC_RE = /^ses_[0-9a-f]{8}$/;
 const KEY_RE = /^([1-9]|1[0-2])x([1-9]|1[0-2])$/; // formato da grade: colunas x linhas
 const isObj = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
@@ -22,13 +23,15 @@ export function readLayout(raw) {
   const order = [...new Set(Array.isArray(r.order) ? r.order.filter((x) => typeof x === 'string' && REC_RE.test(x)) : [])].slice(0, MAX_ORDER);
   const grids = {};
   if (isObj(r.grids)) for (const [k, g] of Object.entries(r.grids)) { if (KEY_RE.test(k) && isObj(g) && validTracks(g.cols) && validTracks(g.rows) && Object.keys(grids).length < MAX_GRIDS) grids[k] = { cols: [...g.cols], rows: [...g.rows] }; }
-  return { order, maximized: typeof r.maximized === 'string' && REC_RE.test(r.maximized) ? r.maximized : null, grids };
+  const out = { order, maximized: typeof r.maximized === 'string' && REC_RE.test(r.maximized) ? r.maximized : null, grids };
+  if (TEAM_PRESETS.includes(r.team)) out.team = r.team; // só aparece quando há equipe: workspaces antigos continuam com o formato de sempre
+  return out;
 }
 
 /** Validação ESTRITA do corpo do PUT (parcial): devolve { patch } ou { error }. Nada é corrigido em silêncio. */
 export function validateLayoutPatch(b) {
   if (!isObj(b)) return { error: 'O corpo deve ser um objeto com o layout.' };
-  const extra = Object.keys(b).filter((k) => !['order', 'maximized', 'grids'].includes(k));
+  const extra = Object.keys(b).filter((k) => !['order', 'maximized', 'grids', 'team'].includes(k));
   if (extra.length) return { error: `Propriedades não permitidas: ${extra.join(', ')}.` };
   const p = {};
   if (b.order !== undefined) {
@@ -38,6 +41,10 @@ export function validateLayoutPatch(b) {
   if (b.maximized !== undefined) {
     if (b.maximized !== null && (typeof b.maximized !== 'string' || !REC_RE.test(b.maximized))) return { error: 'maximized deve ser o id de uma sessão (ses_…) ou null.' };
     p.maximized = b.maximized;
+  }
+  if (b.team !== undefined) {
+    if (b.team !== null && !TEAM_PRESETS.includes(b.team)) return { error: `team deve ser um destes ids de equipe: ${TEAM_PRESETS.join(', ')} (ou null para limpar).` };
+    p.team = b.team;
   }
   if (b.grids !== undefined) {
     if (!isObj(b.grids) || Object.keys(b.grids).length > MAX_GRIDS) return { error: `grids deve ser um objeto com até ${MAX_GRIDS} formatos.` };

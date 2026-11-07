@@ -40,7 +40,7 @@ export default function MaestroPopover({ onOpenSettings }) {
         <i className="mpo-led" aria-hidden="true" /><span>Maestro</span>
         {pending.length > 0 && <b className="mpo-n warn" aria-label={`${pending.length} aguardando você`}>{pending.length}</b>}
         {sum.failed > 0 && <b className="mpo-n err" aria-label={`${sum.failed} com falha`}>{sum.failed}</b>}
-        {maestro.autonomous && <span className="mpo-auto">autônomo</span>}
+        {maestro.autonomous && <span className="mpo-auto" title="Maestro autônomo ligado: tarefas são entregues sem aprovação"><span className="tbx-l">autônomo</span><span className="tbx-s" aria-hidden="true">auto</span></span>}
       </button>
       {open && (
         <section id="mpo-panel" className="mpo-panel" aria-label="Maestro">

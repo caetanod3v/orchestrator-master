@@ -2,6 +2,8 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { getPrefs, setPref, subscribePrefs, DEFAULT_PREFS } from './prefs.js';
 import { getUi } from './ui-state.js';
 import { getLayouts } from './layout-state.js';
+import { getModes, subscribeModes, modeOf, setModeOf } from './layout-mode.js';
+import { readAutoRestore, writeAutoRestore } from './session-history.js';
 
 const mq = () => window.matchMedia?.('(prefers-reduced-motion: reduce)');
 /** Preferência do sistema por menos movimento (reativa a mudanças). */
@@ -34,4 +36,18 @@ export function useUi() {
 export function usePrefs() {
   const prefs = useSyncExternalStore(subscribePrefs, getPrefs, () => DEFAULT_PREFS);
   return [prefs, setPref];
+}
+
+/** Modo de organização da grade do workspace: [modo, mudar(modo)]. Compartilhado entre o cockpit e as Configurações. */
+export function useLayoutMode(wsId) {
+  const modes = useSyncExternalStore(subscribeModes, getModes, getModes);
+  return [modeOf(modes, wsId), (m) => setModeOf(wsId, m)];
+}
+
+// Restauração automática das sessões: preferência local (padrão ligada), compartilhada pelo cockpit (que restaura) e pelas Configurações (onde se liga e desliga).
+let autoOn = readAutoRestore(); const autoSubs = new Set();
+const subAuto = (f) => { autoSubs.add(f); return () => autoSubs.delete(f); };
+export function useAutoRestore() {
+  const on = useSyncExternalStore(subAuto, () => autoOn, () => true);
+  return [on, (v) => { autoOn = !!v; writeAutoRestore(autoOn); for (const f of autoSubs) f(); }];
 }
