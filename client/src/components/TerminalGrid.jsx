@@ -18,6 +18,7 @@ import { PRESETS, presetById, changeImpact, inferTeam } from '../team-view.js';
 // Presets de equipe (team-view.js): o mesmo fluxo abre 2, 4 ou 6 terminais do Claude Code em paralelo, cada um com o seu papel. Os ids gravados continuam duo/squad/full; só o rótulo do squad de quatro virou "Squad".
 export const SQUADS = PRESETS.filter((p) => p.id !== 'builder');
 const MAX_CHUNK = 60_000; // o servidor aceita até 64 KB por entrada
+const FONT_FAMILY = "'Geist Mono Variable', 'Geist Mono', 'Cascadia Mono', Consolas, monospace";
 const THEME = { background: '#090909', foreground: '#d2d2d2', cursor: '#c94a4a', cursorAccent: '#090909', selectionBackground: 'rgba(168, 58, 58, .35)', red: '#b84646', brightRed: '#c94a4a', green: '#5fa377', brightGreen: '#7fb592', yellow: '#92713e', brightYellow: '#c9a46a' };
 const STATE_LABEL = { working: 'executando', idle: 'ocioso', done: 'concluído', waiting: 'aguardando', exited: 'encerrado', failed: 'falhou', boot: 'iniciando' };
 const shortPath = (p) => { const parts = String(p ?? '').split(/[\\/]+/).filter(Boolean); return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : parts.join('/') || String(p ?? ''); };
@@ -32,11 +33,19 @@ function TerminalPane({ session, role, state, waiting, maximized, fontSize, stre
 
   useEffect(() => {
     const host = hostRef.current; if (!host) return undefined;
-    const term = new Terminal({ fontFamily: "'Geist Mono Variable', 'Geist Mono', 'Cascadia Mono', Consolas, monospace", fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, theme: THEME, allowProposedApi: false });
+    const term = new Terminal({ fontFamily: FONT_FAMILY, fontSize, lineHeight: 1.2, cursorBlink: true, scrollback: 5000, theme: THEME, allowProposedApi: false });
     const fit = new FitAddon(); term.loadAddon(fit); term.open(host);
     termRef.current = term; fitRef.current = fit;
     const doFit = () => { try { if (host.clientWidth > 40 && host.clientHeight > 40) fit.fit(); } catch { /* sem layout ainda */ } };
     doFit();
+    // a fonte web carrega sob demanda: se o xterm mediu a célula com a fonte reserva (no Mac não existem Cascadia/Consolas), as colunas/linhas ficam erradas e o texto desalinha.
+    // Quando a Geist Mono chega, força a remedição (o xterm ignora a opção se o valor não muda, por isso o desvio por 'monospace') e reajusta.
+    let gone = false;
+    try {
+      if (document.fonts && !document.fonts.check(`${fontSize}px 'Geist Mono Variable'`)) {
+        document.fonts.load(`${fontSize}px 'Geist Mono Variable'`).then(() => { if (gone) return; term.options.fontFamily = 'monospace'; term.options.fontFamily = FONT_FAMILY; doFit(); }).catch(() => {});
+      }
+    } catch { /* sem a API de fontes: segue com a medição atual */ }
 
     // entrada: uma fila só, para as teclas chegarem na ordem em que foram digitadas
     let chain = Promise.resolve();
@@ -61,7 +70,7 @@ function TerminalPane({ session, role, state, waiting, maximized, fontSize, stre
       onData: (d) => { term.write(d); setStarted(true); },
       onExit: (c) => { term.write(`\r\n\x1b[2m[processo encerrado${c === null || c === undefined ? '' : `, código ${c}`}]\x1b[0m\r\n`); },
     });
-    return () => { clearTimeout(timer); ro.disconnect(); unsub(); inputSub.dispose(); sizeSub.dispose(); term.dispose(); termRef.current = null; fitRef.current = null; };
+    return () => { gone = true; clearTimeout(timer); ro.disconnect(); unsub(); inputSub.dispose(); sizeSub.dispose(); term.dispose(); termRef.current = null; fitRef.current = null; };
   }, [id, stream]); // eslint-disable-line react-hooks/exhaustive-deps -- o tamanho da fonte tem efeito próprio (abaixo): recriar o terminal perderia a tela
 
   // fonte (preferência): vale na hora, sem recriar o terminal
