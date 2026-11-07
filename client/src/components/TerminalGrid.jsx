@@ -6,7 +6,7 @@ import { api } from '../api.js';
 import { useStore } from '../store.jsx';
 import { usePrefs, useLayouts } from '../hooks.js';
 import { orderSessions, mergeOrder, sameList, EMPTY as EMPTY_LAYOUT } from '../layout-state.js';
-import { historyRows } from '../session-history.js';
+import { historyRows, resumeBody, needsConfigAck, restorePlan, batchSummary, lastShutdownRestore, attemptKey, readAutoRestore, writeAutoRestore } from '../session-history.js';
 import { Btn, Icon, WorkStar } from './ui.jsx';
 import { paneUsage, squadUsage } from '../usage-view.js';
 import { terminalWorktrees } from '../worktree-view.js';
@@ -171,6 +171,9 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
   const [restorable, setRestorable] = useState(0); // sessões deste workspace que estavam abertas e podem voltar
   const [histOpen, setHistOpen] = useState(false); // diálogo do histórico de sessões (retomar/fork)
   const [modes, setModes] = useState(() => { try { return JSON.parse(localStorage.getItem('forge.layoutMode') || '{}') || {}; } catch { return {}; } }); // modo da grade por workspace: conveniência desta tela (não vai ao servidor)
+  const [autoRestore, setAutoRestoreState] = useState(readAutoRestore); // restaurar sozinho as sessões do último encerramento ao entrar no workspace
+  const setAutoRestore = (on) => { setAutoRestoreState(on); writeAutoRestore(on); };
+  const attempted = useRef(new Set()), autoBusy = useRef(false); // 'já tentei' por registro+instante: uma sessão não é reaberta em laço nem notificada duas vezes
   const [focusBy, setFocusBy] = useState({}); // workspaceId -> id do terminal em foco (modo Foco)
   const ws = state?.activeWorkspace;
   const stream = useMemo(() => createTerminalStream(), []); // uma conexão SSE para todos os terminais
@@ -221,6 +224,38 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
     api.get('/api/terminals/history').then((d) => { if (alive) setRestorable(historyRows({ history: d?.sessions, workspaceId: ws.id }).restore.length); }).catch(() => {});
     return () => { alive = false; };
   }, [ws?.id, mine.length, histOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Restauração automática: workspace aberto, sem nenhum terminal, e o servidor diz que há sessões do último encerramento retomáveis. Nunca confirma sozinha a configuração de projeto não revisada.
+  useEffect(() => {
+    if (!ws || !autoRestore || !layoutsReady || !terminals || mine.length > 0 || autoBusy.current) return undefined;
+    let alive = true; const wsId = ws.id;
+    (async () => {
+      let d; try { d = await api.get('/api/terminals/history'); } catch { return; }
+      if (!alive) return;
+      const rows = historyRows({ history: d?.sessions, workspaceId: wsId });
+      const fresh = lastShutdownRestore(rows.restore).filter((r) => !attempted.current.has(attemptKey(r)));
+      if (!fresh.length || autoBusy.current) return;
+      const live = (terminals?.sessions ?? []).filter((x) => x.status === 'running').length;
+      const plan = restorePlan(orderSessions(fresh, L.order, (r) => r.id), (terminals?.maxSessions ?? 10) - live);
+      for (const r of fresh) attempted.current.add(attemptKey(r));
+      if (!plan.open.length) return;
+      autoBusy.current = true;
+      notify(`Restaurando ${plan.open.length} ${plan.open.length === 1 ? 'sessão' : 'sessões'} de ${where} do ponto onde pararam…`);
+      const results = [];
+      try {
+        for (const r of plan.open) {
+          try { await api.post('/api/terminals/resume', resumeBody({ recordId: r.id })); results.push({ row: r, ok: true }); } catch (e) {
+            const limit = e?.status === 409 && /Limite de/.test(e.message || '');
+            results.push({ row: r, ok: false, error: limit ? 'limite de terminais' : needsConfigAck(e) ? 'precisa da sua confirmação: abra o Histórico' : (e?.message || 'erro') });
+            if (limit) break;
+          }
+        }
+      } finally {
+        autoBusy.current = false;
+        const sum = batchSummary(results, plan.skipped.length); notify(sum.text, sum.kind); loadTerminals();
+      }
+    })();
+    return () => { alive = false; };
+  }, [ws?.id, autoRestore, layoutsReady, !!terminals, mine.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const gridRef = useRef(null);
 
   const opening = useRef(false); // trava síncrona: dois cliques seguidos nunca abrem duas vezes (o estado `busy` só vale depois da renderização)
@@ -349,7 +384,7 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
           {showGutters && cur.rows.slice(0, -1).map((_, i) => <Gutter key={`y${i}`} axis="y" index={i} tracks={cur.rows} onTracks={(t) => setAxis('rows', t)} gridRef={gridRef} label={`Redimensionar linhas ${i + 1} e ${i + 2}`} style={{ top: `calc(${dividerAt(cur.rows, i)}% - 5px)`, left: 0, right: 0 }} />)}
         </div>
       </div>
-      {histOpen && ws && <SessionHistory ws={ws} topicId={topicId} where={where} order={L.order} onClose={() => setHistOpen(false)} />}
+      {histOpen && ws && <SessionHistory ws={ws} topicId={topicId} where={where} order={L.order} autoRestore={autoRestore} onAutoRestore={setAutoRestore} onClose={() => setHistOpen(false)} />}
     </div>
   );
 }

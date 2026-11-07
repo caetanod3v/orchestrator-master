@@ -54,3 +54,26 @@ export function batchSummary(results, skippedNoRoom = 0) {
   if (skippedNoRoom > 0) parts.push(`${skippedNoRoom} ${skippedNoRoom === 1 ? 'ficou' : 'ficaram'} de fora por falta de vaga (limite de terminais)`);
   return { text: parts.join(' · ') || 'Nada a restaurar.', kind: bad.length || skippedNoRoom ? 'error' : 'info', ok: ok.length, failed: bad.length };
 }
+
+// ---- restauração automática ao entrar no workspace ----
+export const AUTO_RESTORE_WINDOW_MS = 120_000; // um encerramento do servidor carimba todas as sessões em poucos segundos; 2 min cobre a lentidão sem alcançar outro encerramento
+const ts = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? t : null; };
+
+/**
+ * Das sessões "estavam abertas" (restore), só as do ÚLTIMO encerramento: as que pararam até `windowMs` antes da mais recente. Sessões interrompidas num encerramento antigo
+ * continuam disponíveis no Histórico (restauração manual), mas não voltam sozinhas. Sem data válida a sessão não entra.
+ */
+export function lastShutdownRestore(restoreRows, windowMs = AUTO_RESTORE_WINDOW_MS) {
+  const rows = arr(restoreRows).filter((r) => r && r.restore && ts(r.endedAt) !== null);
+  if (!rows.length) return [];
+  const latest = Math.max(...rows.map((r) => ts(r.endedAt)));
+  return rows.filter((r) => latest - ts(r.endedAt) <= windowMs);
+}
+
+/** Chave de "já tentei": o registro + o instante em que parou. Um novo encerramento do mesmo registro gera uma chave nova e pode voltar a restaurar. */
+export const attemptKey = (r) => `${r.id}:${r.endedAt}`;
+
+/** Preferência local (só deste navegador; o padrão é LIGADO). */
+export const AUTO_RESTORE_KEY = 'forge.autoRestore';
+export function readAutoRestore(storage = (typeof localStorage !== 'undefined' ? localStorage : null)) { try { return storage?.getItem(AUTO_RESTORE_KEY) !== '0'; } catch { return true; } }
+export function writeAutoRestore(on, storage = (typeof localStorage !== 'undefined' ? localStorage : null)) { try { storage?.setItem(AUTO_RESTORE_KEY, on ? '1' : '0'); } catch { /* sem armazenamento: vale só nesta sessão */ } }

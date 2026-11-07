@@ -166,3 +166,7 @@ html:not([data-motion="reduced"]) .oc-app .oc-alert { animation: ws-pulse 3.2s e
 .oc-pstate .wstar { flex: none; color: var(--ws-claude); filter: drop-shadow(0 0 2px rgba(217, 119, 87, .45)); }
 .oc-pstate.st-working { color: var(--ws-claude); }
 html:not([data-motion="reduced"]) .oc-app .oc-pstate .wstar { animation: ws-spin 7s linear infinite !important; }
+
+/* restauração automática: interruptor discreto no Histórico */
+.sh-auto { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 var(--sp-2); font-size: 12px; color: var(--dim); cursor: pointer; }
+.sh-auto:hover { color: var(--text); }
