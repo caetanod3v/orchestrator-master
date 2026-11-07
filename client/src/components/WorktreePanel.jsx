@@ -93,13 +93,13 @@ export function WorktreeView({ rows, busy = false, onAction = () => {}, onRevali
 }
 
 /** Painel da missão: lê /api/state.worktrees e chama as rotas de worktrees; cada ação é revalidada pelo servidor. */
-export default function WorktreePanel({ mission = null, terminals = false, inUse = null }) {
+export default function WorktreePanel({ mission = null, terminals = false, inUse = null, workspaceId = null }) {
   const { state, act, notify, refresh } = useStore();
   const [busy, setBusy] = useState(false);
   const [prep, setPrep] = useState({}); // por worktree: { phase: planning | planned | approved | error, plan, error } (fases só da tela; o estado real vem do servidor)
   const setP = (id, v) => setPrep((p) => { const n = { ...p }; if (v) n[id] = v; else delete n[id]; return n; });
   const [results, setResults] = useState({});
-  const rows = terminals ? markInUse(worktreeView(terminalWorktrees(state?.worktrees?.items)), inUse) : worktreeView(state?.worktrees?.items, { missionId: mission?.id });
+  const rows = terminals ? markInUse(worktreeView(terminalWorktrees(state?.worktrees?.items).filter((w) => !workspaceId || w.workspaceId === workspaceId)), inUse) : worktreeView(state?.worktrees?.items, { missionId: mission?.id });
   const onAction = async (id, op, body, ok) => {
     setBusy(true);
     try { const r = await act(async () => { await api.post(`/api/worktrees/${id}/${op}`, body); return true; }); if (r) notify(ok); } finally { setBusy(false); }

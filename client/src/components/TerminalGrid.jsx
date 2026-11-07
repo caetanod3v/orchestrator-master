@@ -9,11 +9,9 @@ import { orderSessions, mergeOrder, sameList, EMPTY as EMPTY_LAYOUT } from '../l
 import { historyRows, resumeBody, needsConfigAck, restorePlan, batchSummary, lastShutdownRestore, attemptKey, readAutoRestore, writeAutoRestore } from '../session-history.js';
 import { Btn, Icon, WorkStar } from './ui.jsx';
 import { paneUsage, squadUsage } from '../usage-view.js';
-import { terminalWorktrees } from '../worktree-view.js';
 import { createTerminalStream } from '../terminal-stream.js';
 import { paneState, pendingByPane, paneName, shapeFor, focusPlacement, layoutModeId, LAYOUT_MODES, evenTracks, dragTracks, dividerAt } from '../env-view.js';
-import { maestroSummary, timelineRows, collapsedLine, TASK_LABEL } from '../maestro-view.js';
-import WorktreePanel from './WorktreePanel.jsx';
+import MaestroPopover from './MaestroPopover.jsx';
 import AgentsPopover from './ProviderPanel.jsx';
 import SessionHistory from './SessionHistory.jsx';
 
@@ -125,45 +123,7 @@ function Gutter({ axis, index, tracks, onTracks, gridRef, style, label }) {
 }
 
 
-/**
- * Maestro: faixa compacta. Recolhida é uma linha (estado do modo autônomo + resumo); decisões pendentes ficam sempre visíveis porque exigem o usuário.
- * A rotina (entregue, concluída, recusada, expirada) vai para uma timeline curta que só aparece ao expandir. O modo autônomo é opt-in e fica sempre visível.
- */
-function MaestroPanel({ data, onChange, notify }) {
-  const [busy, setBusy] = useState(false);
-  const [open, setOpen] = useState(false);
-  const run = async (fn) => { setBusy(true); try { onChange(await fn()); } catch (e) { notify(e.message, 'error'); } finally { setBusy(false); } };
-  const tasks = data.tasks, pending = tasks.filter((t) => t.status === 'pending'), sum = maestroSummary(tasks), rows = useMemo(() => timelineRows(tasks, 20), [tasks]);
-  const toggle = (e) => {
-    const on = e.target.checked;
-    const aviso = ['Ligar o maestro autônomo?', '', `As tarefas que o maestro enviar serão digitadas nos outros terminais SEM pedir a sua aprovação (até ${data.autoPerMinute} por minuto). O Enter enviado junto também confirma qualquer pergunta que o terminal de destino esteja mostrando (ex.: um pedido de permissão). Cada agente age com as suas permissões. O modo volta a desligado quando o servidor reinicia.`].join(String.fromCharCode(10));
-    if (on && !window.confirm(aviso)) return;
-    run(() => api.post('/api/maestro/autonomy', { enabled: on }));
-  };
-  return (
-    <section className={`mp${sum.attention ? ' mp-attn' : ''}`} aria-label="Maestro">
-      <div className="mp-head">
-        <button type="button" className="mp-fold" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls="mp-timeline" title={open ? 'Recolher o histórico do Maestro' : 'Ver o histórico do Maestro'}>
-          <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} /><b>Maestro</b>
-        </button>
-        <label className="tg-chk" title="Desligado: toda tarefa do maestro espera a sua aprovação. Ligado: é entregue na hora, com limite por minuto."><input type="checkbox" checked={data.autonomous} disabled={busy} onChange={toggle} /> Maestro autônomo</label>
-        {data.autonomous && <span className="mp-warn" role="status">Ligado: tarefas são entregues sem aprovação</span>}
-        <span className="dim small mp-sum">{collapsedLine(tasks, data.autonomous)}</span>
-      </div>
-      {pending.length > 0 && <ul className="mp-list" aria-label="Tarefas aguardando aprovação">{pending.map((t) => (
-        <li key={t.id} className="mp-item" title="Confira o terminal de destino antes de aprovar: o Enter enviado com a tarefa também confirma qualquer pergunta que ele esteja mostrando.">
-          <div className="mp-txt"><b>Para {t.toTitle}</b>{t.note && <span className="dim small"> · {t.note}</span>}<div className="mp-task">{t.text}</div></div>
-          <div className="mp-act"><Btn kind="primary" disabled={busy} onClick={() => run(() => api.post(`/api/maestro/tasks/${t.id}/approve`))}>Aprovar e enviar</Btn><Btn disabled={busy} onClick={() => run(() => api.post(`/api/maestro/tasks/${t.id}/reject`))}>Recusar</Btn></div>
-        </li>))}</ul>}
-      {open && <ol id="mp-timeline" className="mp-tl" aria-label="Linha do tempo do Maestro">
-        {rows.length === 0 ? <li className="dim small">Nenhum evento ainda.</li> : rows.map((r) => (
-          <li key={r.id} className={r.status === 'failed' ? 'bad' : ''} title={r.text}><time className="mono dim">{r.at ? new Date(r.at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '--:--'}</time><span className={`mp-st mp-st-${r.status}`}>{TASK_LABEL[r.status] || r.status}</span><b>{r.toTitle}</b><span className="mp-clip">{r.text}</span></li>))}
-      </ol>}
-    </section>
-  );
-}
-
-export default function TerminalGrid({ onOpenWorkspaces }) {
+export default function TerminalGrid({ onOpenWorkspaces, onOpenSettings }) {
   const { state, notify, terminals, maestro, setMaestro, workingIds, loadTerminals } = useStore();
   const [prefs, setPref] = usePrefs();
   const [busy, setBusy] = useState(false);
@@ -180,7 +140,6 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
   useEffect(() => () => stream.close(), [stream]);
   const waitingBy = useMemo(() => pendingByPane(maestro?.tasks), [maestro]);
   const pendingIds = useMemo(() => new Set(waitingBy.keys()), [waitingBy]);
-  const wtCount = terminalWorktrees(state?.worktrees?.items).length;
 
   const roles = terminals?.roles ?? [], byRole = Object.fromEntries(roles.map((r) => [r.id, r]));
   const role = byRole[prefs.role] ? prefs.role : roles[0]?.id ?? 'builder';
@@ -299,7 +258,7 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
     let closedRid = null;
     try {
       const r = await api.post(`/api/terminals/${s.id}/close`); closedRid = s.recordId;
-      if (r?.worktreeId) notify('Terminal encerrado. O worktree dele foi mantido (pode ter trabalho): gerencie em "Worktrees dos terminais".');
+      if (r?.worktreeId) notify('Terminal encerrado. O worktree dele foi mantido (pode ter trabalho): gerencie em Configurações > Workspaces e Worktrees.');
     } catch (e) { notify(e.message, 'error'); } finally { await loadTerminals(); if (closedRid) layoutActions.forget(ws.id, closedRid); }
   };
 
@@ -342,19 +301,11 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
           </label>
           <span className="oc-total" title={total.partialCost ? 'Há panes sem custo conhecido: o total em dólares não é exibido. Crie data/pricing.json com os preços por modelo (USD por milhão de tokens) para ver o custo.' : total.cost === '—' ? 'Custo indisponível: crie data/pricing.json com os preços por modelo (USD por milhão de tokens).' : 'Soma dos terminais deste tópico'}>{total.tokens} tok · {total.cost}</span>
           {mine.length > 1 && <Btn kind="quiet" disabled={busy} onClick={closeAll} title="Encerra e remove todos os terminais deste tópico">Encerrar todos</Btn>}
+          {maestro && (maestro.autonomous || maestro.tasks.length > 0 || mine.some((x) => x.role === 'maestro' && x.status === 'running')) && <MaestroPopover onOpenSettings={onOpenSettings} />}
           <AgentsPopover className="oc-count" tone={mine.some((x) => x.status === 'running' && workingIds.has(x.id)) ? 'work' : liveMine ? 'live' : 'none'} title={`${live} de ${terminals?.maxSessions ?? '…'} terminais no total (todos os ambientes). Clique para ver os agentes por provider.`}><span className="oc-agents-t">{liveMine} {liveMine === 1 ? 'ativo' : 'ativos'}</span></AgentsPopover>
         </>}
         </div>
       </div>
-
-      {maestro && (mine.some((x) => x.role === 'maestro' && x.status === 'running') || maestro.tasks.some((t) => t.status === 'pending') || maestro.autonomous) && <MaestroPanel data={maestro} onChange={setMaestro} notify={notify} />}
-      {wtCount > 0 && (
-        <details className="tg-wt">
-          <summary><Icon name="chevronRight" size={12} /><span>Worktrees dos terminais</span><span className="tg-wt-n">{wtCount}</span></summary>
-          <p className="dim small">Cada terminal isolado trabalha numa branch própria. Encerrar o terminal NÃO apaga o worktree. Aqui você confere o estado, registra um snapshot (commit na branch do worktree) e limpa o que não tem mais trabalho a perder. A integração ao projeto principal exige o gate de evidência das missões, que não existe nos terminais: revise a branch e integre você mesmo com o Git; depois a limpeza fica liberada. O servidor recusa remover worktree com alterações ou commits não integrados.</p>
-          <WorktreePanel terminals inUse={new Set(sessions.filter((x) => x.status === 'running' && x.worktreeId).map((x) => x.worktreeId))} />
-        </details>
-      )}
 
       {!ws ? (
         <div className="oc-empty">

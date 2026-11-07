@@ -4,6 +4,9 @@ import { usePrefs } from '../hooks.js';
 import { FONT_RANGE } from '../prefs.js';
 import Dialog from './Dialog.jsx';
 import { Btn, Icon } from './ui.jsx';
+import MaestroControls from './MaestroControls.jsx';
+import WorktreePanel from './WorktreePanel.jsx';
+import { terminalWorktrees } from '../worktree-view.js';
 
 const SECTIONS = [
   ['perfil', 'Perfil e conta', 'user'],
@@ -11,6 +14,8 @@ const SECTIONS = [
   ['aparencia', 'Aparência', 'sun'],
   ['cli', 'Claude Code CLI', 'terminal'],
   ['providers', 'Providers', 'layers'],
+  ['orquestracao', 'Orquestração', 'sliders'],
+  ['worktrees', 'Workspaces e Worktrees', 'workspace'],
 ];
 
 const Row = ({ title, hint, children }) => <div className="oc-row"><div className="oc-row-t"><b>{title}</b>{hint && <span className="dim small">{hint}</span>}</div><div className="oc-row-c">{children}</div></div>;
@@ -20,7 +25,9 @@ const Switch = ({ checked, onChange, label }) => (
 
 /** Configurações básicas (engrenagem da sidebar). Só opções que existem de verdade: preferências locais da interface e o estado real do Claude Code. */
 export default function SettingsDialog({ onClose, initial = 'perfil' }) {
-  const { state, terminals, refresh } = useStore();
+  const { state, terminals, refresh, workspaces } = useStore();
+  const [wtScope, setWtScope] = useState('open'); // worktrees: do workspace aberto ou de todos
+  const openWs = state?.activeWorkspace ?? null;
   const [prefs, setPref] = usePrefs();
   const [tab, setTab] = useState(initial);
   const [checking, setChecking] = useState(false);
@@ -95,6 +102,23 @@ export default function SettingsDialog({ onClose, initial = 'perfil' }) {
               <li className="on"><span className="oc-prov-i"><Icon name="terminal" size={18} /></span><span className="oc-prov-t"><b>Claude Code</b><span className="dim small">Provider atual dos terminais.</span></span><span className="oc-pill ok">ativo</span></li>
               <li className="off" aria-disabled="true"><span className="oc-prov-i"><Icon name="terminal" size={18} /></span><span className="oc-prov-t"><b>Codex CLI</b><span className="dim small">Ainda não integrado. Nenhuma configuração é necessária por enquanto.</span></span><span className="oc-pill">em breve</span></li>
             </ul>
+          </>}
+
+          {tab === 'orquestracao' && <>
+            <h3 className="oc-h">Maestro Autônomo</h3>
+            <MaestroControls />
+          </>}
+
+          {tab === 'worktrees' && <>
+            <p className="dim small oc-lead">Cada terminal isolado trabalha numa branch Git própria (<span className="mono">orch/…</span>), e um squad inteiro compartilha UM worktree. Encerrar o terminal NÃO apaga o worktree. Aqui você confere o estado, registra um snapshot (commit na branch do worktree) e limpa o que não tem mais trabalho a perder. A integração ao projeto principal exige o gate de evidência das missões, que não existe nos terminais: revise a branch e integre você mesmo com o Git; depois a limpeza fica liberada. O servidor recusa remover worktree com alterações ou commits não integrados.</p>
+            <Row title="Novos terminais em worktree" hint="A chave global fica em Preferências gerais. Esta tela administra os worktrees que já existem." />
+            <Row title="Mostrar worktrees de" hint={`${terminalWorktrees(state?.worktrees?.items).filter((w) => wtScope === 'all' || w.workspaceId === openWs?.id).length} no total`}>
+              <select value={wtScope} onChange={(e) => setWtScope(e.target.value)} aria-label="Escopo dos worktrees">
+                <option value="open">Workspace aberto{openWs ? ` (${openWs.displayName || openWs.name})` : ''}</option>
+                <option value="all">Todos os workspaces</option>
+              </select>
+            </Row>
+            <WorktreePanel terminals workspaceId={wtScope === 'all' ? null : (openWs?.id ?? '—')} inUse={new Set((terminals?.sessions ?? []).filter((x) => x.status === 'running' && x.worktreeId).map((x) => x.worktreeId))} />
           </>}
         </div>
       </div>

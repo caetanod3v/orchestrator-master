@@ -26,6 +26,7 @@ function useNarrow() {
 export default function App() {
   const [navOpen, setNavOpen] = useState(false);
   const [dialog, setDialog] = useState(() => (location.hash.startsWith('#/settings') ? 'settings' : null)); // 'settings' | 'workspaces' | null (#/settings: link antigo)
+  const [settingsTab, setSettingsTab] = useState('perfil');
   const [ui, uiActions] = useUi();
   const collapsed = ui.sidebarCollapsed;
   const narrow = useNarrow();
@@ -38,7 +39,7 @@ export default function App() {
   useEffect(() => { if (!narrow) setNavOpen(false); }, [narrow]);
   const closeNav = useCallback(() => { setNavOpen(false); setTimeout(() => menuRef.current?.focus(), 0); }, []);
   const toggleSide = () => uiActions.setSidebarCollapsed(!collapsed);
-  const openSettings = useCallback(() => { setNavOpen(false); setDialog('settings'); }, []);
+  const openSettings = useCallback((tab) => { setNavOpen(false); setSettingsTab(typeof tab === 'string' ? tab : 'perfil'); setDialog('settings'); }, []); // o botão da engrenagem chama com o evento: só texto vale como aba
   const openWorkspaces = useCallback(() => { setNavOpen(false); setDialog('workspaces'); }, []);
   const closeDialog = useCallback(() => { setDialog(null); if (location.hash.startsWith('#/settings')) history.replaceState(null, '', location.pathname + location.search); }, []);
 
@@ -58,7 +59,7 @@ export default function App() {
           </div>
         )}
         <main id="main" tabIndex={-1} className="oc-content">
-          <Cockpit onOpenWorkspaces={openWorkspaces} />
+          <Cockpit onOpenWorkspaces={openWorkspaces} onOpenSettings={openSettings} />
           <ActivityDrawer />
         </main>
       </div>
@@ -68,7 +69,7 @@ export default function App() {
           <span className="toast-text">{toast.text}</span>
         </div>
       )}
-      {dialog === 'settings' && <SettingsDialog onClose={closeDialog} />}
+      {dialog === 'settings' && <SettingsDialog initial={settingsTab} onClose={closeDialog} />}
       {dialog === 'workspaces' && <WorkspaceDialog onClose={closeDialog} />}
     </div>
   );
