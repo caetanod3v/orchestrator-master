@@ -17,7 +17,7 @@
   /* texto: --strong títulos e valores; --text corpo; --dim apoio; --faint só placeholder e metadado (todos ≥ 4,5:1 sobre --raise2) */
   --strong: #ececec; --text: #d2d2d2; --dim: #9a9a9a; --faint: #858585;
   /* ação primária e foco: bone. É a identidade: nenhuma cor de marca. */
-  --bone: #a83a3a; --bone-hover: #c94a4a; --ink: #f2f2f2; --focus: #c94a4a; /* vermelho discreto: só marca, ação primária e foco */
+  --bone: #8f2f2f; --bone-hover: #a83a3a; --ink: #f2f2f2; --focus: #c94a4a; /* vermelho discreto: só marca, ação primária e foco */
 
   /* estados (cor + glifo + texto, nunca só a cor), com o MESMO significado em todo o produto, dessaturados para não competir com o conteúdo:
      --muted cinza = ocioso, na fila, desconectado | --run laranja = executando (--run-text é o mesmo laranja mais claro, só para texto: ≥ 4,5:1 sobre o preto) | --ok verde = concluído | --warn âmbar = aguardando decisão humana | --interrupted cinza-azulado = interrompido | --err vermelho suave = erro */
@@ -52,10 +52,10 @@
   --shadow-pop: 0 24px 60px -10px rgba(0, 0, 0, .75), 0 0 0 1px var(--line-strong);
 
   /* marca e brilho (o laranja é a identidade e também a cor de "executando"; o vermelho é de falha e de alerta) */
-  --brand: var(--bone); --brand-bg: rgba(168, 58, 58, .12); --brand-line: rgba(168, 58, 58, .5);
+  --brand: var(--bone); --brand-bg: rgba(143, 47, 47, .12); --brand-line: rgba(143, 47, 47, .5);
   --glow-sm: 0 0 0 1px rgba(201, 74, 74, .55); --glow-md: 0 0 0 1px rgba(201, 74, 74, .7); /* foco: contorno de 1px, sem brilho */
   /* LEDs de status: único lugar com luz. Cor viva do ponto + halo curto */
-  --led-run: #5fa377; --led-ok: #4f8a63; --led-warn: #a98349; --led-err: #c24e4e; --led-idle: #5c5c5c;
+  --led-run: #69b085; --led-ok: #58966d; --led-warn: #b78f50; --led-err: #cc5555; --led-idle: #5c5c5c; /* núcleo dos LEDs um pouco mais claro; o halo (box-shadow) está em retro.css */
   /* rótulos de console: mono, caixa alta, espaçamento largo */
   --caps-track: .09em; --caps-size: 11.5px;
   /* cor por agente (identificação, nunca estado): construtor, piloto, revisor, batedor, torre */

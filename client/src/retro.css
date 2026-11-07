@@ -12,21 +12,21 @@
 /* terminal: ocioso = cinza sem luz | trabalhando = verde com halo | iniciando = âmbar | falhou = vermelho | encerrado = verde apagado (concluído) */
 .oc-pdot { background: var(--led-idle); }
 .oc-pdot.st-idle { background: var(--led-idle); }
-.oc-pdot.st-working { background: var(--led-run); box-shadow: 0 0 5px 1px rgba(95, 163, 119, .45); animation: rt-led 2.4s ease-in-out infinite; }
-.oc-pdot.st-boot { background: var(--led-warn); box-shadow: 0 0 5px 1px rgba(169, 131, 73, .4); animation: rt-led 1.6s ease-in-out infinite; }
-.oc-pdot.st-failed { background: var(--led-err); box-shadow: 0 0 5px 1px rgba(194, 78, 78, .45); }
-.oc-pdot.st-done { background: var(--led-ok); box-shadow: 0 0 3px rgba(79, 138, 99, .3); } /* concluído: verde suave, sem animação */
-.oc-pdot.st-waiting { background: var(--led-warn); box-shadow: 0 0 5px 1px rgba(169, 131, 73, .4); }
+.oc-pdot.st-working { background: var(--led-run); box-shadow: 0 0 7px 1px rgba(95, 163, 119, 0.65); animation: rt-led 2.4s ease-in-out infinite; }
+.oc-pdot.st-boot { background: var(--led-warn); box-shadow: 0 0 7px 1px rgba(169, 131, 73, 0.58); animation: rt-led 1.6s ease-in-out infinite; }
+.oc-pdot.st-failed { background: var(--led-err); box-shadow: 0 0 7px 1px rgba(194, 78, 78, 0.65); }
+.oc-pdot.st-done { background: var(--led-ok); box-shadow: 0 0 5px rgba(79, 138, 99, 0.43); } /* concluído: verde suave, sem animação */
+.oc-pdot.st-waiting { background: var(--led-warn); box-shadow: 0 0 7px 1px rgba(169, 131, 73, 0.58); }
 .oc-pdot.st-exited { background: var(--led-idle); opacity: .7; }
 @keyframes rt-led { 0%, 100% { opacity: 1; } 50% { opacity: .65; } }
 /* abas de workspace */
 .wt-dot { background: var(--led-idle); }
 .wt-item.tone-live .wt-dot { background: var(--led-idle); }
-.wt-item.tone-work .wt-dot { background: var(--led-run); box-shadow: 0 0 5px 1px rgba(95, 163, 119, .45); }
-.wt-item.tone-done .wt-dot { background: var(--led-ok); box-shadow: 0 0 3px rgba(79, 138, 99, .3); }
-.wt-item.tone-warn .wt-dot { background: var(--led-warn); box-shadow: 0 0 5px 1px rgba(169, 131, 73, .4); }
-.wt-item.tone-err .wt-dot { background: var(--led-err); box-shadow: 0 0 5px 1px rgba(194, 78, 78, .45); }
-.wt-done { animation: wt-pop .35s ease both; background: var(--led-err); box-shadow: 0 0 4px rgba(194, 78, 78, .4); }
+.wt-item.tone-work .wt-dot { background: var(--led-run); box-shadow: 0 0 7px 1px rgba(95, 163, 119, 0.65); }
+.wt-item.tone-done .wt-dot { background: var(--led-ok); box-shadow: 0 0 5px rgba(79, 138, 99, 0.43); }
+.wt-item.tone-warn .wt-dot { background: var(--led-warn); box-shadow: 0 0 7px 1px rgba(169, 131, 73, 0.58); }
+.wt-item.tone-err .wt-dot { background: var(--led-err); box-shadow: 0 0 7px 1px rgba(194, 78, 78, 0.65); }
+.wt-done { animation: wt-pop .35s ease both; background: var(--led-err); box-shadow: 0 0 6px rgba(194, 78, 78, 0.58); }
 /* contadores e estado da barra superior */
 .tb-c i { background: var(--led-idle); }
 .tb-c.live.has i { background: var(--led-run); box-shadow: 0 0 6px 1px rgba(95, 163, 119, 0.58); }
@@ -38,9 +38,9 @@
 .wsi-wait { --c: var(--ws-wait); --t: 2.6s; --lo: .7; --s0: .94; --s1: 1.04; }
 .wsi-done { --c: var(--ws-err); --t: 2s; --lo: .7; --s0: .92; --s1: 1.06; } /* todos concluídos: "!" vermelho, mesmo pulso do ícone de falha */
 .wsi svg, .wsi-work svg, .wsi-err svg, .wsi-wait svg, .wsi-done svg { filter: none; }
-.wsi-work svg { filter: drop-shadow(0 0 2px rgba(95, 163, 119, .5)); }
-.wsi-err svg, .wsi-done svg { filter: drop-shadow(0 0 2px rgba(194, 78, 78, .5)); }
-.wsi-wait svg { filter: drop-shadow(0 0 2px rgba(169, 131, 73, .45)); }
+.wsi-work svg { filter: drop-shadow(0 0 3px rgba(95, 163, 119, 0.72)); }
+.wsi-err svg, .wsi-done svg { filter: drop-shadow(0 0 3px rgba(194, 78, 78, 0.72)); }
+.wsi-wait svg { filter: drop-shadow(0 0 3px rgba(169, 131, 73, 0.65)); }
 /* texto de estado nunca brilha; só muda de tom */
 .oc-pstate { background: transparent; box-shadow: none; padding: 0; text-transform: lowercase; }
 .oc-pstate.st-idle, .oc-pstate.st-exited { color: var(--dim); } .oc-pstate.st-done { color: var(--ok-text); } .oc-pstate.st-waiting { color: var(--warn-text); }
@@ -128,21 +128,21 @@ html[data-motion="reduced"] .oc-pbody::after { display: none; }
 .wt-item.on { box-shadow: inset 0 -1px 0 var(--brand); }
 
 /* ---------- sidebar: pixel de estado à esquerda, "!" discreto à direita dos contadores ---------- */
-:root { --ws-claude: #d97757; }
+:root { --ws-claude: #e08060; }
 .oc-side { --ws-ok: #64896c; }
 .wsi { width: 14px; height: 20px; }
 .wsi-pix { display: block; width: 7px; height: 7px; background: var(--led-idle); border-radius: 0; box-shadow: none; transition: background-color .3s ease, box-shadow .3s ease; }
 .wsi-idle .wsi-pix { background: var(--led-idle); }
 .wsi-done .wsi-pix { background: var(--ws-ok); }
-.wsi-done .wsi-pix { box-shadow: 0 0 3px rgba(100, 137, 108, .3); }
-.wsi-wait .wsi-pix { background: var(--led-warn); box-shadow: 0 0 5px 1px rgba(169, 131, 73, .4); }
-.wsi-err .wsi-pix { background: var(--led-err); box-shadow: 0 0 5px 1px rgba(194, 78, 78, .4); }
+.wsi-done .wsi-pix { box-shadow: 0 0 5px rgba(100, 137, 108, 0.43); }
+.wsi-wait .wsi-pix { background: var(--led-warn); box-shadow: 0 0 7px 1px rgba(169, 131, 73, 0.58); }
+.wsi-err .wsi-pix { background: var(--led-err); box-shadow: 0 0 7px 1px rgba(194, 78, 78, 0.58); }
 /* executando: estrela laranja (cor da marca do Claude) girando devagar; os demais estados ficam fixos */
 .wsi-work { --c: var(--ws-claude); width: 16px; }
-.wsi-work svg { filter: drop-shadow(0 0 2px rgba(217, 119, 87, .45)); }
+.wsi-work svg { filter: drop-shadow(0 0 3px rgba(217, 119, 87, 0.65)); }
 html:not([data-motion="reduced"]) .oc-app .wsi-work { animation: none !important; }
 html:not([data-motion="reduced"]) .oc-app .wsi-work svg { animation: ws-spin 7s linear infinite !important; }
-.oc-alert { flex: none; min-width: 12px; text-align: center; font: 700 20px/1 var(--mono); color: #a84e4e; opacity: 1; text-shadow: 0 0 5px rgba(168, 78, 78, .55), 0 0 10px rgba(168, 78, 78, .2); } /* brilho moderado: deixa claro que terminou sem virar neon */
+.oc-alert { flex: none; min-width: 12px; text-align: center; font: 700 20px/1 var(--mono); color: #a84e4e; opacity: 1; text-shadow: 0 0 7px rgba(168, 78, 78, .8), 0 0 13px rgba(168, 78, 78, .3); } /* brilho moderado: deixa claro que terminou sem virar neon */
 html:not([data-motion="reduced"]) .oc-app .oc-alert { animation: ws-pulse 3.2s ease-in-out infinite !important; --lo: .85; --s0: 1; --s1: 1; } /* pulso mais suave e mais lento */
 /* barra recolhida: os contadores somem, então o alerta vira um pixel vermelho no canto do indicador */
 .oc-side.collapsed .oc-env.has-alert .wsi { position: relative; }
@@ -150,12 +150,12 @@ html:not([data-motion="reduced"]) .oc-app .oc-alert { animation: ws-pulse 3.2s e
 .wsi-add { width: 20px; } /* o botão "+" da barra recolhida mantém o tamanho do ícone */
 
 /* ---------- sidebar: linha vermelha fina na base de cada workspace (extensão da linha das abas do topo) ---------- */
-.oc-side .oc-env:not(.oc-env-add):not(.oc-env-edit)::after { content: ''; position: absolute; left: var(--sp-2); right: var(--sp-2); bottom: 0; height: 1px; background: rgba(168, 58, 58, .3); pointer-events: none; transition: background-color var(--dur-ui) ease; }
-.oc-side .oc-env.on:not(.oc-env-add):not(.oc-env-edit)::after { background: rgba(168, 58, 58, .85); } /* selecionado: mais evidente, mesmo tom da linha da aba ativa */
-.oc-side .oc-env:not(.on):hover::after { background: rgba(168, 58, 58, .5); }
+.oc-side .oc-env:not(.oc-env-add):not(.oc-env-edit)::after { content: ''; position: absolute; left: var(--sp-2); right: var(--sp-2); bottom: 0; height: 1px; background: rgba(143, 47, 47, .3); pointer-events: none; transition: background-color var(--dur-ui) ease; }
+.oc-side .oc-env.on:not(.oc-env-add):not(.oc-env-edit)::after { background: rgba(143, 47, 47, .85); } /* selecionado: mais evidente, mesmo tom da linha da aba ativa */
+.oc-side .oc-env:not(.on):hover::after { background: rgba(143, 47, 47, .5); }
 
 /* ---------- terminais: "executando" usa a mesma estrela laranja da sidebar ---------- */
-.oc-pstate .wstar { flex: none; color: var(--ws-claude); filter: drop-shadow(0 0 2px rgba(217, 119, 87, .45)); }
+.oc-pstate .wstar { flex: none; color: var(--ws-claude); filter: drop-shadow(0 0 3px rgba(217, 119, 87, 0.65)); }
 .oc-pstate.st-working { color: var(--ws-claude); }
 html:not([data-motion="reduced"]) .oc-app .oc-pstate .wstar { animation: ws-spin 7s linear infinite !important; }
 
@@ -168,9 +168,9 @@ html:not([data-motion="reduced"]) .oc-app .oc-pstate .wstar { animation: ws-spin
 .mpo-btn { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border: 0; border-radius: 2px; background: transparent; color: var(--dim); font: 400 11.5px var(--mono); cursor: pointer; transition: color var(--dur-ui) ease, background-color var(--dur-ui) ease; }
 .mpo-btn:hover, .mpo-btn[aria-expanded="true"] { background: var(--coal-2); color: var(--strong); }
 .mpo-led { width: 7px; height: 7px; background: var(--led-idle); }
-.mpo-btn.tone-auto .mpo-led { background: var(--ws-claude); box-shadow: 0 0 4px 1px rgba(217, 119, 87, .4); }
-.mpo-btn.tone-warn .mpo-led { background: var(--led-warn); box-shadow: 0 0 5px 1px rgba(169, 131, 73, .45); animation: rt-led 1.8s ease-in-out infinite; }
-.mpo-btn.tone-err .mpo-led { background: var(--led-err); box-shadow: 0 0 5px 1px rgba(194, 78, 78, .45); }
+.mpo-btn.tone-auto .mpo-led { background: var(--ws-claude); box-shadow: 0 0 6px 1px rgba(217, 119, 87, 0.58); }
+.mpo-btn.tone-warn .mpo-led { background: var(--led-warn); box-shadow: 0 0 7px 1px rgba(169, 131, 73, 0.65); animation: rt-led 1.8s ease-in-out infinite; }
+.mpo-btn.tone-err .mpo-led { background: var(--led-err); box-shadow: 0 0 7px 1px rgba(194, 78, 78, 0.65); }
 .mpo-n { min-width: 14px; padding: 0 4px; text-align: center; font-weight: 600; font-size: 11px; border-radius: 2px; }
 .mpo-n.warn { color: #0d0d0d; background: var(--led-warn); } .mpo-n.err { color: #0d0d0d; background: var(--led-err); }
 .mpo-auto { padding: 0 6px; border-radius: 2px; color: #e08a68; box-shadow: inset 0 0 0 1px rgba(217, 119, 87, .55); font-size: 11px; } /* autônomo ligado: sempre sinalizado, em laranja */
@@ -271,3 +271,22 @@ html:not([data-motion="reduced"]) .oc-app .oc-pstate .wstar { animation: ws-spin
   .tbx-g + .tbx-g::before { display: none; } /* em duas linhas o divisor vertical sairia do lugar */
   .tbx-l { display: inline; } .tbx-s { display: none; }
 }
+
+/* ---------- Cores de estado do texto = cores dos ícones ----------
+   executando = laranja da estrela (igual terminais e sidebar) | aguardando = âmbar escuro do LED | falha = vermelho escuro do LED. Só o texto muda de tom (o brilho fica nos pontos). */
+:root { --glow-claude: 0 0 7px 1px rgba(224, 128, 96, .65); }
+.ss-c.has.work { color: var(--ws-claude); } .ss-c.has.warn { color: var(--led-warn); } .ss-c.has.err { color: var(--led-err); }
+.ss-btn.tone-work .ss-led { background: var(--ws-claude); box-shadow: var(--glow-claude); }
+.ss-g.work h3 i { background: var(--ws-claude); box-shadow: 0 0 6px rgba(224, 128, 96, .6); }
+.wt-item.tone-work .wt-dot { background: var(--ws-claude); box-shadow: var(--glow-claude); }
+.tm-l li.st-working .tm-led { background: var(--ws-claude); box-shadow: 0 0 6px 1px rgba(224, 128, 96, .6); }
+.oc-pstate.st-waiting { color: var(--led-warn); } .oc-pstate.st-failed { color: var(--led-err); }
+.tb-c.warn.has, .tb-c.err.has { background: transparent; }
+.tb-c.warn.has { color: var(--led-warn); } .tb-c.err.has { color: var(--led-err); }
+
+/* ---------- Sidebar compacta: cabeçalho, seção WORKSPACES e lista mais próximos (só padding, gap e altura mínima) ---------- */
+.oc-side { padding: var(--sp-2) var(--sp-3); gap: var(--sp-1); }                 /* 12/8 -> 8/12 e gap 8 -> 4 */
+.oc-side-head { min-height: 32px; }                                              /* a altura do logo (32 px), que não muda */
+.oc-side.collapsed .oc-side-head { gap: var(--sp-1); }
+.oc-side-title { min-height: 26px; padding: var(--sp-1) var(--sp-1) 0 var(--sp-2); align-items: center; } /* antes: 12 px acima do título e 4 abaixo */
+.oc-side-foot { padding-top: var(--sp-2); }
