@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import { api, nav } from './api.js';
 import { createActivityTracker } from './activity.js';
 import { createWorkEndTracker, finishedStamps, unseenFinished } from './workspace-nav.js';
+import { paneState } from './env-view.js';
 
 const Ctx = createContext(null);
 export const useStore = () => useContext(Ctx);
@@ -69,7 +70,8 @@ export function StoreProvider({ children }) {
       const d = await api.get('/api/terminals');
       const act = tracker.current.update(d.sessions);
       wsOfRef.current = new Map(d.sessions.map((x) => [x.id, x.workspaceId]));
-      const ends = workEnd.current.update(new Set([...act].map((id) => wsOfRef.current.get(id)).filter(Boolean)));
+      // "Trabalhando" por workspace com a MESMA regra dos indicadores (estado real do agente pelos hooks; sem hooks, a leitura pela saída): só quando NENHUM agente do workspace trabalha mais é que a equipe terminou.
+      const ends = workEnd.current.update(new Set(d.sessions.filter((x) => x.workspaceId && paneState(x, act) === 'working').map((x) => x.workspaceId)));
       setWorkEnds((prev) => (JSON.stringify(prev) === JSON.stringify(ends) ? prev : ends));
       setWorkingIds((prev) => (prev.size === act.size && [...act].every((x) => prev.has(x)) ? prev : act));
       const json = JSON.stringify(d); if (json !== lastT.current) { lastT.current = json; setTerminals(d); }
@@ -104,7 +106,8 @@ export function StoreProvider({ children }) {
   }, [refresh, refreshUsage]);
 
   const activeWsId = data.state?.activeWorkspace?.id ?? null;
-  const stamps = React.useMemo(() => finishedStamps({ sessions: terminals?.sessions ?? [], maestroTasks: maestro?.tasks ?? [], workEnds }), [terminals, maestro, workEnds]);
+  // Terminal que o usuário encerrou (ou que acabou) não conta como "a equipe terminou": só tarefa concluída e o fim do trabalho observado, olhando os terminais vivos.
+  const stamps = React.useMemo(() => finishedStamps({ sessions: (terminals?.sessions ?? []).filter((x) => x.status === 'running'), maestroTasks: maestro?.tasks ?? [], workEnds }), [terminals, maestro, workEnds]);
   stampsRef.current = stamps;
   useEffect(() => { markSeen(activeWsId); }, [activeWsId, markSeen]); // ativar o workspace = ver o que terminou nele até agora (um término posterior volta a avisar)
   const unseenWs = React.useMemo(() => unseenFinished({ stamps, seen, baseline }), [stamps, seen, baseline]);

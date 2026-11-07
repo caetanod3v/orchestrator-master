@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api, nav } from '../api.js';
 import { useStore } from '../store.jsx';
 import { usePrefs } from '../hooks.js';
-import { environments, wsTone } from '../env-view.js';
+import { environments, wsTone, wsAlert } from '../env-view.js';
 import { Icon, WorkStar } from './ui.jsx';
 import AgentsPopover from './ProviderPanel.jsx';
 import { BOX, pixelPaths } from '../brand-mark.mjs';
@@ -30,7 +30,7 @@ function describe(e) {
 
 /**
  * Indicador de estado do workspace (pixel quadrado, à esquerda do nome), agregado dos terminais: cinza = sem atividade, laranja (estrela girando, como a marca do Claude) = executando,
- * verde fixo = concluído, âmbar = aguardando você, vermelho discreto = falha. O alerta "!" fica do outro lado, depois dos contadores (ver `hasAlert`).
+ * verde fixo = concluído, âmbar = aguardando você, vermelho discreto = falha. O alerta "!" fica do outro lado, depois dos contadores (ver `wsAlert`, em env-view.js).
  */
 export function WsIcon({ tone }) {
   return (
@@ -41,9 +41,6 @@ export function WsIcon({ tone }) {
     </span>
   );
 }
-/** "!" à direita: só quando existe a condição de alerta (falha em algum terminal, ou todos os terminais concluídos), a mesma que já definia o estado. */
-export const hasAlert = (tone) => tone === 'err' || tone === 'done';
-
 const MAX_NAME = 80;
 
 /** Campo de edição do nome amigável: Enter confirma, Esc cancela, sair do campo confirma. Só o rótulo muda (pasta e identidade do workspace ficam como estão). */
@@ -70,13 +67,13 @@ function EnvItem({ env, collapsed, editing, onPick, onEdit, onSave, onCancel }) 
   return (
     <li className="oc-envrow">
       <div className="oc-envrow-head">
-        <button type="button" className={`oc-env tone-${tone}${env.active ? ' on' : ''}${hasAlert(tone) ? ' has-alert' : ''}`} onClick={() => onPick(env)} aria-current={env.active ? 'true' : undefined} aria-label={full} title={collapsed ? full : env.renamed ? `${env.path}\nNome original: ${env.original}` : env.path}>
+        <button type="button" className={`oc-env tone-${tone}${env.active ? ' on' : ''}${wsAlert(tone, env.finished) ? ' has-alert' : ''}`} onClick={() => onPick(env)} aria-current={env.active ? 'true' : undefined} aria-label={full} title={collapsed ? full : env.renamed ? `${env.path}\nNome original: ${env.original}` : env.path}>
           <WsIcon tone={tone} />
           <span className="oc-env-name side-label">{env.name}</span>
           <span className="oc-env-badges" aria-hidden="true">
             {attn > 0 && <span className="oc-cnt attn" title={describe(env)}>{attn}</span>}
             {env.running > 0 && <span className="oc-cnt">{env.running}</span>}
-            {hasAlert(tone) && <span className="oc-alert" title={TONE_LABEL[tone]}>!</span>}
+            {wsAlert(tone, env.finished) && <span className="oc-alert" title={tone === 'err' ? TONE_LABEL.err : 'A equipe terminou tudo: o aviso some quando você entrar neste workspace'}>!</span>}
           </span>
         </button>
         {!collapsed && <button type="button" className="oc-iconbtn oc-env-pen" onClick={() => onEdit(env.id)} aria-label={`Renomear o ambiente ${env.name}`} title="Renomear (só o nome exibido)"><Icon name="pencil" size={13} /></button>}

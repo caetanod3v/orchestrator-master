@@ -39,6 +39,12 @@ export function environments({ workspaces = [], sessions = [], activeId = null, 
     });
 }
 
+/**
+ * "!" da sidebar. Aparece (1) quando algum terminal do workspace falhou, ou (2) quando a equipe TERMINOU tudo (nenhum agente trabalhando nem aguardando) e o usuário ainda não viu:
+ * `finished` = término não visto (store: some ao ativar o workspace ou interagir com o squad). Enquanto a equipe trabalha ou espera por você, não há "!" de término.
+ */
+export const wsAlert = (tone, finished = false) => tone === 'err' || (finished === true && (tone === 'done' || tone === 'idle'));
+
 /** Estado do ÍCONE do workspace (agregado dos terminais, só a partir de `environments()`). Prioridade: err (falha) > wait (aguarda você) > work (executando) > done (tudo concluído) > idle. */
 export const wsTone = (e) => (e?.failed > 0 ? 'err' : e?.waiting > 0 ? 'wait' : e?.working > 0 ? 'work' : e?.done > 0 ? 'done' : 'idle');
 
