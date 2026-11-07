@@ -4,16 +4,7 @@ import { useStore } from '../store.jsx';
 import { usePrefs } from '../hooks.js';
 import { environments, wsTone, wsAlert } from '../env-view.js';
 import { Icon, WorkStar } from './ui.jsx';
-import { BOX, pixelPaths } from '../brand-mark.mjs';
-
-/** Marca: maestro em pixel art (fonte única em brand-mark.mjs, a mesma do favicon e do ícone do app). O azul escuro do bastão é fixo: faz parte da marca, não do tema. */
-const MARK = pixelPaths();
-export const Logo = ({ size = 32 }) => (
-  <svg width={size} height={size} viewBox={`0 0 ${BOX} ${BOX}`} fill="none" shapeRendering="crispEdges" aria-hidden="true" focusable="false">
-    <rect width={BOX} height={BOX} rx="4.4" fill="#000" />
-    <path d={MARK.white} fill="#fff" /><path d={MARK.accent} fill="#1d4ed8" />
-  </svg>
-);
+import { MascotLogo } from './MascotLogo.jsx';
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const TONE_LABEL = { idle: 'sem atividade', work: 'executando', wait: 'aguardando você', done: 'concluído', err: 'com falha' };
@@ -90,6 +81,7 @@ export default function Sidebar({ modal = false, collapsed = false, onToggle, on
   const sessions = terminals?.sessions ?? [];
   const activeId = state?.activeWorkspace?.id ?? null;
   const envs = useMemo(() => environments({ workspaces, sessions, activeId, workingIds, maestroTasks: maestro?.tasks ?? [], finished: unseenWs }), [workspaces, sessions, activeId, workingIds, maestro, unseenWs]);
+  const anyWorking = envs.some((e) => e.working > 0); // o Elmo em Chamas (marca) esquenta quando há tarefa rodando em qualquer workspace
 
   useEffect(() => {
     if (!modal) return undefined;
@@ -122,7 +114,7 @@ export default function Sidebar({ modal = false, collapsed = false, onToggle, on
   return (
     <aside id="nav-drawer" ref={box} className={cls} {...(modal ? { role: 'dialog', 'aria-modal': true, 'aria-label': 'Ambientes de trabalho' } : { 'aria-label': 'Ambientes de trabalho' })}>
       <div className="oc-side-head">
-        <span className="oc-brand" aria-label="FORGE"><Logo /><span className="oc-brand-name side-label">FORGE</span></span>
+        <span className="oc-brand" aria-label="FORGE"><MascotLogo working={anyWorking} /><span className="oc-brand-name side-label">FORGE</span></span>
         {modal
           ? <button type="button" className="oc-iconbtn" onClick={onClose} aria-label="Fechar a lista de ambientes"><Icon name="close" size={16} /></button>
           : <button type="button" className="oc-iconbtn oc-collapse" onClick={onToggle} aria-label={collapsed ? 'Expandir a barra lateral' : 'Recolher a barra lateral'} aria-expanded={!collapsed} title={collapsed ? 'Expandir' : 'Recolher'}><Icon name="panel" size={17} /></button>}

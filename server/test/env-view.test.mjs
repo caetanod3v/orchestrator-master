@@ -78,11 +78,11 @@ test('providerSummary: contagens vêm só das sessões reais; encerrado não é 
   assert.equal(extra.find((r) => r.id === 'outro').total, 1, 'provider desconhecido aparece com a contagem real');
 });
 
-test('marca: grade recortada cabe na caixa de 16 (escala inteira em 16/32/48/64/128/256 px), com o desenho original', () => {
-  assert.equal(BOX, 16); assert.ok(GRID.every((r) => r.length === GRID[0].length));
+test('marca: o Elmo em Chamas, capacete de cúpula redonda com detalhes de armadura (14x14) cabe na caixa de 16 (escala inteira em 16/32/48/64/128/256 px), com o desenho esperado', () => {
+  assert.equal(BOX, 16); assert.equal(GRID.length, 14); assert.ok(GRID.every((r) => r.length === 14));
   assert.ok(GRID[0].length + PAD * 2 <= BOX && GRID.length + PAD * 2 <= BOX, 'cabe com margem');
   const count = (k) => GRID.flatMap((r) => [...r]).filter((ch) => ch === k).length;
-  assert.deepEqual([count('X'), count('C')], [74, 4], 'mesmos pixels do desenho original: cabeça branca e bastão azul');
+  assert.deepEqual('KDGHLREOY'.split('').map(count), [10, 28, 11, 15, 8, 5, 14, 10, 8], 'encaixe dos olhos e ventilação, sombra, chapa, realce, rebites e brilho, fogo, gema e olhos ao rubro do ícone estático');
 });
 
 test('pendingByPane: só tarefas pendentes, agrupadas pelo pane de destino; some quando a decisão é tomada', () => {
