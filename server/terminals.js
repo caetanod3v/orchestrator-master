@@ -47,12 +47,14 @@ let ptyCache;
 const loadPty = () => { if (ptyCache !== undefined) return ptyCache; try { ptyCache = createRequire(import.meta.url)('node-pty'); } catch { ptyCache = null; } return ptyCache; };
 
 /** `ptyLib`, `resolveCommand`, `track` e `worktrees` só são injetados nos testes/boot; o padrão é o node-pty real e o Claude Code do PATH. */
-export function createTerminalManager({ db, ptyLib = null, provider = getProvider(), loadouts = null, resolveCommand = provider.resolve, track = null, worktrees = null, maxSessions = MAX_SESSIONS, now = store.now, uid = store.uid, killTree = killTreeSync, waitFor = waitGone, usage = null, newSessionId = randomUUID, mcp = null, inspectConfig = inspectProjectConfig, persist = null, isChildAlive = null, transcriptExists = null, pidIsAlive = pidAlive, maxRecords = MAX_RECORDS, sweepMs = SWEEP_MS, setTimer = setInterval, clearTimer = clearInterval, onEnd = null } = {}) {
+export function createTerminalManager({ db, ptyLib = null, provider = getProvider(), loadouts = null, agentStatus = null, resolveCommand = provider.resolve, track = null, worktrees = null, maxSessions = MAX_SESSIONS, now = store.now, uid = store.uid, killTree = killTreeSync, waitFor = waitGone, usage = null, newSessionId = randomUUID, mcp = null, inspectConfig = inspectProjectConfig, persist = null, isChildAlive = null, transcriptExists = null, pidIsAlive = pidAlive, maxRecords = MAX_RECORDS, sweepMs = SWEEP_MS, setTimer = setInterval, clearTimer = clearInterval, onEnd = null } = {}) {
   const sessions = new Map();
   const allSubs = new Set(); // UMA conexão SSE leva a saída de TODOS os terminais: o navegador só abre ~6 conexões por origem; com uma por pane, 7+ terminais travavam a tela e até o botão de fechar
   const live = () => [...sessions.values()].filter((s) => s.status === 'running');
   const describe = (s) => ({ id: s.id, role: s.role, provider: s.provider ?? provider.id, roleLabel: ROLES[s.role]?.label ?? s.role, color: ROLES[s.role]?.color ?? null, title: s.title, workspaceId: s.workspaceId, topicId: s.topicId ?? null, cwd: s.cwd, worktreeId: s.worktreeId, recordId: s.recordId ?? null,
-    usage: safeUsage(s), status: s.status, pid: s.pid, cols: s.cols, rows: s.rows, startedAt: s.startedAt, endedAt: s.endedAt, exitCode: s.exitCode, lastOutputAt: s.lastOutputAt, bytes: s.bytes });
+    usage: safeUsage(s), status: s.status, pid: s.pid, cols: s.cols, rows: s.rows, startedAt: s.startedAt, endedAt: s.endedAt, exitCode: s.exitCode, lastOutputAt: s.lastOutputAt, bytes: s.bytes, agent: s.status === 'running' ? safeAgent(s) : null });
+  /** Estado real do agente (hooks do Claude Code, ver agent-status.js): só vale para esta execução (eventos anteriores ao início do terminal são sobra). Sem hooks = null e a tela cai na leitura pela saída. */
+  const safeAgent = (s) => { try { return agentStatus?.read(s.claudeSessionId, { since: s.startedAt }) ?? null; } catch { return null; } };
   /** tokens/custo do pane, lidos do transcript do Claude Code (null sem leitor, sem arquivo ainda ou em qualquer falha: é informativo, nunca derruba a listagem) */
   const safeUsage = (s) => { try { return usage?.read(s.claudeSessionId) ?? null; } catch { return null; } };
   const revokeMcp = (id) => { try { mcp?.revoke?.(id); } catch { /* informativo */ } };

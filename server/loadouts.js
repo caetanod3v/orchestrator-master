@@ -162,10 +162,11 @@ export function skillsFor(role, settings) {
 }
 
 /** Arquivos do plugin de sessão: { caminho relativo -> conteúdo }. Só ids do catálogo; nada vem do cliente. */
-export function pluginFiles(role, skillIds) {
+export function pluginFiles(role, skillIds, hooks = null) {
   const files = {
     '.claude-plugin/plugin.json': `${JSON.stringify({ name: PLUGIN_NAME, version: '1.0.0', author: { name: 'FORGE' }, description: `Skills do papel "${role}" no squad do FORGE (gerado automaticamente).` }, null, 2)}\n`,
   };
+  if (hooks) files['hooks/hooks.json'] = `${JSON.stringify(hooks, null, 2)}\n`; // estado real do agente (agent-status.js)
   for (const id of skillIds) {
     const s = SKILLS[id];
     files[`skills/${id}/SKILL.md`] = `---\nname: ${s.name}\ndescription: ${JSON.stringify(s.description)}\n---\n\n${s.body}\n`;
@@ -177,9 +178,9 @@ export function pluginFiles(role, skillIds) {
  * Grava o plugin do papel e devolve a pasta (idempotente: o nome leva o hash do conteúdo, então mudar uma skill ou a seleção gera uma pasta nova e as sessões
  * abertas continuam lendo a antiga). Escrita em pasta temporária + rename: nunca fica um plugin pela metade. Devolve null se o papel não tem skills.
  */
-export function materialize(baseDir, role, skillIds) {
-  if (!isLoadoutRole(role) || !skillIds.length) return null;
-  const files = pluginFiles(role, skillIds);
+export function materialize(baseDir, role, skillIds, hooks = null) {
+  if (!isLoadoutRole(role) || (!skillIds.length && !hooks)) return null;
+  const files = pluginFiles(role, skillIds, hooks);
   const hash = createHash('sha256').update(JSON.stringify(Object.entries(files))).digest('hex').slice(0, 12);
   const dir = path.join(baseDir, `${role}-${hash}`);
   if (fs.existsSync(path.join(dir, '.claude-plugin', 'plugin.json'))) return dir;
@@ -210,11 +211,11 @@ export function loadoutView(settings) {
 }
 
 /** `dir`: pasta dos plugins gerados (fora do workspace do usuário). */
-export function createLoadouts({ db, dir }) {
+export function createLoadouts({ db, dir, hooks = null }) {
   return {
     /** Pasta do plugin do papel, ou null (papel sem skills ou falha ao gravar: o terminal abre igual, só sem o pacote). */
     pluginDirFor(role) {
-      try { return materialize(dir, role, skillsFor(role, db.settings)); } catch { return null; }
+      try { return materialize(dir, role, skillsFor(role, db.settings), hooks); } catch { return null; }
     },
     view: () => loadoutView(db.settings),
     /** Define as skills do papel (ids do catálogo) ou, com `skills === null`, volta ao padrão. Falha ao gravar desfaz tudo. */

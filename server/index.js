@@ -12,6 +12,7 @@ import { validateDir, setupWorkspaceRemoval, setupWorkspaceRename } from './work
 import { topicsState, openAndActivate, snapshotTabs, restoreTabs, setupWorkspaceTabs, setupTopics } from './topics.js';
 import { setupUiSettings } from './ui-settings.js';
 import { createLoadouts, setupLoadouts } from './loadouts.js';
+import { createAgentStatus, hooksJson } from './agent-status.js';
 import { setupLayouts } from './layouts.js';
 import { createConversationStore, setupConversations, startConversationCapture } from './conversations.js';
 import { setupExecution, blockedReason } from './execution.js';
@@ -79,9 +80,12 @@ const historyDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'history
 if (!process.env.ORCH_DATA_DIR) for (const name of ['history', 'loadouts']) { const r = migrateLegacyDir(path.join(legacyDevHome, name), path.join(devHome, name)); if (r.status === 'migrated') console.log(`[forge] ${name} copiado de ${legacyDevHome} (a pasta original foi mantida)`); else if (r.status === 'error') console.error(`[forge] não foi possível copiar ${name} da pasta anterior: ${r.error}`); }
 // Skills por papel (loadouts.js): plugins de sessão gerados numa pasta própria, FORA do workspace do usuário (mesmo critério do mcpDir/historyDir).
 const loadoutsDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'loadouts') : path.join(devHome, 'loadouts');
-const loadouts = createLoadouts({ db, dir: loadoutsDir });
+// Estado real do agente (running/waiting/completed/error): hooks do Claude Code gravam eventos aqui, fora do workspace (agent-status.js). Sem caminho seguro, os hooks não são registrados e a tela usa a leitura pela saída.
+const statusDir = process.env.ORCH_DATA_DIR ? path.join(store.dataDir, 'agent-status') : path.join(devHome, 'agent-status');
+const agentStatus = createAgentStatus({ dir: statusDir });
+const loadouts = createLoadouts({ db, dir: loadoutsDir, hooks: hooksJson({ node: process.execPath, script: fileURLToPath(new URL('./agent-status-hook.mjs', import.meta.url)), dir: statusDir }) });
 const conversations = createConversationStore({ dir: historyDir }); // histórico de conversas próprio, por workspace (texto das trocas; ver conversations.js)
-const terminals = createTerminalManager({ db, loadouts, onEnd: (rec) => { if (db.workspaces.some((w) => w.id === rec.workspaceId)) conversations.sync(rec); }, track: childRegistry.track, worktrees, mcp: maestro, persist: store.saveOrThrow, isChildAlive: (terminalId) => childRegistry.pending().some((r) => r && r.kind === 'terminal' && r.terminalId === terminalId && pidAlive(r.pid)), usage: createUsageReader({ pricesFile: path.join(store.dataDir, 'pricing.json') }) }); // terminais interativos (PTY) do Claude Code: um processo por pane, em paralelo
+const terminals = createTerminalManager({ db, loadouts, agentStatus, onEnd: (rec) => { if (db.workspaces.some((w) => w.id === rec.workspaceId)) conversations.sync(rec); }, track: childRegistry.track, worktrees, mcp: maestro, persist: store.saveOrThrow, isChildAlive: (terminalId) => childRegistry.pending().some((r) => r && r.kind === 'terminal' && r.terminalId === terminalId && pidAlive(r.pid)), usage: createUsageReader({ pricesFile: path.join(store.dataDir, 'pricing.json') }) }); // terminais interativos (PTY) do Claude Code: um processo por pane, em paralelo
 let worktreeRecovery = { settled: [], inconsistent: [], unregistered: [], unverified: [] }; // E3: preenchido logo DEPOIS do reclaim dos processos filhos (abaixo)
 const app = express();
 // Host válido em toda a /api, Origin permitido quando enviado e OBRIGATÓRIO em POST/PUT/PATCH/DELETE (CSRF, DNS rebinding e chamadas locais sem Origin; ver origin-guard.js).
