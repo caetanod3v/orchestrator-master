@@ -97,4 +97,6 @@ export { cycleApprovalPending } from '../op-state.js';
 export const Scan = () => <span className="oc-scan" aria-hidden="true"><i /><i /><i /></span>;
 /** Ícone de agente (pixel art) da sidebar: herda a cor do texto (currentColor), que a linha define pelo estado. Decorativo. */
 export const AgentMark = ({ size = 16 }) => <svg className="tp-mark" width={size} height={size} viewBox={`0 0 ${AGENT_SIZE} ${AGENT_SIZE}`} fill="currentColor" shapeRendering="crispEdges" aria-hidden="true" focusable="false"><path d={AGENT_D} /></svg>;
+/** Estrela de "executando" (laranja da marca do Claude, gira devagar): o mesmo ícone na sidebar e nos terminais. */
+export const WorkStar = ({ size = 16 }) => <svg className="wstar" width={size} height={size} viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true" focusable="false"><path d="M9 1.8v14.4M1.8 9h14.4M3.9 3.9l10.2 10.2M14.1 3.9L3.9 14.1" /></svg>;
 export const Equalizer = () => <span className="oc-eq" aria-hidden="true"><i /><i /><i /></span>;

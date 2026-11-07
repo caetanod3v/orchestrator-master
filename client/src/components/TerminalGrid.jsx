@@ -7,11 +7,12 @@ import { useStore } from '../store.jsx';
 import { usePrefs, useLayouts } from '../hooks.js';
 import { orderSessions, mergeOrder, sameList, EMPTY as EMPTY_LAYOUT } from '../layout-state.js';
 import { historyRows } from '../session-history.js';
-import { Btn, Icon, Equalizer } from './ui.jsx';
+import { Btn, Icon, WorkStar } from './ui.jsx';
 import { paneUsage, squadUsage } from '../usage-view.js';
 import { terminalWorktrees } from '../worktree-view.js';
 import { createTerminalStream } from '../terminal-stream.js';
-import { paneState, pendingByPane, paneName, gridShape, evenTracks, dragTracks, dividerAt } from '../env-view.js';
+import { paneState, pendingByPane, paneName, shapeFor, focusPlacement, layoutModeId, LAYOUT_MODES, evenTracks, dragTracks, dividerAt } from '../env-view.js';
+import { maestroSummary, timelineRows, collapsedLine, TASK_LABEL } from '../maestro-view.js';
 import WorktreePanel from './WorktreePanel.jsx';
 import AgentsPopover from './ProviderPanel.jsx';
 import SessionHistory from './SessionHistory.jsx';
@@ -23,12 +24,12 @@ export const SQUADS = [
   { id: 'full', label: 'Squad de 6', roles: ['maestro', 'scout', 'builder', 'builder', 'builder', 'reviewer'] },
 ];
 const MAX_CHUNK = 60_000; // o servidor aceita até 64 KB por entrada
-const THEME = { background: '#000000', foreground: '#d4d4d8', cursor: '#ff6a2b', cursorAccent: '#000000', selectionBackground: 'rgba(255, 106, 43, .28)' };
-const STATE_LABEL = { working: 'trabalhando', idle: 'ocioso', exited: 'encerrado', failed: 'falhou', boot: 'iniciando' };
+const THEME = { background: '#090909', foreground: '#d2d2d2', cursor: '#c94a4a', cursorAccent: '#090909', selectionBackground: 'rgba(168, 58, 58, .35)', red: '#b84646', brightRed: '#c94a4a', green: '#5fa377', brightGreen: '#7fb592', yellow: '#92713e', brightYellow: '#c9a46a' };
+const STATE_LABEL = { working: 'executando', idle: 'ocioso', done: 'concluído', waiting: 'aguardando', exited: 'encerrado', failed: 'falhou', boot: 'iniciando' };
 const shortPath = (p) => { const parts = String(p ?? '').split(/[\\/]+/).filter(Boolean); return parts.length > 2 ? `…/${parts.slice(-2).join('/')}` : parts.join('/') || String(p ?? ''); };
 
 /** Um pane = um terminal xterm ligado ao PTY do servidor: saída por SSE, entrada e tamanho por POST (nunca WebSocket: passa pela checagem de Host/Origin). */
-function TerminalPane({ session, role, state, waiting, maximized, fontSize, stream, onClose, onMaximize }) {
+function TerminalPane({ session, role, state, waiting, maximized, fontSize, stream, onClose, onMaximize, onFocus }) {
   const { noteInteraction } = useStore();
   const hostRef = useRef(null), termRef = useRef(null), fitRef = useRef(null);
   const id = session.id, running = session.status === 'running';
@@ -85,7 +86,7 @@ function TerminalPane({ session, role, state, waiting, maximized, fontSize, stre
   return (
     <section className={`oc-pane st-${state}${waiting?.length ? ' has-wait' : ''}${maximized ? ' max' : ''}`} style={{ '--role': role?.color || 'var(--brand)' }} aria-label={`Terminal ${session.title}, ${label}${waiting?.length ? ', aguardando a sua decisão' : ''}`} onMouseDownCapture={() => noteInteraction(id)} onFocusCapture={() => noteInteraction(id)} onBlurCapture={() => noteInteraction(id)}>
       <header className="oc-ph">
-        <span className={`oc-pstate st-${shown}`} role="status"><i className={`oc-pdot st-${shown}`} aria-hidden="true" />{shown === 'working' && <Equalizer />}{label}</span>
+        <span className={`oc-pstate st-${shown}`} role="status">{shown === 'working' ? <WorkStar size={13} /> : <i className={`oc-pdot st-${shown}`} aria-hidden="true" />}{label}</span>
         {nm.role && <b className="oc-prole">{nm.role}</b>}
         <b className={`oc-ptitle${nm.role ? ' sub' : ''}`} title={session.title}>{nm.name}</b>
         {waiting?.length > 0 && <span className="oc-pwait" role="status" title={waitTitle}><Icon name="clock" size={12} /><span className="oc-pwait-t">{waiting.length > 1 ? `${waiting.length} tarefas aguardando você` : waitText ? `Aguardando você: ${waitText}` : 'Aguardando você'}</span></span>}
@@ -93,6 +94,7 @@ function TerminalPane({ session, role, state, waiting, maximized, fontSize, stre
         <span className="oc-ptag" title="Provider deste terminal">Claude Code</span>
         {session.worktreeId && <span className="oc-ptag wt" title="Roda num worktree próprio">worktree</span>}
         {hasUse && <span className="oc-pusage" title={use.title}><span className="sr">Consumo: </span>{use.tokens} tok<span aria-hidden="true"> · </span><span className="sr">custo </span>{use.cost}</span>}
+        {onFocus && <button type="button" className="oc-pbtn" onClick={onFocus} aria-label="Colocar este terminal em foco" title="Colocar em foco"><Icon name="fit" size={14} /></button>}
         <button type="button" className="oc-pbtn" onClick={onMaximize} aria-label={maximized ? 'Restaurar o terminal' : 'Ampliar o terminal'} title={maximized ? 'Restaurar' : 'Ampliar'}><Icon name={maximized ? 'restore' : 'fit'} size={14} /></button>
         <button type="button" className="oc-pbtn close" onClick={onClose} aria-label={running ? 'Encerrar o terminal' : 'Remover o terminal'} title={running ? 'Encerrar' : 'Remover'}><Icon name="close" size={14} /></button>
       </header>
@@ -123,11 +125,15 @@ function Gutter({ axis, index, tracks, onTracks, gridRef, style, label }) {
 }
 
 
-/** Tarefas que o maestro repassa aos panes: por padrão cada uma espera a sua aprovação; o modo autônomo é opt-in e fica sempre visível. */
+/**
+ * Maestro: faixa compacta. Recolhida é uma linha (estado do modo autônomo + resumo); decisões pendentes ficam sempre visíveis porque exigem o usuário.
+ * A rotina (entregue, concluída, recusada, expirada) vai para uma timeline curta que só aparece ao expandir. O modo autônomo é opt-in e fica sempre visível.
+ */
 function MaestroPanel({ data, onChange, notify }) {
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
   const run = async (fn) => { setBusy(true); try { onChange(await fn()); } catch (e) { notify(e.message, 'error'); } finally { setBusy(false); } };
-  const tasks = data.tasks, pending = tasks.filter((t) => t.status === 'pending');
+  const tasks = data.tasks, pending = tasks.filter((t) => t.status === 'pending'), sum = maestroSummary(tasks), rows = useMemo(() => timelineRows(tasks, 20), [tasks]);
   const toggle = (e) => {
     const on = e.target.checked;
     const aviso = ['Ligar o maestro autônomo?', '', `As tarefas que o maestro enviar serão digitadas nos outros terminais SEM pedir a sua aprovação (até ${data.autoPerMinute} por minuto). O Enter enviado junto também confirma qualquer pergunta que o terminal de destino esteja mostrando (ex.: um pedido de permissão). Cada agente age com as suas permissões. O modo volta a desligado quando o servidor reinicia.`].join(String.fromCharCode(10));
@@ -135,19 +141,24 @@ function MaestroPanel({ data, onChange, notify }) {
     run(() => api.post('/api/maestro/autonomy', { enabled: on }));
   };
   return (
-    <section className={`mp ${data.autonomous ? 'mp-auto' : ''}`} aria-label="Maestro">
+    <section className={`mp${sum.attention ? ' mp-attn' : ''}`} aria-label="Maestro">
       <div className="mp-head">
-        <b>Maestro</b>
+        <button type="button" className="mp-fold" onClick={() => setOpen(!open)} aria-expanded={open} aria-controls="mp-timeline" title={open ? 'Recolher o histórico do Maestro' : 'Ver o histórico do Maestro'}>
+          <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} /><b>Maestro</b>
+        </button>
         <label className="tg-chk" title="Desligado: toda tarefa do maestro espera a sua aprovação. Ligado: é entregue na hora, com limite por minuto."><input type="checkbox" checked={data.autonomous} disabled={busy} onChange={toggle} /> Maestro autônomo</label>
         {data.autonomous && <span className="mp-warn" role="status">Ligado: tarefas são entregues sem aprovação</span>}
-        <span className="dim small">{pending.length ? `${pending.length} aguardando você` : 'nenhuma tarefa aguardando'}</span>
+        <span className="dim small mp-sum">{collapsedLine(tasks, data.autonomous)}</span>
       </div>
-      {pending.length > 0 && <p className="dim small mp-note">Confira o terminal de destino antes de aprovar: o Enter enviado com a tarefa também confirma qualquer pergunta que ele esteja mostrando.</p>}
       {pending.length > 0 && <ul className="mp-list" aria-label="Tarefas aguardando aprovação">{pending.map((t) => (
-        <li key={t.id} className="mp-item">
-          <div className="mp-txt"><b>Para {t.toTitle}</b> <span className="dim small">({t.id})</span>{t.note && <span className="dim small"> · {t.note}</span>}<div className="mp-task">{t.text}</div></div>
+        <li key={t.id} className="mp-item" title="Confira o terminal de destino antes de aprovar: o Enter enviado com a tarefa também confirma qualquer pergunta que ele esteja mostrando.">
+          <div className="mp-txt"><b>Para {t.toTitle}</b>{t.note && <span className="dim small"> · {t.note}</span>}<div className="mp-task">{t.text}</div></div>
           <div className="mp-act"><Btn kind="primary" disabled={busy} onClick={() => run(() => api.post(`/api/maestro/tasks/${t.id}/approve`))}>Aprovar e enviar</Btn><Btn disabled={busy} onClick={() => run(() => api.post(`/api/maestro/tasks/${t.id}/reject`))}>Recusar</Btn></div>
         </li>))}</ul>}
+      {open && <ol id="mp-timeline" className="mp-tl" aria-label="Linha do tempo do Maestro">
+        {rows.length === 0 ? <li className="dim small">Nenhum evento ainda.</li> : rows.map((r) => (
+          <li key={r.id} className={r.status === 'failed' ? 'bad' : ''} title={r.text}><time className="mono dim">{r.at ? new Date(r.at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '--:--'}</time><span className={`mp-st mp-st-${r.status}`}>{TASK_LABEL[r.status] || r.status}</span><b>{r.toTitle}</b><span className="mp-clip">{r.text}</span></li>))}
+      </ol>}
     </section>
   );
 }
@@ -159,10 +170,13 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
   const [layouts, layoutActions, layoutsReady] = useLayouts(); // layout por workspace (ordem, ampliado, trilhas), no servidor
   const [restorable, setRestorable] = useState(0); // sessões deste workspace que estavam abertas e podem voltar
   const [histOpen, setHistOpen] = useState(false); // diálogo do histórico de sessões (retomar/fork)
+  const [modes, setModes] = useState(() => { try { return JSON.parse(localStorage.getItem('forge.layoutMode') || '{}') || {}; } catch { return {}; } }); // modo da grade por workspace: conveniência desta tela (não vai ao servidor)
+  const [focusBy, setFocusBy] = useState({}); // workspaceId -> id do terminal em foco (modo Foco)
   const ws = state?.activeWorkspace;
   const stream = useMemo(() => createTerminalStream(), []); // uma conexão SSE para todos os terminais
   useEffect(() => () => stream.close(), [stream]);
   const waitingBy = useMemo(() => pendingByPane(maestro?.tasks), [maestro]);
+  const pendingIds = useMemo(() => new Set(waitingBy.keys()), [waitingBy]);
   const wtCount = terminalWorktrees(state?.worktrees?.items).length;
 
   const roles = terminals?.roles ?? [], byRole = Object.fromEntries(roles.map((r) => [r.id, r]));
@@ -179,10 +193,14 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
   const liveMine = mine.filter((s) => s.status === 'running').length;
   const room = (terminals?.maxSessions ?? 8) - live;
   const total = squadUsage(mine);
+  const mode = layoutModeId(ws && modes[ws.id]);
+  const setMode = (m) => { const next = { ...modes, [ws.id]: m }; setModes(next); try { localStorage.setItem('forge.layoutMode', JSON.stringify(next)); } catch { /* sem armazenamento: vale só nesta sessão */ } };
   const maxId = L.maximized ? (mine.find((s) => s.recordId === L.maximized)?.id ?? null) : null;
 
   // layout da grade: trilhas por formato (1x1, 2x1, 2x2, 3x2…); ao mudar o número de terminais volta a divisões iguais
-  const shape = maxId ? gridShape(1) : gridShape(mine.length);
+  const focusIdx = Math.max(0, mine.findIndex((x) => x.id === (ws && focusBy[ws.id])));
+  const focusPlan = mode === 'focus' && !maxId ? focusPlacement(mine.length, focusIdx) : null;
+  const shape = maxId || focusPlan ? shapeFor('auto', 1) : shapeFor(mode, mine.length);
   const key = `${shape.cols}x${shape.rows}`;
   const baseLayout = useMemo(() => ({ cols: evenTracks(shape.cols), rows: evenTracks(shape.rows) }), [key]); // eslint-disable-line react-hooks/exhaustive-deps
   const saved = L.grids[key]; // trilhas salvas POR WORKSPACE e por formato; só valem se baterem com o formato atual
@@ -216,8 +234,15 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
     if (list.length > 1) notify(`Abrindo ${list.length} terminais; o Claude Code leva alguns segundos para iniciar em cada um.`);
     try {
       // em paralelo: cada terminal é um processo próprio; as falhas são individuais. Os do squad levam o número dele no título (ex.: Construtor S1)
-      const spawn = (r, i, ack) => api.post('/api/terminals', { role: r, isolate, workspaceId: ws.id, topicId, ...(ack ? { acknowledgeProjectConfig: true } : {}), ...(n ? { title: `${byRole[r]?.label ?? r} S${n}.${i + 1}` } : {}) });
-      const rs = await Promise.allSettled(list.map((r, i) => spawn(r, i, false)));
+      const spawn = (r, i, ack, squadId) => api.post('/api/terminals', { role: r, isolate, ...(squadId ? { squadId } : {}), workspaceId: ws.id, topicId, ...(ack ? { acknowledgeProjectConfig: true } : {}), ...(n ? { title: `${byRole[r]?.label ?? r} S${n}.${i + 1}` } : {}) });
+      // Worktree: um squad inteiro compartilha UM worktree. O 1º terminal o cria; os outros entram nele (esperam o 1º para saber o id). Terminal avulso continua com o seu.
+      let rs;
+      if (isolate && squad && list.length > 1) {
+        const head = await Promise.allSettled([spawn(list[0], 0, false)]);
+        const squadId = head[0].status === 'fulfilled' ? head[0].value?.session?.squadId : null;
+        const tail = squadId ? await Promise.allSettled(list.slice(1).map((r, i) => spawn(r, i + 1, false, squadId))) : list.slice(1).map(() => ({ status: 'rejected', reason: head[0].reason ?? new Error('o worktree do squad não foi criado') }));
+        rs = [...head, ...tail];
+      } else rs = await Promise.allSettled(list.map((r, i) => spawn(r, i, false)));
       // M3: configuração executável do projeto não revisada no Git: o servidor recusa e só abre com a confirmação explícita (uma pergunta para o lote inteiro)
       const held = rs.map((x, i) => (x.status === 'rejected' && x.reason?.code === 'project_config_unreviewed' ? i : -1)).filter((i) => i >= 0);
       if (held.length && window.confirm(`${rs[held[0]].reason.message}\n\nAbrir ${held.length === 1 ? 'o terminal' : `os ${held.length} terminais`} mesmo assim?`)) {
@@ -244,14 +269,15 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
   };
 
   const cell = (s, i, visible) => {
-    const span = visible && !maxId && shape.spanLast && i === mine.length - 1;
+    const span = visible && !maxId && !focusPlan && shape.spanLast && i === mine.length - 1;
+    const at = visible && focusPlan ? focusPlan.cells[i] : null, strip = !!at && at.col === 2;
     return (
-      <div key={s.id} className={`oc-cell${maxId === s.id ? ' is-max' : ''}`} hidden={!visible || (!!maxId && maxId !== s.id)} style={{ ...(span ? { gridColumn: '1 / -1' } : {}), order: i }}>
-        <TerminalPane session={s} stream={stream} role={byRole[s.role]} state={paneState(s, workingIds)} waiting={waitingBy.get(s.id)} fontSize={prefs.fontSize} maximized={maxId === s.id} onClose={() => close(s)} onMaximize={() => layoutActions.setMaximized(ws.id, maxId === s.id ? null : (s.recordId ?? null))} />
+      <div key={s.id} className={`oc-cell${maxId === s.id ? ' is-max' : ''}${strip ? ' is-strip' : ''}`} hidden={!visible || (!!maxId && maxId !== s.id)} style={{ ...(span ? { gridColumn: '1 / -1' } : {}), ...(at ? { gridColumn: at.col, gridRow: at.row } : {}), order: i }}>
+        <TerminalPane session={s} stream={stream} role={byRole[s.role]} state={paneState(s, workingIds, pendingIds)} waiting={waitingBy.get(s.id)} fontSize={prefs.fontSize} maximized={maxId === s.id} onClose={() => close(s)} onMaximize={() => layoutActions.setMaximized(ws.id, maxId === s.id ? null : (s.recordId ?? null))} onFocus={strip ? () => setFocusBy({ ...focusBy, [ws.id]: s.id }) : undefined} />
       </div>
     );
   };
-  const showGutters = !maxId && mine.length > 1;
+  const showGutters = !maxId && !focusPlan && mine.length > 1;
   const vBottom = shape.spanLast ? `${100 - dividerAt(cur.rows, cur.rows.length - 2)}%` : 0;
 
   return (
@@ -262,18 +288,21 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
         </button>
         {ws && <>
           <div className="oc-grp" role="group" aria-label="Squads">
-            {SQUADS.map((q) => <Btn key={q.id} disabled={busy || q.roles.length > room} onClick={() => open(q.roles, { squad: true })} title={q.roles.map((r) => byRole[r]?.label ?? r).join(', ')}>{q.label}</Btn>)}
+            {SQUADS.map((q) => <Btn key={q.id} kind="quiet" disabled={busy || q.roles.length > room} onClick={() => open(q.roles, { squad: true })} title={q.roles.map((r) => byRole[r]?.label ?? r).join(', ')}>{q.label}</Btn>)}
           </div>
           <div className="oc-grp" role="group" aria-label="Novo terminal">
             <label className="sr" htmlFor="tg-role">Papel do novo terminal</label>
             <select id="tg-role" className="oc-sel" value={role} onChange={(e) => setPref('role', e.target.value)}>{roles.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}</select>
-            <Btn kind="primary" disabled={busy || room < 1} onClick={() => open([role])}><Icon name="plus" size={14} /> Terminal</Btn>
+            <Btn disabled={busy || room < 1} onClick={() => open([role])} title="Abrir um terminal com este papel"><Icon name="plus" size={12} /> Terminal</Btn>
           </div>
         </>}
         <div className="oc-right">
         {ws && <>
+          {mine.length > 1 && <div className="oc-seg" role="radiogroup" aria-label="Organização dos terminais">
+            {LAYOUT_MODES.map((m) => <button key={m.id} type="button" role="radio" aria-checked={mode === m.id} className={mode === m.id ? 'on' : ''} onClick={() => setMode(m.id)} title={{ auto: 'Grade automática', cols: 'Todos lado a lado', rows: 'Todos empilhados', focus: 'Um terminal grande e os outros numa tira' }[m.id]}>{m.label}</button>)}
+          </div>}
           <Btn kind="quiet" onClick={() => setHistOpen(true)} title="Sessões anteriores deste workspace: retomar ou fazer fork"><Icon name="clock" size={14} /> Histórico</Btn>
-          <label className="oc-iso" title="Cada terminal trabalha num git worktree próprio, sem pisar nos arquivos dos outros (exige repositório Git).">
+          <label className="oc-iso" title="Terminal avulso trabalha num git worktree próprio; um squad inteiro compartilha UM worktree (isolado do projeto principal, mas os terminais do squad editam os mesmos arquivos). Exige repositório Git.">
             <input type="checkbox" role="switch" checked={isolate} onChange={(e) => setPref('isolate', e.target.checked)} /><span className="oc-switch-track" aria-hidden="true"><i /></span>Worktree
           </label>
           <span className="oc-total" title={total.partialCost ? 'Há panes sem custo conhecido: o total em dólares não é exibido. Crie data/pricing.json com os preços por modelo (USD por milhão de tokens) para ver o custo.' : total.cost === '—' ? 'Custo indisponível: crie data/pricing.json com os preços por modelo (USD por milhão de tokens).' : 'Soma dos terminais deste tópico'}>{total.tokens} tok · {total.cost}</span>
@@ -286,7 +315,7 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
       {maestro && (mine.some((x) => x.role === 'maestro' && x.status === 'running') || maestro.tasks.some((t) => t.status === 'pending') || maestro.autonomous) && <MaestroPanel data={maestro} onChange={setMaestro} notify={notify} />}
       {wtCount > 0 && (
         <details className="tg-wt">
-          <summary>Worktrees dos terminais · {wtCount}</summary>
+          <summary><Icon name="chevronRight" size={12} /><span>Worktrees dos terminais</span><span className="tg-wt-n">{wtCount}</span></summary>
           <p className="dim small">Cada terminal isolado trabalha numa branch própria. Encerrar o terminal NÃO apaga o worktree. Aqui você confere o estado, registra um snapshot (commit na branch do worktree) e limpa o que não tem mais trabalho a perder. A integração ao projeto principal exige o gate de evidência das missões, que não existe nos terminais: revise a branch e integre você mesmo com o Git; depois a limpeza fica liberada. O servidor recusa remover worktree com alterações ou commits não integrados.</p>
           <WorktreePanel terminals inUse={new Set(sessions.filter((x) => x.status === 'running' && x.worktreeId).map((x) => x.worktreeId))} />
         </details>
@@ -300,26 +329,21 @@ export default function TerminalGrid({ onOpenWorkspaces }) {
           <Btn kind="primary" onClick={onOpenWorkspaces}>Abrir ou adicionar workspace</Btn>
         </div>
       ) : mine.length === 0 ? (
-        <div className="oc-empty">
-          <span className="oc-empty-ico"><Icon name="terminal" size={26} /></span>
+        <div className="oc-empty min">
+          <Icon name="terminal" size={18} />
           <h3>{where}</h3>
-          <p className="dim">Nenhum terminal aberto neste workspace. Comece por um squad pronto ou um terminal avulso.</p>
-          {restorable > 0 && <p className="oc-restore"><Btn kind="primary" onClick={() => setHistOpen(true)} title="Abre o histórico de sessões para retomá-las, na ordem em que estavam">Restaurar {restorable} {restorable === 1 ? 'sessão que estava aberta' : 'sessões que estavam abertas'}</Btn></p>}
-          <div className="oc-squads">
-            {SQUADS.map((q) => (
-              <button key={q.id} type="button" className="oc-squad" disabled={busy || q.roles.length > room} onClick={() => open(q.roles, { squad: true })}>
-                <b>{q.label}</b>
-                <span className="oc-squad-roles">{q.roles.map((r, i) => <span key={i} className="oc-chip" style={{ '--role': byRole[r]?.color }}><i />{byRole[r]?.label ?? r}</span>)}</span>
-              </button>
-            ))}
-            <button type="button" className="oc-squad solo" disabled={busy || room < 1} onClick={() => open([role])}><b>Terminal avulso</b><span className="oc-squad-roles"><span className="oc-chip" style={{ '--role': byRole[role]?.color }}><i />{byRole[role]?.label ?? role}</span></span></button>
+          <p className="dim">Nenhum terminal ativo.</p>
+          <div className="oc-empty-act">
+            <Btn kind="primary" disabled={busy || room < 1} onClick={() => open([role])}><Icon name="plus" size={12} /> Novo terminal</Btn>
+            {SQUADS.map((q) => <Btn key={q.id} kind="quiet" disabled={busy || q.roles.length > room} onClick={() => open(q.roles, { squad: true })} title={q.roles.map((r) => byRole[r]?.label ?? r).join(', ')}>{q.label}</Btn>)}
+            {restorable > 0 && <Btn kind="quiet" onClick={() => setHistOpen(true)} title="Abre o histórico de sessões para retomá-las, na ordem em que estavam">Restaurar {restorable} {restorable === 1 ? 'sessão' : 'sessões'}</Btn>}
           </div>
-          <p className="dim small oc-foot">Os terminais usam o seu login do Claude Code e <b>não passam</b> pelas aprovações do ciclo automático: o que o agente faz ali é decisão sua.</p>
+          <p className="dim small oc-foot">Os terminais <b>não passam</b> pelas aprovações do ciclo automático: o que o agente faz ali é decisão sua.</p>
         </div>
       ) : null}
 
       <div className="oc-gridwrap" hidden={mine.length === 0}>
-        <div ref={gridRef} className={`oc-grid${maxId ? ' has-max' : ''}`} style={{ gridTemplateColumns: cur.cols.map((f) => `minmax(0, ${f}fr)`).join(' '), gridTemplateRows: cur.rows.map((f) => `minmax(0, ${f}fr)`).join(' ') }}>
+        <div ref={gridRef} className={`oc-grid${maxId ? ' has-max' : ''}`} style={focusPlan ? { gridTemplateColumns: 'minmax(0, 3fr) minmax(0, 1fr)', gridTemplateRows: `repeat(${focusPlan.rows}, minmax(0, 1fr))` } : { gridTemplateColumns: cur.cols.map((f) => `minmax(0, ${f}fr)`).join(' '), gridTemplateRows: cur.rows.map((f) => `minmax(0, ${f}fr)`).join(' ') }}>
           {sessions.map((s) => cell(s, mineIdx.get(s.id) ?? -1, mineIdx.has(s.id)))} {/* ordem estável: o React não move (nem remonta) os terminais ao trocar de aba ou tópico */}
           {showGutters && cur.cols.slice(0, -1).map((_, i) => <Gutter key={`x${i}`} axis="x" index={i} tracks={cur.cols} onTracks={(t) => setAxis('cols', t)} gridRef={gridRef} label={`Redimensionar colunas ${i + 1} e ${i + 2}`} style={{ left: `calc(${dividerAt(cur.cols, i)}% - 5px)`, top: 0, bottom: vBottom }} />)}
           {showGutters && cur.rows.slice(0, -1).map((_, i) => <Gutter key={`y${i}`} axis="y" index={i} tracks={cur.rows} onTracks={(t) => setAxis('rows', t)} gridRef={gridRef} label={`Redimensionar linhas ${i + 1} e ${i + 2}`} style={{ top: `calc(${dividerAt(cur.rows, i)}% - 5px)`, left: 0, right: 0 }} />)}

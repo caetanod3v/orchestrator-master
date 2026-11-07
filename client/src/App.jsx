@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import Topbar from './components/Topbar.jsx';
 import Cockpit from './pages/Cockpit.jsx';
+import ActivityDrawer from './components/ActivityDrawer.jsx';
 import SettingsDialog from './components/SettingsDialog.jsx';
 import WorkspaceDialog from './components/WorkspaceDialog.jsx';
 import { useStore } from './store.jsx';
@@ -58,6 +59,7 @@ export default function App() {
         )}
         <main id="main" tabIndex={-1} className="oc-content">
           <Cockpit onOpenWorkspaces={openWorkspaces} />
+          <ActivityDrawer />
         </main>
       </div>
       {toast && (
