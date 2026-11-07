@@ -14,11 +14,14 @@ export function friendlyNames(workspaces) {
 
 export const failedExit = (s) => s.status !== 'running' && Number.isInteger(s.exitCode) && s.exitCode !== 0;
 
+/** Ids dos panes de destino de tarefas do maestro que esperam a sua decisão. */
+export const pendingPanes = (tasks = []) => new Set((Array.isArray(tasks) ? tasks : []).filter((t) => t && t.status === 'pending' && typeof t.to === 'string').map((t) => t.to));
+
 /**
  * Ambientes da sidebar: TODOS os workspaces cadastrados, na ordem de cadastro dos workspaces (estável: a lista não "pula" enquanto os agentes trabalham).
  * @returns {{id:string, name:string, path:string, active:boolean, total:number, running:number, working:number, exited:number, failed:number, pendingTasks:number, attention:boolean}[]}
  */
-export function environments({ workspaces = [], sessions = [], activeId = null, workingIds = new Set(), maestroTasks = [] } = {}) {
+export function environments({ workspaces = [], sessions = [], activeId = null, workingIds = new Set(), maestroTasks = [], finished = new Set() } = {}) {
   const names = friendlyNames(workspaces);
   const byPane = new Map(sessions.map((s) => [s.id, s]));
   return workspaces
@@ -26,20 +29,34 @@ export function environments({ workspaces = [], sessions = [], activeId = null, 
       const mine = sessions.filter((s) => s.workspaceId === w.id);
       const running = mine.filter((s) => s.status === 'running');
       const pendingTasks = maestroTasks.filter((t) => t.status === 'pending' && byPane.get(t.to)?.workspaceId === w.id).length;
-      const failed = mine.filter(failedExit).length;
+      const pendingIds = pendingPanes(maestroTasks), st = running.map((s) => paneState(s, workingIds, pendingIds));
+      const n = (k) => st.filter((x) => x === k).length;
+      const failed = mine.filter(failedExit).length + n('failed');
       return {
         id: w.id, name: names.get(w.id), original: String(w.name ?? '').trim() || base(w.path), renamed: !!String(w.displayName ?? '').trim(), path: w.path, active: w.id === activeId, total: mine.length, running: running.length,
-        working: running.filter((s) => workingIds.has(s.id)).length, exited: mine.length - running.length, failed, pendingTasks, attention: failed > 0 || pendingTasks > 0,
+        working: n('working'), waiting: n('waiting'), done: n('done'), exited: mine.length - running.length, failed, pendingTasks, finished: finished.has(w.id), attention: failed > 0 || n('waiting') > 0,
       };
     });
 }
 
-/** Estado do ÍCONE do workspace, só a partir de `environments()`: precisa de atenção (falha ou aprovação pendente) > trabalhando > ocioso. */
-export const wsTone = (e) => (e?.attention ? 'attn' : e?.working > 0 ? 'work' : 'idle');
+/** Estado do ÍCONE do workspace (agregado dos terminais, só a partir de `environments()`). Prioridade: err (falha) > wait (aguarda você) > work (executando) > done (tudo concluído) > idle. */
+export const wsTone = (e) => (e?.failed > 0 ? 'err' : e?.waiting > 0 ? 'wait' : e?.working > 0 ? 'work' : e?.done > 0 ? 'done' : 'idle');
 
-/** Estado visual de um pane, só a partir do que o servidor informa: encerrado (com ou sem falha), trabalhando (a saída cresceu) ou ocioso. */
-export function paneState(session, workingIds = new Set()) {
+/**
+ * Estado de UM terminal, a mesma regra para o cabeçalho do pane, a sidebar e as abas:
+ *   failed (processo saiu com erro, ou o agente reportou falha) > waiting (agente pede permissão, ou há tarefa do maestro esperando você) > working (executando) > done (terminou a vez) > idle.
+ * Fonte de verdade = `session.agent.state`, o estado REAL que o servidor lê dos hooks do Claude Code. Sem ele (hooks indisponíveis, terminal retomado de uma versão antiga) cai na leitura pela saída:
+ * `workingIds` (activity.js). Terminal aberto sem atividade é `idle`, nunca "executando". `exited` = processo encerrado com sucesso.
+ */
+export function paneState(session, workingIds = new Set(), pendingIds = new Set()) {
   if (session.status !== 'running') return failedExit(session) ? 'failed' : 'exited';
+  const a = session.agent?.state;
+  if (a === 'error') return 'failed';
+  if (a === 'waiting') return 'waiting';
+  if (a === 'running') return 'working';
+  if (pendingIds.has(session.id)) return 'waiting';
+  if (a === 'completed') return 'done';
+  if (a === 'idle') return 'idle';
   return workingIds.has(session.id) ? 'working' : 'idle';
 }
 
@@ -61,7 +78,7 @@ export function providerSummary(sessions = [], workingIds = new Set()) {
   return rows.map((r) => {
     const mine = sessions.filter((s) => providerOf(s) === r.id), st = mine.map((s) => paneState(s, workingIds));
     const n = (k) => st.filter((x) => x === k).length;
-    return { ...r, total: mine.length, active: n('working') + n('idle'), working: n('working'), idle: n('idle'), failed: n('failed'), exited: n('exited') };
+    return { ...r, total: mine.length, active: n('working') + n('idle') + n('waiting') + n('done'), working: n('working'), idle: n('idle') + n('done'), failed: n('failed'), exited: n('exited') };
   });
 }
 
@@ -85,6 +102,33 @@ export function gridShape(n) {
   if (count <= 1) return { cols: 1, rows: 1, spanLast: false };
   const cols = count <= 4 ? 2 : count <= 9 ? 3 : 4;
   return { cols, rows: Math.ceil(count / cols), spanLast: cols === 2 && count % 2 === 1 };
+}
+
+/** Modos de organização da grade. `auto` adapta ao número de terminais; `cols` e `rows` dividem tudo em uma só direção; `focus` dá um terminal grande e os outros numa tira. */
+export const LAYOUT_MODES = Object.freeze([
+  { id: 'auto', label: 'Grade' },
+  { id: 'cols', label: 'Colunas' },
+  { id: 'rows', label: 'Linhas' },
+  { id: 'focus', label: 'Foco' },
+]);
+export const layoutModeId = (m) => (LAYOUT_MODES.some((x) => x.id === m) ? m : 'auto');
+
+/** Formato da grade para o modo escolhido. `focus` não usa trilhas arrastáveis (veja focusPlacement); com 1 terminal, todos os modos viram tela cheia. */
+export function shapeFor(mode, n) {
+  const count = Math.max(0, Math.trunc(Number(n) || 0));
+  if (count <= 1) return gridShape(count);
+  if (mode === 'cols') return { cols: Math.min(count, 12), rows: 1, spanLast: false };
+  if (mode === 'rows') return { cols: 1, rows: Math.min(count, 12), spanLast: false };
+  return gridShape(count);
+}
+
+/** Modo foco: o terminal em foco ocupa a coluna grande; os demais empilham na tira. Devolve a posição (linha/coluna CSS) de cada índice, ou null se não há o que focar. */
+export function focusPlacement(n, focusIndex) {
+  const count = Math.max(0, Math.trunc(Number(n) || 0));
+  if (count < 2) return null;
+  const f = Number.isInteger(focusIndex) && focusIndex >= 0 && focusIndex < count ? focusIndex : 0;
+  let k = 0;
+  return { rows: count - 1, cells: Array.from({ length: count }, (_, i) => (i === f ? { col: 1, row: `1 / span ${count - 1}` } : { col: 2, row: ++k })) };
 }
 
 export const MIN_TRACK = 0.18; // fração mínima de uma trilha: nenhum pane some ao arrastar

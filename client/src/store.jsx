@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api, nav } from './api.js';
 import { createActivityTracker } from './activity.js';
+import { createWorkEndTracker, finishedStamps, unseenFinished } from './workspace-nav.js';
 
 const Ctx = createContext(null);
 export const useStore = () => useContext(Ctx);
@@ -48,11 +49,28 @@ export function StoreProvider({ children }) {
   const [workingIds, setWorkingIds] = useState(() => new Set());
   const tracker = useRef(null), lastT = useRef(''), lastM = useRef('');
   if (!tracker.current) tracker.current = createActivityTracker();
-  const noteInteraction = useCallback((id) => tracker.current.noteInteraction(id), []); // clique, foco, tecla, mouse ou redimensionamento no pane: silencia a classificação dele
+  // Aviso de término ("!" no workspace): um workspace terminou algo quando uma tarefa do maestro conclui, um terminal encerra ou o trabalho dele (saída sustentada) PARA.
+  // O aviso fica até você voltar a interagir com o workspace (ativá-lo ou clicar/digitar num terminal dele). Só a conveniência de "visto" vai ao localStorage.
+  const workEnd = useRef(null); if (!workEnd.current) workEnd.current = createWorkEndTracker();
+  const baseline = useRef(new Date().toISOString()).current;
+  const [workEnds, setWorkEnds] = useState({});
+  const [seen, setSeen] = useState(() => { try { return JSON.parse(localStorage.getItem('forge.finishSeen') || '{}') || {}; } catch { return {}; } });
+  const seenRef = useRef(seen); seenRef.current = seen;
+  const stampsRef = useRef(new Map()), wsOfRef = useRef(new Map());
+  const markSeen = useCallback((ws) => {
+    const at = stampsRef.current.get(ws);
+    if (!ws || !at || (seenRef.current[ws] ?? baseline) >= at) return;
+    const next = { ...seenRef.current, [ws]: at }; seenRef.current = next; setSeen(next);
+    try { localStorage.setItem('forge.finishSeen', JSON.stringify(next)); } catch { /* sem armazenamento: vale só nesta sessão */ }
+  }, [baseline]);
+  const noteInteraction = useCallback((id) => { tracker.current.noteInteraction(id); markSeen(wsOfRef.current.get(id)); }, [markSeen]); // clique, foco, tecla, mouse ou redimensionamento no pane: silencia a classificação dele e dá o término do workspace como visto
   const loadTerminals = useCallback(async () => {
     try {
       const d = await api.get('/api/terminals');
       const act = tracker.current.update(d.sessions);
+      wsOfRef.current = new Map(d.sessions.map((x) => [x.id, x.workspaceId]));
+      const ends = workEnd.current.update(new Set([...act].map((id) => wsOfRef.current.get(id)).filter(Boolean)));
+      setWorkEnds((prev) => (JSON.stringify(prev) === JSON.stringify(ends) ? prev : ends));
       setWorkingIds((prev) => (prev.size === act.size && [...act].every((x) => prev.has(x)) ? prev : act));
       const json = JSON.stringify(d); if (json !== lastT.current) { lastT.current = json; setTerminals(d); }
       api.get('/api/maestro').then((m) => { const j = JSON.stringify(m); if (j !== lastM.current) { lastM.current = j; setMaestro(m); } }).catch(() => {});
@@ -85,6 +103,12 @@ export function StoreProvider({ children }) {
     return () => { es.close(); clearTimeout(timer); };
   }, [refresh, refreshUsage]);
 
+  const activeWsId = data.state?.activeWorkspace?.id ?? null;
+  const stamps = React.useMemo(() => finishedStamps({ sessions: terminals?.sessions ?? [], maestroTasks: maestro?.tasks ?? [], workEnds }), [terminals, maestro, workEnds]);
+  stampsRef.current = stamps;
+  useEffect(() => { markSeen(activeWsId); }, [activeWsId, markSeen]); // ativar o workspace = ver o que terminou nele até agora (um término posterior volta a avisar)
+  const unseenWs = React.useMemo(() => unseenFinished({ stamps, seen, baseline }), [stamps, seen, baseline]);
+
   const selectMission = (id) => {
     setSelectedMissionId(id);
     if (id) localStorage.setItem('mission', id);
@@ -109,6 +133,6 @@ export function StoreProvider({ children }) {
   const selectTopic = (workspaceId, topicId) => act(() => (topicId ? nav.activateTopic(topicId) : nav.activateGeneral(workspaceId)));
 
   return (
-    <Ctx.Provider value={{ ...data, openWorkspaceIds, topics, activeTopicIds, selectTopic, error, mission, selectMission, refresh, act, notify, toast, terminals, maestro, setMaestro: updateMaestro, workingIds, loadTerminals, noteInteraction }}>{children}</Ctx.Provider>
+    <Ctx.Provider value={{ ...data, openWorkspaceIds, topics, activeTopicIds, selectTopic, error, mission, selectMission, refresh, act, notify, toast, terminals, maestro, setMaestro: updateMaestro, workingIds, loadTerminals, noteInteraction, unseenWs }}>{children}</Ctx.Provider>
   );
 }

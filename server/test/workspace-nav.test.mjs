@@ -24,12 +24,13 @@ test('openTabs: indicadores vêm das sessões reais de cada workspace', () => {
   assert.deepEqual([b.running, b.failed, b.exited, b.attention, b.tone], [0, 0, 1, false, 'none']);
 });
 
-test('toneOf: prioridade falha > aguardando > trabalhando > rodando', () => {
-  assert.equal(toneOf({ failed: 1, pending: 1, working: 1, running: 1 }), 'err');
-  assert.equal(toneOf({ failed: 0, pending: 1, working: 1, running: 1 }), 'warn');
-  assert.equal(toneOf({ failed: 0, pending: 0, working: 1, running: 1 }), 'work');
-  assert.equal(toneOf({ failed: 0, pending: 0, working: 0, running: 1 }), 'live');
-  assert.equal(toneOf({ failed: 0, pending: 0, working: 0, running: 0 }), 'none');
+test('toneOf: prioridade falha > aguardando > executando > concluído > rodando (contrato: `waiting` = agentes aguardando você)', () => {
+  assert.equal(toneOf({ failed: 1, waiting: 1, working: 1, done: 1, running: 1 }), 'err');
+  assert.equal(toneOf({ failed: 0, waiting: 1, working: 1, done: 1, running: 1 }), 'warn');
+  assert.equal(toneOf({ failed: 0, waiting: 0, working: 1, done: 1, running: 1 }), 'work');
+  assert.equal(toneOf({ failed: 0, waiting: 0, working: 0, done: 1, running: 1 }), 'done');
+  assert.equal(toneOf({ failed: 0, waiting: 0, working: 0, done: 0, running: 1 }), 'live');
+  assert.equal(toneOf({ failed: 0, waiting: 0, working: 0, done: 0, running: 0 }), 'none');
 });
 
 test('closePlan: confirma só quando há agentes rodando, e diz que continuam em execução', () => {

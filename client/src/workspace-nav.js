@@ -1,6 +1,6 @@
 // Navegação por workspaces abertos (abas) e tópicos. PURA (sem React, sem rede): só reorganiza dados REAIS do servidor
 // (/api/state: openWorkspaceIds, topics, activeTopicIds; sessões de /api/terminals; tarefas do maestro). Nada é inventado.
-import { friendlyNames, failedExit } from './env-view.js';
+import { friendlyNames, failedExit, paneState, pendingPanes } from './env-view.js';
 
 export const MAX_TOPIC_TITLE = 60;
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -12,19 +12,21 @@ export const topicIdOf = (s) => (typeof s?.topicId === 'string' && s.topicId ? s
 export function tally(list = [], workingIds = new Set(), tasks = []) {
   const ids = new Set(list.map((s) => s.id));
   const running = list.filter((s) => s.status === 'running');
-  const failed = list.filter(failedExit).length;
   const pending = tasks.filter((t) => t && t.status === 'pending' && ids.has(t.to)).length;
-  return { total: list.length, running: running.length, working: running.filter((s) => workingIds.has(s.id)).length, exited: list.length - running.length, failed, pending, attention: failed > 0 || pending > 0 };
+  const pend = pendingPanes(tasks), st = running.map((s) => paneState(s, workingIds, pend)), n = (k) => st.filter((x) => x === k).length;
+  const failed = list.filter(failedExit).length + n('failed'), waiting = n('waiting');
+  return { total: list.length, running: running.length, working: n('working'), waiting, done: n('done'), exited: list.length - running.length, failed, pending, attention: failed > 0 || waiting > 0 };
 }
 
-/** Tom do indicador: vermelho = falha de verdade; âmbar = espera por você; laranja = trabalhando; verde = rodando; senão neutro. */
-export const toneOf = (c) => (c.failed ? 'err' : c.pending ? 'warn' : c.working ? 'work' : c.running ? 'live' : 'none');
+/** Tom do indicador (mesma prioridade da sidebar): vermelho = falha; âmbar = espera por você; verde = executando; verde suave = tudo concluído; cinza = aberto sem atividade. */
+export const toneOf = (c) => (c.failed ? 'err' : c.waiting ? 'warn' : c.working ? 'work' : c.done ? 'done' : c.running ? 'live' : 'none');
 
 /** Texto curto (tooltip/leitor de tela) do que há em um conjunto. */
 export function describeTally(c) {
   const parts = [];
   if (c.running) parts.push(plural(c.running, 'agente rodando', 'agentes rodando') + (c.working ? ` (${c.working} trabalhando)` : ''));
-  if (c.pending) parts.push(plural(c.pending, 'tarefa aguardando você', 'tarefas aguardando você'));
+  if (c.waiting) parts.push(plural(c.waiting, 'agente aguardando você', 'agentes aguardando você'));
+  if (c.done) parts.push(plural(c.done, 'concluiu a tarefa', 'concluíram a tarefa'));
   if (c.failed) parts.push(plural(c.failed, 'terminou com falha', 'terminaram com falha'));
   return parts.join(', ') || 'sem terminais ativos';
 }
@@ -44,16 +46,34 @@ export function openTabs({ workspaces = [], openWorkspaceIds, activeId = null, s
 }
 
 /**
- * Último término por workspace: maior instante entre tarefas do maestro concluídas (doneAt, pelo workspace do pane de destino) e terminais encerrados (endedAt).
- * Só dados reais do servidor. @returns {Map<string,string>} workspaceId -> ISO
+ * Último término por workspace: maior instante entre tarefas do maestro concluídas (doneAt, pelo workspace do pane de destino), terminais encerrados (endedAt)
+ * e o fim de trabalho observado (`workEnds`: workspace -> ISO, de createWorkEndTracker). Só dados reais do servidor. @returns {Map<string,string>} workspaceId -> ISO
  */
-export function finishedStamps({ sessions = [], maestroTasks = [] } = {}) {
+export function finishedStamps({ sessions = [], maestroTasks = [], workEnds = {} } = {}) {
   const wsOf = new Map(sessions.map((s) => [s.id, s.workspaceId]));
   const out = new Map();
   const bump = (ws, at) => { if (ws && typeof at === 'string' && at && (!out.has(ws) || at > out.get(ws))) out.set(ws, at); };
   for (const t of maestroTasks) if (t && t.status === 'done') bump(wsOf.get(t.to), t.doneAt);
   for (const s of sessions) if (s && s.status !== 'running') bump(s.workspaceId, s.endedAt);
+  for (const [ws, at] of Object.entries(workEnds ?? {})) bump(ws, at);
   return out;
+}
+
+/**
+ * Detecta o FIM do trabalho de um workspace (um comando digitado num terminal não gera tarefa do maestro nem encerra o processo): quando o workspace deixa de ter
+ * terminal "trabalhando" por `settleMs` seguidos, registra o instante. Oscilações curtas no meio de uma tarefa não contam. `update` recebe o conjunto de workspaces trabalhando agora.
+ */
+export function createWorkEndTracker({ now = Date.now, settleMs = 4000 } = {}) {
+  const last = new Map(); // workspaceId -> último instante (ms) em que foi visto trabalhando
+  const ends = {};         // workspaceId -> ISO do último fim de trabalho
+  return {
+    update(workingWs = new Set()) {
+      const t = now();
+      for (const ws of workingWs) last.set(ws, t);
+      for (const [ws, at] of [...last]) if (!workingWs.has(ws) && t - at >= settleMs) { ends[ws] = new Date(t).toISOString(); last.delete(ws); }
+      return { ...ends };
+    },
+  };
 }
 
 /** Workspaces (que não são o ativo) com término posterior ao último visto. `seen`: workspaceId -> ISO; ausente = `baseline`. */
@@ -119,7 +139,7 @@ export function topicRows({ topics = [], workspaceId, activeTopicIds, sessions =
 /** Totais reais de todas as sessões: rodando, tarefas aguardando você e terminais que falharam. */
 export function totals({ sessions = [], maestroTasks = [] } = {}) {
   const c = tally(sessions, new Set(), maestroTasks);
-  return { running: c.running, waiting: c.pending, failed: c.failed };
+  return { running: c.running, waiting: c.waiting, failed: c.failed };
 }
 
 /** Título de tópico: espaços colapsados, até MAX_TOPIC_TITLE; `''` se vazio. */

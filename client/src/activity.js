@@ -9,7 +9,7 @@
 //   2. Mesmo fora do silêncio, uma saída isolada (um redesenho) não basta: é preciso crescimento em MIN_STREAK consultas seguidas. Trabalho real (o spinner e a saída do
 //      Claude Code enquanto executa) é contínuo; um redesenho é uma rajada única.
 // Tarefas entregues pelo maestro NÃO passam por aqui: o servidor as escreve no PTY e nenhuma interação da interface acontece, então a saída que causam conta normalmente.
-export const QUIET_MS = 3000, MIN_STREAK = 2;
+export const QUIET_MS = 1500, MIN_STREAK = 2;
 
 export function createActivityTracker({ now = Date.now, quietMs = QUIET_MS, minStreak = MIN_STREAK } = {}) {
   const last = new Map();   // id -> bytes da consulta anterior
