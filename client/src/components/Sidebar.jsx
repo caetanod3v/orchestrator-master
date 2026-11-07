@@ -3,7 +3,7 @@ import { api, nav } from '../api.js';
 import { useStore } from '../store.jsx';
 import { usePrefs } from '../hooks.js';
 import { environments, wsTone } from '../env-view.js';
-import { Icon } from './ui.jsx';
+import { Icon, WorkStar } from './ui.jsx';
 import AgentsPopover from './ProviderPanel.jsx';
 import { BOX, pixelPaths } from '../brand-mark.mjs';
 
@@ -17,10 +17,11 @@ export const Logo = ({ size = 32 }) => (
 );
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
-const TONE_LABEL = { idle: 'ocioso', work: 'trabalhando', attn: 'requer a sua atenção' };
+const TONE_LABEL = { idle: 'sem atividade', work: 'executando', wait: 'aguardando você', done: 'concluído', err: 'com falha' };
 function describe(e) {
   const parts = [];
-  if (e.running) parts.push(plural(e.running, 'terminal ativo', 'terminais ativos') + (e.working ? ` (${e.working} trabalhando)` : ''));
+  if (e.running) parts.push(plural(e.running, 'terminal ativo', 'terminais ativos') + (e.working ? ` (${e.working} executando)` : ''));
+  if (e.waiting) parts.push(plural(e.waiting, 'agente aguardando você', 'agentes aguardando você'));
   if (e.exited) parts.push(plural(e.exited, 'encerrado', 'encerrados'));
   if (e.failed) parts.push(plural(e.failed, 'terminou com falha', 'terminaram com falha'));
   if (e.pendingTasks) parts.push(plural(e.pendingTasks, 'tarefa do maestro aguardando você', 'tarefas do maestro aguardando você'));
@@ -28,20 +29,20 @@ function describe(e) {
 }
 
 /**
- * Ícone de estado do workspace (sempre animado, movimento simples de pulso): verde = ocioso (pulso lento), laranja = trabalhando (asterisco, pulso rápido),
- * vermelho escuro = requer atenção (exclamação). O estado vem só dos dados reais (wsTone); a animação está em oc.css e é desligada por "movimento reduzido".
+ * Indicador de estado do workspace (pixel quadrado, à esquerda do nome), agregado dos terminais: cinza = sem atividade, laranja (estrela girando, como a marca do Claude) = executando,
+ * verde fixo = concluído, âmbar = aguardando você, vermelho discreto = falha. O alerta "!" fica do outro lado, depois dos contadores (ver `hasAlert`).
  */
 export function WsIcon({ tone }) {
   return (
     <span className={`wsi wsi-${tone}`} aria-hidden="true">
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" focusable="false">
-        {tone === 'attn' && <path d="M9 3.2v7M9 14.4v.2" strokeWidth="2.4" />}
-        {tone === 'work' && <path d="M9 2.8v12.4M3.6 5.9l10.8 6.2M3.6 12.1l10.8-6.2" />}
-        {tone === 'idle' && <circle cx="9" cy="9" r="4.4" fill="currentColor" stroke="none" />}
-      </svg>
+      {tone === 'work'
+        ? <WorkStar size={16} />
+        : <i className="wsi-pix" />}
     </span>
   );
 }
+/** "!" à direita: só quando existe a condição de alerta (falha em algum terminal, ou todos os terminais concluídos), a mesma que já definia o estado. */
+export const hasAlert = (tone) => tone === 'err' || tone === 'done';
 
 const MAX_NAME = 80;
 
@@ -65,16 +66,17 @@ function EnvItem({ env, collapsed, editing, onPick, onEdit, onSave, onCancel }) 
   const tone = wsTone(env);
   const full = `${env.name}: ${TONE_LABEL[tone]}; ${describe(env)}${env.active ? ' (aberto)' : ''}`;
   if (editing) return <li><EnvRename env={env} onSave={onSave} onCancel={onCancel} /></li>;
-  const attn = env.failed + env.pendingTasks;
+  const attn = env.failed + env.waiting;
   return (
     <li className="oc-envrow">
       <div className="oc-envrow-head">
-        <button type="button" className={`oc-env tone-${tone}${env.active ? ' on' : ''}`} onClick={() => onPick(env)} aria-current={env.active ? 'true' : undefined} aria-label={full} title={collapsed ? full : env.renamed ? `${env.path}\nNome original: ${env.original}` : env.path}>
+        <button type="button" className={`oc-env tone-${tone}${env.active ? ' on' : ''}${hasAlert(tone) ? ' has-alert' : ''}`} onClick={() => onPick(env)} aria-current={env.active ? 'true' : undefined} aria-label={full} title={collapsed ? full : env.renamed ? `${env.path}\nNome original: ${env.original}` : env.path}>
           <WsIcon tone={tone} />
           <span className="oc-env-name side-label">{env.name}</span>
           <span className="oc-env-badges" aria-hidden="true">
             {attn > 0 && <span className="oc-cnt attn" title={describe(env)}>{attn}</span>}
             {env.running > 0 && <span className="oc-cnt">{env.running}</span>}
+            {hasAlert(tone) && <span className="oc-alert" title={TONE_LABEL[tone]}>!</span>}
           </span>
         </button>
         {!collapsed && <button type="button" className="oc-iconbtn oc-env-pen" onClick={() => onEdit(env.id)} aria-label={`Renomear o ambiente ${env.name}`} title="Renomear (só o nome exibido)"><Icon name="pencil" size={13} /></button>}
@@ -85,13 +87,13 @@ function EnvItem({ env, collapsed, editing, onPick, onEdit, onSave, onCancel }) 
 
 /** Ambientes de trabalho: um item por workspace cadastrado, montado a partir dos dados reais. Em telas estreitas vira uma gaveta modal. */
 export default function Sidebar({ modal = false, collapsed = false, onToggle, onClose, onOpenWorkspaces }) {
-  const { workspaces, state, terminals, maestro, workingIds, openWorkspaceIds, act } = useStore();
+  const { workspaces, state, terminals, maestro, workingIds, openWorkspaceIds, act, unseenWs } = useStore();
   const [prefs] = usePrefs();
   const box = useRef(null);
   const [editId, setEditId] = useState(null);
   const sessions = terminals?.sessions ?? [];
   const activeId = state?.activeWorkspace?.id ?? null;
-  const envs = useMemo(() => environments({ workspaces, sessions, activeId, workingIds, maestroTasks: maestro?.tasks ?? [] }), [workspaces, sessions, activeId, workingIds, maestro]);
+  const envs = useMemo(() => environments({ workspaces, sessions, activeId, workingIds, maestroTasks: maestro?.tasks ?? [], finished: unseenWs }), [workspaces, sessions, activeId, workingIds, maestro, unseenWs]);
   const totals = useMemo(() => ({ running: sessions.filter((s) => s.status === 'running').length, working: workingIds.size, attention: envs.reduce((n, e) => n + (e.attention ? e.failed + e.pendingTasks : 0), 0) }), [sessions, workingIds, envs]);
 
   useEffect(() => {

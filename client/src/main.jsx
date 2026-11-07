@@ -13,6 +13,7 @@ import './cockpit.css';
 import './pages.css';
 import './theme.css'; // por último: aparência (console de agentes); não muda estrutura nem comportamento
 import './oc.css'; // interface centrada nos terminais (sidebar de ambientes, Cockpit, diálogos): carregado depois de tudo
+import './retro.css'; // identidade retro-terminal (cantos retos, status em pixels, scanline discreta): a última camada
 
 getLayouts().start(); // layout da grade por workspace (db.settings.layouts)
 getUi().start(); // preferências: cache local já aplicado; o servidor (db.settings.ui) é lido e vence o cache

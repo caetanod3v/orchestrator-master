@@ -9,23 +9,23 @@
   color-scheme: dark; /* controles nativos no tema escuro */
 
   /* camadas: --bg é o chassi (atrás da sidebar); --surface é a folha de conteúdo; --raise é qualquer coisa elevada dentro dela; --raise2 é hover/selecionado/pressionado. */
-  --bg: #000000; --surface: #050506; --raise: #0b0c0f; --raise2: #12141a; --raise3: #1a1d25; --canvas: #000000; --term-bg: #000000;
+  --bg: #090909; --surface: #101010; --raise: #101010; --raise2: #171717; --raise3: #202020; --canvas: #090909; --term-bg: #090909;
   /* --raise-quiet: rgba(255, 255, 255, .03); --edge: rgba(255, 255, 255, .4);
   /* separadores: raros. --line divide listas; --line-strong contorna o que precisa de limite; --line-control contorna campos (≥ 3:1). */
-  --line: rgba(255, 255, 255, .1); --line-strong: rgba(255, 255, 255, .22); --line-control: rgba(255, 255, 255, .42);
+  --line: #252525; --line-strong: #363636; --line-control: #666666;
 
   /* texto: --strong títulos e valores; --text corpo; --dim apoio; --faint só placeholder e metadado (todos ≥ 4,5:1 sobre --raise2) */
-  --strong: #f4f4f5; --text: #d4d4d8; --dim: #a1a1aa; --faint: #8e8e98;
+  --strong: #ececec; --text: #d2d2d2; --dim: #9a9a9a; --faint: #858585;
   /* ação primária e foco: bone. É a identidade: nenhuma cor de marca. */
-  --bone: #ff6a2b; --bone-hover: #ff8450; --ink: #1a0b04; --focus: #ff8450;
+  --bone: #a83a3a; --bone-hover: #c94a4a; --ink: #f2f2f2; --focus: #c94a4a; /* vermelho discreto: só marca, ação primária e foco */
 
   /* estados (cor + glifo + texto, nunca só a cor), com o MESMO significado em todo o produto, dessaturados para não competir com o conteúdo:
      --muted cinza = ocioso, na fila, desconectado | --run laranja = executando (--run-text é o mesmo laranja mais claro, só para texto: ≥ 4,5:1 sobre o preto) | --ok verde = concluído | --warn âmbar = aguardando decisão humana | --interrupted cinza-azulado = interrompido | --err vermelho suave = erro */
-  --run: #ff6a2b; --run-text: #ff9a6b; --ok: #00d294; --warn: #fcbb00; --err: #ff4d4f; --muted: #9a9aa5; --interrupted: #a78bfa;
+  --run: #5fa377; --run-text: #7fb592; --ok: #477d58; --warn: #a98349; --err: #c96a6a; --muted: #858585; /* --run, --warn e --err servem de TEXTO (AA ≥ 4,5:1, teste agent-status): os tons escuros da paleta (#477D58, #92713E, #B84646) ficam nos LEDs e preenchimentos */ --interrupted: #a78bfa;
   /* agentes (Planner e Executor): inativo = cinza, executando = âmbar com pulsação suave, erro = vermelho. O verde é só de tarefas concluídas. */
   --ag-idle: var(--muted); --ag-run: var(--warn); --ag-err: var(--err);
-  --ok-bg: rgba(0, 210, 148, .1); --warn-bg: rgba(252, 187, 0, .1); --err-bg: rgba(255, 101, 104, .1);
-  --ok-text: #5ee9b5; --warn-text: #ffd236; --danger-text: #ffa3a3;
+  --ok-bg: rgba(71, 125, 88, .12); --warn-bg: rgba(146, 113, 62, .14); --err-bg: rgba(184, 70, 70, .14);
+  --ok-text: #7fb592; --warn-text: #c9a46a; --danger-text: #d98080;
 
   /* tipografia: fontes do sistema (nada externo; o produto roda offline). Mono só para hora, caminho e comando. */
   --sans: var(--mono); /* o app inteiro usa a fonte de terminal (a sans original só vale como reserva do sistema se a mono faltar) */
@@ -37,7 +37,7 @@
   /* espaço (base 4) */
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px;
   /* forma */
-  --r-1: 4px; --r-2: 6px; --r-3: 8px; --r-4: 12px;
+  --r-1: 0; --r-2: 2px; --r-3: 2px; --r-4: 4px; /* bordas retas, estilo terminal */
   /* larguras */
   --w-side: 248px; --w-side-min: 64px; --w-inspector: 336px; --w-read: 720px; --w-page: 1080px;
 
@@ -52,8 +52,10 @@
   --shadow-pop: 0 24px 60px -10px rgba(0, 0, 0, .75), 0 0 0 1px var(--line-strong);
 
   /* marca e brilho (o laranja é a identidade e também a cor de "executando"; o vermelho é de falha e de alerta) */
-  --brand: var(--bone); --brand-bg: rgba(255, 106, 43, .1); --brand-line: rgba(255, 106, 43, .4);
-  --glow-sm: 0 0 12px rgba(255, 106, 43, .16); --glow-md: 0 0 20px rgba(255, 106, 43, .28);
+  --brand: var(--bone); --brand-bg: rgba(168, 58, 58, .12); --brand-line: rgba(168, 58, 58, .5);
+  --glow-sm: 0 0 0 1px rgba(201, 74, 74, .55); --glow-md: 0 0 0 1px rgba(201, 74, 74, .7); /* foco: contorno de 1px, sem brilho */
+  /* LEDs de status: único lugar com luz. Cor viva do ponto + halo curto */
+  --led-run: #5fa377; --led-ok: #4f8a63; --led-warn: #a98349; --led-err: #c24e4e; --led-idle: #5c5c5c;
   /* rótulos de console: mono, caixa alta, espaçamento largo */
   --caps-track: .09em; --caps-size: 11.5px;
   /* cor por agente (identificação, nunca estado): construtor, piloto, revisor, batedor, torre */
