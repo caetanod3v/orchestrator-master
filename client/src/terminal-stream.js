@@ -2,6 +2,12 @@
 // Guarda a tela atual de cada terminal (limitada) para o pane que monta depois dos primeiros dados receber o que já foi impresso. Sem React; o EventSource é injetável nos testes.
 
 export const SCREEN_LIMIT = 400_000;
+export const REPLAY_QUIET_MS = 5000;
+/**
+ * O terminal já vive há tempo suficiente para que as PERGUNTAS gravadas na saída (identificação, posição do cursor, foco) sejam passado: o Claude Code não espera mais resposta a elas.
+ * Ao reconstruir a tela de um terminal assim, o xterm não pode responder de novo: as respostas chegariam ao Claude Code vivo como teclas. Terminal recém-criado continua respondendo.
+ */
+export const isOld = (startedAt, now = Date.now()) => { const t = Date.parse(startedAt); return Number.isFinite(t) && now - t > REPLAY_QUIET_MS; };
 
 export function createTerminalStream({ url = '/api/terminals/stream', EventSourceImpl = globalThis.EventSource } = {}) {
   const screens = new Map();   // id -> texto já impresso (cauda)

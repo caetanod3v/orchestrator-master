@@ -9,7 +9,7 @@ import { orderSessions, mergeOrder, sameList, EMPTY as EMPTY_LAYOUT } from '../l
 import { historyRows, resumeBody, needsConfigAck, restorePlan, batchSummary, lastShutdownRestore, attemptKey, readAutoRestore, writeAutoRestore } from '../session-history.js';
 import { Btn, Icon, WorkStar } from './ui.jsx';
 import { paneUsage, squadUsage } from '../usage-view.js';
-import { createTerminalStream } from '../terminal-stream.js';
+import { createTerminalStream, isOld } from '../terminal-stream.js';
 import { paneState, pendingByPane, paneName, shapeFor, focusPlacement, layoutModeId, LAYOUT_MODES, evenTracks, dragTracks, dividerAt } from '../env-view.js';
 import MaestroPopover from './MaestroPopover.jsx';
 import AgentsPopover from './ProviderPanel.jsx';
@@ -46,7 +46,11 @@ function TerminalPane({ session, role, state, waiting, maximized, fontSize, stre
     let chain = Promise.resolve();
     const send = (data) => { for (let i = 0; i < data.length; i += MAX_CHUNK) { const part = data.slice(i, i + MAX_CHUNK); chain = chain.then(() => api.post(`/api/terminals/${id}/input`, { data: part })).catch(() => {}); } };
     // tudo que o xterm escreve no PTY (teclas, colar, relatórios de foco e de mouse) é interação da interface: o redesenho que o Claude Code faz em resposta não é trabalho
-    const inputSub = term.onData((d) => { noteInteraction(id); if (runningRef.current) send(d); });
+    // Reconstruir a tela de um terminal que JÁ existia reproduz a saída antiga, e nela estão as PERGUNTAS que o Claude Code fez ao terminal na partida (identificação, posição do cursor,
+    // foco). O xterm responderia a todas de novo, e essas respostas chegariam ao Claude Code VIVO como teclas (vários ESC seguidos abrem o seletor de mensagens: o cursor some e as letras
+    // são ignoradas). Por isso, durante o replay de um terminal com mais de REPLAY_QUIET_MS de vida o xterm fica mudo. Terminal recém-criado continua respondendo: o Claude Code espera isso.
+    let muted = false;
+    const inputSub = term.onData((d) => { if (muted) return; noteInteraction(id); if (runningRef.current) send(d); });
 
     // tamanho: o servidor limita cols/rows; só enviamos quando mudou, com pequeno atraso
     let timer = null, last = '';
@@ -57,7 +61,7 @@ function TerminalPane({ session, role, state, waiting, maximized, fontSize, stre
 
     // saída: UMA conexão compartilhada para todos os panes (o navegador limita ~6 por origem); a tela já impressa chega no onReset, então recarregar a página não perde nada
     const unsub = stream.subscribe(id, {
-      onReset: (text) => { term.reset(); if (text) { term.write(text); setStarted(true); } },
+      onReset: (text) => { muted = isOld(session.startedAt); term.reset(); if (text) { term.write(text, () => { muted = false; }); setStarted(true); } else muted = false; },
       onData: (d) => { term.write(d); setStarted(true); },
       onExit: (c) => { term.write(`\r\n\x1b[2m[processo encerrado${c === null || c === undefined ? '' : `, código ${c}`}]\x1b[0m\r\n`); },
     });
